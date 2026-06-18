@@ -36,10 +36,11 @@ Pre-commit hooks are useful, but they are not a security or correctness
 boundary. They can be skipped. The reliable gate must be CI: `cargo fmt`,
 `cargo clippy`, tests, migrations checks, and secret scanning in GitHub Actions.
 
-TimescaleDB and Parquet should not both be first-class write paths on day one.
-The recommended MVP path is TimescaleDB as the primary durable recorder, with
-Parquet export added after the schema stabilizes. Dual primary storage too early
-will create unnecessary reconciliation problems.
+TimescaleDB and Parquet should not both be first-class hot query paths on day
+one. The recommended MVP path is TimescaleDB as the primary query recorder for
+canonical events, with a simple scheduled Parquet archive for cold raw payloads.
+Dual primary query storage too early will create unnecessary reconciliation
+problems.
 
 A generic exchange library should not hide liquidation-feed semantics. Binance,
 Bybit, OKX, and Hyperliquid do not expose identical liquidation guarantees. The
@@ -75,6 +76,7 @@ and an automated endpoint probe passes; the named
 - Test support utilities for fixtures, mock sources, and replay assertions.
 - Mock load tests that stress the collector and recorder above normal event
   rates.
+- Benchmark replay strategies used only for comparison against the baseline.
 - Development Docker Compose for TimescaleDB and supporting services.
 
 ### Out Of Scope
@@ -125,7 +127,8 @@ The canonical liquidation event includes:
 - `side`: long-liquidated or short-liquidated, using a project-owned enum.
 - `quantity`: decimal quantity in base asset.
 - `price`: decimal execution or bankruptcy price, with source price type.
-- `notional_usd`: decimal notional when computable.
+- `notional_usd`: decimal notional. It is required for strategy-eligible
+  liquidation events.
 - `exchange_event_ts`: timestamp from the venue.
 - `received_ts`: local UTC capture timestamp.
 - `receive_monotonic_ns`: local monotonic capture timestamp used for latency
@@ -136,6 +139,11 @@ The canonical liquidation event includes:
 
 Money and sizes must not use `f64` in domain or database boundaries. Rust
 domain types use decimal-safe representations.
+
+Adapters must compute `notional_usd` from venue data, usually `quantity * price`
+when the venue does not provide a notional directly. If price or quantity is
+missing, the normalized event is persisted with validation status `invalid` and
+an exclusion reason, but it is excluded from strategy aggregation.
 
 ## Source Strategy
 
@@ -158,6 +166,11 @@ Backfill adapters are source-specific. They may be added for bootstrap or
 diagnostics, but they cannot be used to repair gaps unless the endpoint's
 coverage and retention are documented and tested. Backfilled events must carry
 their own source quality and ingestion mode.
+
+Cross-source substitution is not backfill. If Bybit WebSocket is down, OKX data
+may continue to provide an alternate venue signal, but it must not be used to
+fill Bybit gaps or labeled as derived Bybit coverage. Strategy reports must show
+which sources were active for each signal window.
 
 Initial backfill policy:
 
@@ -186,15 +199,19 @@ Tables:
   version, and fill model version.
 - `daily_quality_reports`: materialized daily summaries.
 
-Retention policies are part of the recorder design. Raw high-resolution data is
-kept in TimescaleDB for a configurable hot window, initially 30-60 days.
-Longer-term storage is handled by scheduled Parquet export after table schemas
-are stable. Parquet is not a primary write path in the MVP.
+Retention policies are part of the recorder design. Canonical events are kept
+in TimescaleDB for queryability. Raw payloads are stored separately from
+canonical event tables in a minimally indexed hot audit table:
 
-Raw payloads stay in TimescaleDB for the MVP. If measured storage growth crosses
-the configured limit, the follow-up design moves cold raw payload blobs to an
-S3-compatible object store and keeps only content hashes and object references
-in TimescaleDB.
+- indexes are limited to event ID, source, and received time;
+- payload bytes are compressed before storage;
+- hot raw retention starts at 7 days for MVP and is configurable;
+- a scheduled archive job exports cold raw payloads to Parquet on disk;
+- after archive verification, old hot raw rows are eligible for deletion.
+
+If measured storage growth crosses the configured limit, a follow-up design
+moves cold raw payload blobs from local Parquet to an S3-compatible object store
+and keeps only content hashes and object references in TimescaleDB.
 
 ## Paper Replay Harness
 
@@ -232,20 +249,29 @@ The first strategy implementation mirrors the original idea only as a baseline:
 Dynamic `PULLBACK_PCT` is not enabled until replay proves the static baseline.
 The design should make it pluggable, but not optimize before there is data.
 
+Benchmark strategies are included only for comparison:
+
+- `naive_no_pullback`: reacts to the same liquidation signal but crosses the
+  Polymarket spread immediately in the paper model;
+- `futures_only_directional`: expresses the liquidation signal only through the
+  futures leg in paper replay.
+
+These benchmarks are not candidates for live trading in this increment; they
+exist to test whether the pullback logic adds value over simpler alternatives.
+
 The MVP paper-fill model is explicit and versioned:
 
 - `trade_cross`: default conservative model. A Polymarket buy limit fills only
   if a recorded trade occurs at or below the limit price within the configured
   validity window. A sell limit fills only if a recorded trade occurs at or
   above the limit price.
-- `book_depth_cross`: allowed only when recorded order book depth is available.
-  A buy fills if recorded ask depth at or below the limit price is at least the
-  simulated order size; a sell fills if recorded bid depth at or above the limit
-  price is at least the simulated order size.
 - `book_touch`: optimistic diagnostic model. A buy can fill when best ask
   touches or crosses the limit; a sell can fill when best bid touches or
   crosses the limit. This model is reported separately and is not the default
   because it cannot prove queue position.
+- `book_depth_cross`: future model, not MVP. It can be enabled only after we
+  prove that Polymarket L2 depth capture is complete enough for the target
+  markets and after queue-position assumptions are documented.
 
 The fill validity window is configurable, with 5 seconds as the initial replay
 default. Hyperliquid hedge fills are simulated from recorded best bid/ask plus a
@@ -300,9 +326,10 @@ compile-time query checking once the database workflow is established.
 The CI workflow should run a disposable database for migrations and integration
 tests. `sqlx` offline metadata can be added once queries stabilize so ordinary
 builds do not require a live database.
-`cargo deny` is a follow-up once the dependency set exists; making license and
-advisory policy mandatory before the workspace is scaffolded would add noise
-without improving the first design decision.
+`cargo deny` is a follow-up before the dependency set grows materially. The
+initial policy should be narrow: approved licenses and advisory checks only.
+Making it mandatory before the workspace is scaffolded would add noise without
+improving the first design decision.
 
 ## Deployment Model
 
@@ -336,6 +363,8 @@ Recommended path:
 - Add automatic quality checks for retrieval using known question/answer pairs.
 - Rebuild or refresh RAG indexes on a schedule, initially weekly, and after
   commits that change tracked documentation sources.
+- Provide a manual RAG refresh command for operator-triggered rebuilds after
+  urgent API announcements.
 - Re-evaluate ApeRAG if we need a heavier RAG portal, MCP-first workflows, or
   built-in multi-user management.
 
@@ -364,8 +393,13 @@ The first increment is complete when:
 - quality reports run over a recorded time window;
 - replay produces deterministic paper signals from stored data;
 - replay runs record strategy version, fill model version, and initial state;
-- mock load tests show the recorder can absorb configured burst rates without
-  data loss;
+- mock load tests show the recorder can absorb the required scenarios without
+  data loss:
+  - 100 liquidation events in 1 second;
+  - a multi-hour synthetic run with periodic reconnects;
+  - two concurrent sources writing to the same database;
+  - bounded channel overflow behavior that records drops explicitly rather than
+    losing events silently;
 - all generated paper orders/fills are clearly marked as simulated;
 - no production trading secret is required or accepted by default.
 
