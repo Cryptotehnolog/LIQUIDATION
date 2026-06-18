@@ -194,6 +194,8 @@ time-series queryability, а не дешевый архив.
 Таблицы:
 
 - `raw_source_events`: immutable audit trail raw payloads.
+- `archive_manifests`: Parquet archive jobs, row counts, time ranges,
+  checksums, verification status, retry counts и alert state.
 - `liquidation_events`: canonical normalized liquidation events.
 - `market_quotes`: Polymarket и futures quote snapshots/events.
 - `collector_health`: reconnects, heartbeat gaps, adapter errors, lag.
@@ -214,9 +216,47 @@ tables в minimally indexed hot audit table:
 - scheduled archive job экспортирует cold raw payloads в Parquet на диске;
 - после archive verification старые hot raw rows можно удалять.
 
+Archive deletion является two-phase и verification-gated:
+
+1. Export выбранного raw payload time range в Parquet.
+2. Записать `archive_manifests` row с source range, row count,
+   min/max timestamps, payload byte count и file checksums.
+3. Повторно открыть Parquet output и проверить row count, timestamp bounds и
+   checksum values against manifest.
+4. Пометить manifest как verified только после успешного readback.
+5. Удалять hot raw rows только для verified manifests.
+
+Если export или verification fails, hot raw rows сохраняются, job записывает
+failure reason, а archive повторяется после configured delay, изначально через
+6 hours. Повторные failures создают alert и блокируют retention deletion для
+затронутого time range.
+
 Если measured storage growth пересечет configured limit, follow-up design
 переносит cold raw payload blobs из local Parquet в S3-compatible object store,
 а в TimescaleDB оставляет только content hashes и object references.
+
+## Source Addition Checklist
+
+Каждый новый source должен пройти один и тот же checklist до того, как strategy
+signals смогут его использовать:
+
+1. Добавить ссылку на current official documentation для WebSocket и любых
+   REST/backfill endpoints.
+2. Задокументировать feed semantics: completeness, snapshot behavior,
+   push frequency, retention, rate limits, covered symbols и timestamp meaning.
+3. Захватить raw payload fixtures для normal events, edge cases, reconnects и
+   malformed messages.
+4. Реализовать connector за source adapter interface.
+5. Добавить normalizer tests из fixtures, включая side mapping, price type,
+   quantity, notional и validation status.
+6. Подтвердить, что `notional_usd` можно вычислить для strategy-eligible events.
+7. Добавить collector health metrics и data-quality report fields для source.
+8. Добавить endpoint probes для любого backfill candidate и помечать backfill
+   quality отдельно от WebSocket quality.
+9. Запустить mock load tests с новым source вместе минимум с одним existing
+   source.
+10. Держать source исключенным из strategy aggregation, пока эти evidence не
+    закоммичены.
 
 ## Paper Replay Harness
 
@@ -301,6 +341,8 @@ Daily reports включают:
 - latency warnings, когда больше configured share событий превышают allowed
   exchange-to-receive delay;
 - outage warnings, когда source молчит дольше configured heartbeat threshold.
+- storage warnings, включая TimescaleDB size, raw hot table size, archive
+  backlog, archive verification failures и percentage of allocated disk used.
 
 Reports генерируются через CLI, а позже планируются через GitHub Actions или
 server cron/systemd timer. Они должны записываться в Markdown и machine-readable
@@ -417,6 +459,8 @@ RAG полезен, но не блокирует первый collector/replay i
 - RAG ingestion official docs и generated reports.
 - Parquet export после schema stabilization.
 - Retention и compression policy checks для TimescaleDB hypertables.
+- Archive manifest verification и retry alerts.
+- Storage budget reporting для database и Parquet archives.
 - English/Russian spec synchronization check.
 - Scheduled RAG index refresh и retrieval-quality checks.
 - Alerting для collector downtime, feed gaps и abnormal source divergence.
