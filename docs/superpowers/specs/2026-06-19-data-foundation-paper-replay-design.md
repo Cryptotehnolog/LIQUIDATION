@@ -207,7 +207,7 @@ canonical event tables in a minimally indexed hot audit table:
 
 - indexes are limited to event ID, source, and received time;
 - payload bytes are compressed before storage;
-- hot raw retention starts at 7 days for MVP and is configurable;
+- hot raw retention starts at 14 days for MVP and is configurable;
 - a scheduled archive job exports cold raw payloads to Parquet on disk;
 - after archive verification, old hot raw rows are eligible for deletion.
 
@@ -223,12 +223,19 @@ Archive deletion is two-phase and verification-gated:
 
 If export or verification fails, hot raw rows are retained, the job records the
 failure reason, and the archive is retried after the configured delay, initially
-6 hours. Repeated failures produce an alert and block retention deletion for
-the affected time range.
+6 hours. After 3 failed attempts, the manifest records the failed file paths in
+`corrupted_files`, marks the archive as corrupted, alerts the operator with the
+affected time range, and blocks retention deletion. Manual recovery writes a new
+archive file name rather than overwriting the corrupted file.
 
 If measured storage growth crosses the configured limit, a follow-up design
 moves cold raw payload blobs from local Parquet to an S3-compatible object store
 and keeps only content hashes and object references in TimescaleDB.
+
+Replay from archive is a planned post-MVP mode. `liq-replay` should eventually
+read archived Parquet directly for deep backtests without rehydrating all cold
+raw data into TimescaleDB. The MVP only has to keep archive manifests and
+schemas compatible with this future mode.
 
 ## Source Addition Checklist
 
@@ -244,13 +251,15 @@ it:
 4. Implement the connector behind the source adapter interface.
 5. Add normalizer tests from fixtures, including side mapping, price type,
    quantity, notional, and validation status.
-6. Confirm `notional_usd` can be computed for strategy-eligible events.
-7. Add collector health metrics and data-quality report fields for the source.
-8. Add endpoint probes for any backfill candidate and mark backfill quality
+6. Review and extend the domain model and database schema if the source exposes
+   fields required for strategy logic or quality diagnostics.
+7. Confirm `notional_usd` can be computed for strategy-eligible events.
+8. Add collector health metrics and data-quality report fields for the source.
+9. Add endpoint probes for any backfill candidate and mark backfill quality
    separately from WebSocket quality.
-9. Run mock load tests with the source enabled alongside at least one existing
+10. Run mock load tests with the source enabled alongside at least one existing
    source.
-10. Keep the source excluded from strategy aggregation until the above evidence
+11. Keep the source excluded from strategy aggregation until the above evidence
     is committed.
 
 ## Paper Replay Harness
@@ -260,6 +269,8 @@ Replay must support two modes:
 - Historical replay: read recorded events over a time window and replay the
   strategy deterministically.
 - Paper-live: consume current recorded events with paper orders only.
+- Replay-from-archive: future mode that reads archived Parquet directly for
+  deep backtests after the MVP archive format is stable.
 
 Replay determinism requires:
 
@@ -282,6 +293,8 @@ The first strategy implementation mirrors the original idea only as a baseline:
 - detect dominant long or short liquidation side;
 - apply min/max thresholds;
 - compute a pullback bid from observed Polymarket price;
+- cancel unfilled limit orders when `order_cancel_window` is reached, initially
+  60 seconds before market expiry, and log the result as expired;
 - simulate fill using recorded order book/trade data;
 - simulate inverse hedge price using recorded futures data;
 - calculate paper PnL, fill rate, hedge slippage, and unhedged exposure time.
@@ -315,7 +328,10 @@ The MVP paper-fill model is explicit and versioned:
 
 The fill validity window is configurable, with 5 seconds as the initial replay
 default. Hyperliquid hedge fills are simulated from recorded best bid/ask plus a
-configurable slippage model.
+configurable slippage model and a `hedge_timeout`, initially 10 seconds. If the
+hedge cannot be simulated within the timeout, the fill model records either a
+failed hedge or a partial/penalized hedge according to the selected hedge model,
+and risk metrics must include unhedged exposure time.
 
 ## Data Quality Reports
 
@@ -368,6 +384,10 @@ compile-time query checking once the database workflow is established.
 The CI workflow should run a disposable database for migrations and integration
 tests. `sqlx` offline metadata can be added once queries stabilize so ordinary
 builds do not require a live database.
+Migration checks must also detect ordering conflicts: migration filenames must
+be strictly increasing and unique, `sqlx migrate info` must match the expected
+applied set on a fresh database, and CI must fail if two pending migrations
+would apply in an ambiguous order.
 `cargo deny` is a follow-up before the dependency set grows materially. The
 initial policy should be narrow: approved licenses and advisory checks only.
 Making it mandatory before the workspace is scaffolded would add noise without
@@ -407,6 +427,10 @@ Recommended path:
   commits that change tracked documentation sources.
 - Provide a manual RAG refresh command for operator-triggered rebuilds after
   urgent API announcements.
+- Add an API documentation change detector that snapshots official source docs,
+  diffs the snapshots outside the RAG index, and flags terms such as breaking,
+  deprecated, removed, new required field, and payload format changes. RAG may
+  index the snapshots, but it is not the source of truth for change detection.
 - Re-evaluate ApeRAG if we need a heavier RAG portal, MCP-first workflows, or
   built-in multi-user management.
 
@@ -438,6 +462,8 @@ The first increment is complete when:
 - mock load tests show the recorder can absorb the required scenarios without
   data loss:
   - 100 liquidation events in 1 second;
+  - a weekly 24-hour stability simulation averaging 10 events per second with
+    bursts to 100 events per second, tracking memory growth and write latency;
   - a multi-hour synthetic run with periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior that records drops explicitly rather than
@@ -454,6 +480,8 @@ The first increment is complete when:
 - Retention and compression policy checks for TimescaleDB hypertables.
 - Archive manifest verification and retry alerts.
 - Storage budget reporting for database and Parquet archives.
+- Replay-from-archive for deep backtests over Parquet.
+- API documentation change detection with operator alerts.
 - English/Russian spec synchronization check.
 - Scheduled RAG index refresh and retrieval-quality checks.
 - Alerting for collector downtime, feed gaps, and abnormal source divergence.

@@ -212,7 +212,7 @@ tables в minimally indexed hot audit table:
 
 - indexes ограничены event ID, source и received time;
 - payload bytes сжимаются до записи;
-- hot raw retention для MVP начинается с 7 days и является configurable;
+- hot raw retention для MVP начинается с 14 days и является configurable;
 - scheduled archive job экспортирует cold raw payloads в Parquet на диске;
 - после archive verification старые hot raw rows можно удалять.
 
@@ -228,12 +228,19 @@ Archive deletion является two-phase и verification-gated:
 
 Если export или verification fails, hot raw rows сохраняются, job записывает
 failure reason, а archive повторяется после configured delay, изначально через
-6 hours. Повторные failures создают alert и блокируют retention deletion для
-затронутого time range.
+6 hours. После 3 failed attempts manifest записывает failed file paths в
+`corrupted_files`, помечает archive как corrupted, отправляет operator alert с
+affected time range и блокирует retention deletion. Manual recovery пишет новый
+archive file name, а не перезаписывает corrupted file.
 
 Если measured storage growth пересечет configured limit, follow-up design
 переносит cold raw payload blobs из local Parquet в S3-compatible object store,
 а в TimescaleDB оставляет только content hashes и object references.
+
+Replay from archive является planned post-MVP mode: `liq-replay` сможет читать
+Parquet archives напрямую, минуя hot TimescaleDB tables. Это нужно для deep
+backtests после истечения hot retention window, но не должно блокировать первый
+collector/recorder increment.
 
 ## Source Addition Checklist
 
@@ -249,13 +256,15 @@ signals смогут его использовать:
 4. Реализовать connector за source adapter interface.
 5. Добавить normalizer tests из fixtures, включая side mapping, price type,
    quantity, notional и validation status.
-6. Подтвердить, что `notional_usd` можно вычислить для strategy-eligible events.
-7. Добавить collector health metrics и data-quality report fields для source.
-8. Добавить endpoint probes для любого backfill candidate и помечать backfill
+6. Review and extend domain model и database schema, если source дает поля,
+   нужные для strategy logic или quality diagnostics.
+7. Подтвердить, что `notional_usd` можно вычислить для strategy-eligible events.
+8. Добавить collector health metrics и data-quality report fields для source.
+9. Добавить endpoint probes для любого backfill candidate и помечать backfill
    quality отдельно от WebSocket quality.
-9. Запустить mock load tests с новым source вместе минимум с одним existing
+10. Запустить mock load tests с новым source вместе минимум с одним existing
    source.
-10. Держать source исключенным из strategy aggregation, пока эти evidence не
+11. Держать source исключенным из strategy aggregation, пока эти evidence не
     закоммичены.
 
 ## Paper Replay Harness
@@ -265,6 +274,8 @@ Replay должен поддерживать два режима:
 - Historical replay: читать recorded events за временное окно и
   детерминированно воспроизводить стратегию.
 - Paper-live: потреблять текущие recorded events только с paper orders.
+- Replay-from-archive: future mode для чтения Parquet archives напрямую для
+  deep backtests после hot retention window.
 
 Для детерминизма replay требуется:
 
@@ -287,6 +298,8 @@ replay logic.
 - определять доминирующую сторону long или short liquidations;
 - применять min/max thresholds;
 - вычислять pullback bid от observed Polymarket price;
+- cancel unfilled limit orders при достижении `order_cancel_window`, изначально
+  60 seconds before market expiry, и логировать result как expired;
 - симулировать fill по recorded order book/trade data;
 - симулировать inverse hedge price по recorded futures data;
 - считать paper PnL, fill rate, hedge slippage и unhedged exposure time.
@@ -321,7 +334,10 @@ MVP paper-fill model является explicit и versioned:
 
 Fill validity window configurable, initial replay default - 5 seconds.
 Hyperliquid hedge fills симулируются из recorded best bid/ask плюс configurable
-slippage model.
+slippage model и `hedge_timeout`, изначально 10 seconds. Если hedge fill не
+доказан до timeout, replay помечает hedge как failed или partial according to
+versioned fill model, применяет configured penalty и включает unhedged exposure
+time в risk metrics.
 
 ## Data Quality Reports
 
@@ -374,6 +390,12 @@ compile-time query checking после настройки database workflow.
 CI workflow должен поднимать disposable database для migrations и integration
 tests. `sqlx` offline metadata можно добавить после стабилизации queries, чтобы
 обычные builds не требовали live database.
+
+CI также должен проверять migration ordering conflicts: migration filenames
+должны быть unique, strictly increasing и accepted by `sqlx migrate info`.
+Ambiguous ordering или duplicate timestamp blocks PR, потому что schema drift в
+recorder dangerous для replay reproducibility.
+
 `cargo deny` является follow-up до существенного роста dependency set. Initial
 policy должна быть узкой: approved licenses и advisory checks only. Делать его
 обязательным до scaffold workspace добавит noise без улучшения первого design
@@ -414,6 +436,10 @@ RAG полезен, но не блокирует первый collector/replay i
   commits, которые меняют tracked documentation sources.
 - Предоставить manual RAG refresh command для operator-triggered rebuilds после
   срочных API announcements.
+- Добавить API documentation change detector, который сравнивает versioned
+  official documentation snapshots outside the RAG index. Detector ищет
+  breaking/deprecated/new required field signals, создает issue или alert и не
+  использует RAG retrieval как source of truth.
 - Переоценить ApeRAG, если понадобится более тяжелый RAG portal,
   MCP-first workflows или built-in multi-user management.
 
@@ -445,6 +471,9 @@ RAG полезен, но не блокирует первый collector/replay i
 - mock load tests показывают, что recorder выдерживает required scenarios без
   data loss:
   - 100 liquidation events in 1 second;
+  - weekly long-running 24-hour simulation с average 10 events/second,
+    periodic bursts to 100 events/second, memory usage tracking и write latency
+    thresholds;
   - multi-hour synthetic run с periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior, который records drops explicitly, а не
@@ -456,7 +485,9 @@ RAG полезен, но не блокирует первый collector/replay i
 
 - Nightly data-quality report generation.
 - Automatic source-feed regression tests из captured raw payload fixtures.
+- Replay-from-archive для deep backtests over Parquet.
 - RAG ingestion official docs и generated reports.
+- API documentation change detection with operator alerts.
 - Parquet export после schema stabilization.
 - Retention и compression policy checks для TimescaleDB hypertables.
 - Archive manifest verification и retry alerts.
