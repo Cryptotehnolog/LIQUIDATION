@@ -272,8 +272,8 @@ Tables:
 
 - `raw_source_events`: immutable raw payload audit trail.
 - `archive_manifests`: Parquet archive jobs, `parquet_schema_version`, row
-  counts, time ranges, checksums, verification status, retry counts, and alert
-  state.
+  counts, time ranges, checksums, verification status, retry counts,
+  `canonical_deletion_watermark`, and alert state.
 - `liquidation_events`: canonical normalized liquidation events.
 - `market_quotes`: Polymarket and futures quote snapshots/events.
 - `collector_health`: reconnects, heartbeat gaps, adapter errors, lag.
@@ -306,10 +306,11 @@ canonical event tables in a minimally indexed hot audit table:
 
 Canonical liquidation events have their own retention policy, initially 30
 days. Deleting canonical events is allowed only after the affected time range is
-covered by a verified archive or after an explicit operator decision that the
-range is no longer needed for replay. Long-horizon replay should move to
-Parquet-backed archive reads rather than keeping all canonical events hot
-forever.
+covered by a verified archive and the corresponding `archive_manifests` row has
+`canonical_deletion_watermark` set by the archive verifier. Manual deletion
+outside that path requires an explicit operator override recorded in the audit
+log. Long-horizon replay should move to Parquet-backed archive reads rather
+than keeping all canonical events hot forever.
 
 Detailed `collector_health` rows have their own retention policy, initially 7
 days. Daily reports retain aggregated health summaries so long-term trends do
@@ -324,8 +325,12 @@ Archive deletion is two-phase and verification-gated:
 3. Re-open the Parquet output and verify row count, timestamp bounds, checksum
    values, Parquet schema version, file metadata, and column statistics against
    the manifest.
-4. Mark the manifest as verified only after readback succeeds.
-5. Delete hot raw rows only for verified manifests.
+4. Read and validate the first 100 rows, last 100 rows, and a deterministic
+   sample across row groups to catch row-level decode or validation failures.
+5. Mark the manifest as verified only after readback succeeds.
+6. Set `canonical_deletion_watermark` only after archive verification succeeds
+   and the canonical time range coverage is confirmed.
+7. Delete hot raw rows only for verified manifests.
 
 If export or verification fails, hot raw rows are retained, the job records the
 failure reason, and the archive is retried after the configured delay, initially
@@ -343,7 +348,10 @@ read archived Parquet directly for deep backtests without rehydrating all cold
 raw data into TimescaleDB. The MVP only has to keep archive manifests and
 schemas compatible with this future mode. `parquet_schema_version` is stored in
 `archive_manifests` and mirrored as a constant in `liq-replay` so readers can
-reject unsupported archive schemas explicitly.
+reject unsupported archive schemas explicitly. `liq-replay` maintains a reader
+registry and supports at least the latest two archive schema versions once a
+second version exists. Unsupported versions fail with an explicit
+unsupported-schema error rather than best-effort parsing.
 
 ## Source Addition Checklist
 
@@ -376,7 +384,7 @@ it:
 
 ## Paper Replay Harness
 
-Replay must support two modes:
+Replay must support three modes:
 
 - Historical replay: read recorded events over a time window and replay the
   strategy deterministically.
@@ -384,14 +392,28 @@ Replay must support two modes:
 - Replay-from-archive: future mode that reads archived Parquet directly for
   deep backtests after the MVP archive format is stable.
 
+`liq-cli replay dry-run` checks whether the requested replay can start without
+executing strategy state transitions. It validates the resolved config, required
+tables, source coverage, time-range availability, archive schema compatibility
+when relevant, and obvious missing inputs.
+
 Replay determinism requires:
 
 - every run records the strategy version, fill model version, input time window,
   initial balances, and initial positions;
+- every run computes an `input_hash` from the resolved configuration,
+  strategy/fill-model versions, ordered input event IDs and payload
+  fingerprints, source set, time range, and archive manifest IDs when archives
+  are used;
 - all inputs come from stored liquidation, quote, trade, and futures data;
 - ordering uses recorded exchange timestamps with deterministic tie-breaking by
   receive timestamp and event ID;
 - execution simulation rules are versioned and immutable for a completed run.
+
+If a completed `replay_run` already exists with the same `input_hash`, the
+default behavior is to reuse or report the existing result. A new run with the
+same hash requires an explicit `--force-new-run` flag and must still preserve
+both run IDs for audit.
 
 `liq-replay` exposes a minimal `Strategy` interface. A strategy consumes a
 deterministically ordered event stream and emits strategy signals, paper orders,
@@ -489,6 +511,13 @@ prior reports, and flag trends such as rising latency or source divergence. It
 is advisory only and must not change collector settings, strategy thresholds, or
 risk limits.
 
+Agent-generated reports need their own quality gate before they become routine
+operator inputs. The RAG/agent pipeline keeps a small set of golden report
+fixtures for known datasets and compares generated summaries against expected
+facts and required sections. If report quality falls below the configured
+threshold, the report is marked for manual review instead of being published as
+normal.
+
 ## CI And Developer Workflow
 
 Required checks:
@@ -539,11 +568,18 @@ Backfill data migrations are treated as explicit jobs, not hidden migration
 side effects. A PR that adds a column and intends to populate old rows must
 include the backfill command or script, batch size, expected runtime, resume
 behavior, locking impact, verification query, and rollback/abort instructions.
+Backfill jobs persist progress in a migration state table, for example by
+`last_processed_id` or `last_processed_ts`, and must support stop/resume without
+starting over. Long jobs expose progress, processed row counts, estimated
+remaining work, and a configurable maximum runtime per invocation.
 
 `cargo deny` is a follow-up before the dependency set grows materially. The
 initial policy should be narrow: approved licenses and advisory checks only.
-Making it mandatory before the workspace is scaffolded would add noise without
-improving the first design decision.
+`cargo audit` checks advisories against the resolved lockfile, including
+transitive dependencies; `cargo deny` remains useful as a broader policy layer
+for licenses, duplicate versions, bans, and advisory enforcement. Making it
+mandatory before the workspace is scaffolded would add noise without improving
+the first design decision.
 
 ## Deployment Model
 
@@ -562,6 +598,11 @@ Server/paper-live:
 - systemd or Docker Compose can run collectors.
 - Infisical is introduced before any private keys or authenticated trading
   credentials are needed.
+- MVP collector deployment is single-writer per source. On startup, collector
+  processes acquire a Postgres advisory lock or equivalent database-backed
+  lease for each `(source, instrument)` they write. A second instance exits with
+  a clear error instead of duplicating writes. Redis-based leader election is a
+  follow-up only if the deployment outgrows the database-backed lease.
 
 Production live trading is intentionally excluded.
 
@@ -620,10 +661,17 @@ The first increment is complete when:
 - at least two liquidation sources can be collected and normalized;
 - raw payloads and canonical events are persisted durably;
 - `liq-cli` rejects invalid configuration with actionable errors;
+- `liq-cli replay dry-run` validates inputs without executing strategy
+  transitions;
 - archive manifests record `parquet_schema_version` and verification metadata;
+- archive manifests expose `canonical_deletion_watermark` before canonical
+  retention deletion can run;
+- collector startup refuses a second active writer for the same
+  `(source, instrument)` lease;
 - quality reports run over a recorded time window;
 - replay produces deterministic paper signals from stored data;
-- replay runs record strategy version, fill model version, and initial state;
+- replay runs record strategy version, fill model version, initial state, and
+  `input_hash`;
 - mock load tests show the recorder can absorb the required scenarios without
   data loss:
   - 100 liquidation events in 1 second;
@@ -637,6 +685,9 @@ The first increment is complete when:
   - adapter metrics assert that active WebSocket connection count returns to
     the expected value after reconnect cycles. Stale active connections fail
     the test even if file descriptor counts look stable;
+  - TimescaleDB restart mid-write: the collector reconnects, records the error,
+    preserves queued events that have not been acknowledged as written, and
+    resumes writes without silent loss;
   - a multi-hour synthetic run with periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior that records drops explicitly rather than
@@ -659,7 +710,12 @@ The first increment is complete when:
 - Documentation snapshot diff jobs that classify critical vs noncritical API
   changes.
 - RAG retrieval-quality checks with an 80% minimum score gate.
+- Agent report quality checks against golden report fixtures.
 - Adapter connection leak checks in long-running load tests.
+- DB restart mid-write load test.
+- Single-writer source lease check for collector startup.
+- Replay `input_hash` reuse and `replay dry-run` checks.
+- Parquet schema reader registry compatibility tests.
 - RAG ingestion of official docs and generated reports.
 - Parquet export after schema stabilization.
 - Retention and compression policy checks for TimescaleDB hypertables.
