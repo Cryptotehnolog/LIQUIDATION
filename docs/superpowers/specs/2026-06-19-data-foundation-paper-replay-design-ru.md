@@ -146,7 +146,8 @@ Canonical liquidation event включает:
 - `source_quality`: all-events, snapshot-only, derived, unknown.
 - `source_coverage_estimate`: optional diagnostic value от 0 до 1.0. Он может
   использоваться в reports, но MVP strategy не должна автоматически умножать
-  liquidation notional на этот estimate.
+  liquidation notional на этот estimate. Reports, которые его показывают,
+  должны маркировать его как diagnostic-only и not signal-adjusting.
 - `raw_payload`: compressed JSON для audit и будущих parser upgrades.
 
 Money и sizes не должны использовать `f64` в domain или database boundaries. Rust
@@ -201,10 +202,19 @@ Strategy aggregation является policy-driven, а не implicit summation:
 - source priority, fallback decisions и excluded sources записываются в
   `strategy_signals` и `replay_runs`.
 
+MVP default aggregation configuration намеренно консервативная:
+
+- `default_primary_source = "bybit"`;
+- `default_fallback_sources = ["binance"]`;
+- `default_aggregation_policy = "primary_only"`;
+- Bybit участвует в strategy signals, когда healthy;
+- Binance записывается и репортится как diagnostic snapshot-only data, если
+  explicit replay profile не включает fallback после primary silence window.
+
 У каждого connector есть circuit breaker. Если reconnects превышают configured
 threshold внутри rolling window, source помечается degraded, ставится на паузу
 на cooldown, например 30 minutes, или до manual reset, а high-severity health
-event записывается.
+event записывается. Initial default - `max_reconnects_per_5min = 5` per source.
 
 Initial backfill policy:
 
@@ -214,6 +224,45 @@ Initial backfill policy:
   endpoint parameters, retention window и duplication behavior.
 - Bybit: disabled, пока current official public REST liquidation-history page и
   endpoint probe не будут добавлены в репозиторий.
+
+## Configuration
+
+MVP configuration является file-first с environment overrides. Non-secret
+parameters живут в `config/default.toml` и optional local overrides, например
+`config/local.toml`. Environment variables override file values для deployment.
+Secrets не живут в TOML; когда они понадобятся, они приходят из
+Infisical-provided environment variables.
+
+Initial defaults:
+
+```toml
+[sources]
+default_primary_source = "bybit"
+default_fallback_sources = ["binance"]
+default_aggregation_policy = "primary_only"
+primary_silence_window = "5m"
+
+[recorder]
+hot_raw_retention = "14d"
+collector_health_retention = "7d"
+queue_warning_pct = 80
+queue_critical_pct = 95
+
+[quality]
+heartbeat_threshold = "2m"
+latency_window = "5m"
+latency_alert_share = 0.05
+max_reconnects_per_5min = 5
+circuit_breaker_cooldown = "30m"
+
+[replay]
+fill_validity_window = "5s"
+order_cancel_window_before_expiry = "60s"
+hedge_timeout = "10s"
+```
+
+Каждый replay run записывает resolved configuration, а не только путь к config
+file. Это сохраняет historical results reproducible после изменения defaults.
 
 ## Recorder
 
@@ -393,6 +442,7 @@ Daily reports включают:
 - normalization errors by type;
 - unknown-side или unknown-price events;
 - source coverage warning, особенно для snapshot-only feeds;
+- displayed `source_coverage_estimate` values с diagnostic-only warning;
 - paper signal count и skipped-signal reasons.
 - anomaly warnings, когда event counts materially отличаются от rolling
   baseline;
@@ -415,6 +465,10 @@ streaming monitor mode, который читает collector health и recent e
   превышает latency threshold, emit latency alert;
 - если queue depth, reconnect rate или circuit-breaker state меняется, emit
   structured health event, который daily reports позже агрегируют.
+
+MVP alerts - это structured JSON logs плюс persisted `collector_health` rows.
+External notification channels являются follow-up, а не blocker для первого
+collector/replay increment.
 
 Data Quality Review Agent может summarize daily reports, сравнивать их с prior
 reports и flag trends, например rising latency или source divergence. Он только
@@ -454,6 +508,17 @@ Schema-domain alignment проверяется через disposable database п
 contract tests против domain row types. Money и quantity columns должны
 маппиться в decimal-safe Rust types; migration, которая вынуждает `f64` на
 domain boundary, падает в CI. Broad reflection framework не требуется для MVP.
+
+Для strategy-facing tables `liq-test-utils` также предоставляет
+`assert_schema_contract` helper. Он делает query в `information_schema.columns`
+для table name, column name, nullability, numeric precision/scale и data type,
+затем сравнивает значения с expected domain schema contract. Это ловит schema
+changes, которые compile, но тихо меняют persistence semantics.
+
+Schema migration policy для MVP является append-only. Разрешено добавлять
+nullable columns или columns с explicit defaults. Drop columns, rename columns
+или type changes запрещены без approved new schema version, data migration
+plan, backfill/replay compatibility note и rollback plan в репозитории.
 
 `cargo deny` является follow-up до существенного роста dependency set. Initial
 policy должна быть узкой: approved licenses и advisory checks only. Делать его
@@ -499,6 +564,10 @@ RAG полезен, но не блокирует первый collector/replay i
   official documentation snapshots outside the RAG index. Detector ищет
   breaking/deprecated/new required field signals, создает issue или alert и не
   использует RAG retrieval как source of truth.
+- Хранить normalized documentation snapshots как JSON в `docs/snapshots/`.
+  Snapshots должны содержать source URL, fetch timestamp, content hash,
+  extracted endpoint/schema facts и relevant text excerpts, а не большие raw
+  HTML dumps. Scheduled jobs могут открывать PR, когда snapshots меняются.
 - Переоценить ApeRAG, если понадобится более тяжелый RAG portal,
   MCP-first workflows или built-in multi-user management.
 
@@ -535,6 +604,9 @@ RAG полезен, но не блокирует первый collector/replay i
     latency tracking. Default failure threshold - отсутствие unbounded RSS
     growth и не больше 10% growth, если explicit fixed-memory budget не
     configured;
+  - Linux-only file descriptor tracking во время long-running tests через
+    `/proc/<pid>/fd` или equivalent tool. Open descriptors не должны расти
+    without bound across reconnect cycles;
   - multi-hour synthetic run с periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior, который records drops explicitly, а не
@@ -550,6 +622,9 @@ RAG полезен, но не блокирует первый collector/replay i
   excluded-source windows.
 - Streaming quality alerts для heartbeat gaps, queue pressure, latency и
   circuit-breaker transitions.
+- Configuration validation и resolved-config snapshots для replay runs.
+- Schema contract checks из `information_schema.columns`.
+- Documentation snapshot refresh jobs, которые открывают reviewable PRs.
 - Replay-from-archive для deep backtests over Parquet.
 - RAG ingestion official docs и generated reports.
 - API documentation change detection with operator alerts.

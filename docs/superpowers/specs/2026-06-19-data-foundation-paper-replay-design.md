@@ -141,7 +141,8 @@ The canonical liquidation event includes:
 - `source_quality`: all-events, snapshot-only, derived, unknown.
 - `source_coverage_estimate`: optional diagnostic value from 0 to 1.0. It can
   inform reports, but the MVP strategy must not automatically multiply
-  liquidation notional by this estimate.
+  liquidation notional by this estimate. Reports that display it must label it
+  as diagnostic-only and not signal-adjusting.
 - `raw_payload`: compressed JSON for audit and parser upgrades.
 
 Money and sizes must not use `f64` in domain or database boundaries. Rust
@@ -195,10 +196,21 @@ Strategy aggregation is policy-driven, not implicit summation:
 - source priority, fallback decisions, and excluded sources are written to
   `strategy_signals` and `replay_runs`.
 
+The MVP default aggregation configuration is intentionally conservative:
+
+- `default_primary_source = "bybit"`;
+- `default_fallback_sources = ["binance"]`;
+- `default_aggregation_policy = "primary_only"`;
+- Bybit contributes to strategy signals when healthy;
+- Binance is recorded and reported as diagnostic snapshot-only data unless an
+  explicit replay profile enables fallback use after the primary silence
+  window.
+
 Each connector has a circuit breaker. If reconnects exceed the configured
 threshold within a rolling window, the source is marked degraded, paused for a
 cooldown such as 30 minutes or until manual reset, and a high-severity health
-event is recorded.
+event is recorded. The initial default is `max_reconnects_per_5min = 5` per
+source.
 
 Initial backfill policy:
 
@@ -208,6 +220,45 @@ Initial backfill policy:
   parameters, retention window, and duplication behavior are fixture-tested.
 - Bybit: disabled until a current official public REST liquidation-history page
   and endpoint probe are added to the repository.
+
+## Configuration
+
+MVP configuration is file-first with environment overrides. Non-secret
+parameters live in `config/default.toml` and optional local overrides such as
+`config/local.toml`. Environment variables override file values for deployment.
+Secrets do not live in TOML; they come from Infisical-provided environment
+variables when needed.
+
+Initial defaults:
+
+```toml
+[sources]
+default_primary_source = "bybit"
+default_fallback_sources = ["binance"]
+default_aggregation_policy = "primary_only"
+primary_silence_window = "5m"
+
+[recorder]
+hot_raw_retention = "14d"
+collector_health_retention = "7d"
+queue_warning_pct = 80
+queue_critical_pct = 95
+
+[quality]
+heartbeat_threshold = "2m"
+latency_window = "5m"
+latency_alert_share = 0.05
+max_reconnects_per_5min = 5
+circuit_breaker_cooldown = "30m"
+
+[replay]
+fill_validity_window = "5s"
+order_cancel_window_before_expiry = "60s"
+hedge_timeout = "10s"
+```
+
+Every replay run records the resolved configuration, not only the config file
+path. This keeps historical results reproducible after defaults change.
 
 ## Recorder
 
@@ -387,6 +438,7 @@ Daily reports include:
 - normalization errors by type;
 - unknown-side or unknown-price events;
 - source coverage warning, especially snapshot-only feeds;
+- displayed `source_coverage_estimate` values with a diagnostic-only warning;
 - paper signal count and skipped-signal reasons.
 - anomaly warnings when event counts diverge materially from the rolling
   baseline;
@@ -409,6 +461,10 @@ streaming monitor mode that reads collector health and recent event metrics:
   minutes, exceeds the latency threshold, emit a latency alert;
 - if queue depth, reconnect rate, or circuit-breaker state changes, emit a
   structured health event that daily reports later aggregate.
+
+MVP alerts are structured JSON logs plus persisted `collector_health` rows.
+External notification channels are a follow-up, not a blocker for the first
+collector/replay increment.
 
 A Data Quality Review Agent may summarize daily reports, compare them with
 prior reports, and flag trends such as rising latency or source divergence. It
@@ -447,6 +503,18 @@ The first implementation should prefer `sqlx` checked queries and `query_as`
 contract tests against domain row types. Money and quantity columns must map to
 decimal-safe Rust types; a migration that forces `f64` at a domain boundary
 fails CI. A broad reflection framework is not required for MVP.
+
+For strategy-facing tables, `liq-test-utils` also exposes an
+`assert_schema_contract` helper. It queries `information_schema.columns` for
+table name, column name, nullability, numeric precision/scale, and data type,
+then compares those values to the expected domain schema contract. This catches
+schema changes that still compile but silently alter persistence semantics.
+
+Schema migration policy is append-only for MVP. Adding nullable columns or
+columns with explicit defaults is allowed. Dropping columns, renaming columns,
+or changing column types is prohibited unless a new schema version, data
+migration plan, backfill/replay compatibility note, and rollback plan are
+approved in the repository.
 
 `cargo deny` is a follow-up before the dependency set grows materially. The
 initial policy should be narrow: approved licenses and advisory checks only.
@@ -491,6 +559,10 @@ Recommended path:
   diffs the snapshots outside the RAG index, and flags terms such as breaking,
   deprecated, removed, new required field, and payload format changes. RAG may
   index the snapshots, but it is not the source of truth for change detection.
+- Store normalized documentation snapshots as JSON under `docs/snapshots/`.
+  These snapshots should contain source URL, fetch timestamp, content hash,
+  extracted endpoint/schema facts, and relevant text excerpts, not large raw
+  HTML dumps. Scheduled jobs may open PRs when snapshots change.
 - Re-evaluate ApeRAG if we need a heavier RAG portal, MCP-first workflows, or
   built-in multi-user management.
 
@@ -526,6 +598,9 @@ The first increment is complete when:
     bursts to 100 events per second, tracking memory growth, RSS start/end, and
     write latency. The default failure threshold is no unbounded RSS growth and
     no more than 10% growth unless an explicit fixed-memory budget is configured;
+  - Linux-only file descriptor tracking during long-running tests via
+    `/proc/<pid>/fd` or an equivalent tool. Open descriptors must not grow
+    without bound across reconnect cycles;
   - a multi-hour synthetic run with periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior that records drops explicitly rather than
@@ -541,6 +616,9 @@ The first increment is complete when:
   excluded-source windows.
 - Streaming quality alerts for heartbeat gaps, queue pressure, latency, and
   circuit-breaker transitions.
+- Configuration validation and resolved-config snapshots for replay runs.
+- Schema contract checks from `information_schema.columns`.
+- Documentation snapshot refresh jobs that open reviewable PRs.
 - RAG ingestion of official docs and generated reports.
 - Parquet export after schema stabilization.
 - Retention and compression policy checks for TimescaleDB hypertables.
