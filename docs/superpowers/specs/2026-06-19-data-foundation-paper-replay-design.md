@@ -139,10 +139,6 @@ The canonical liquidation event includes:
   and ordering diagnostics.
 - `source_sequence`: optional sequence or stream offset when available.
 - `source_quality`: all-events, snapshot-only, derived, unknown.
-- `source_coverage_estimate`: optional diagnostic value from 0 to 1.0. It can
-  inform reports, but the MVP strategy must not automatically multiply
-  liquidation notional by this estimate. Reports that display it must label it
-  as diagnostic-only and not signal-adjusting.
 - `raw_payload`: compressed JSON for audit and parser upgrades.
 
 Money and sizes must not use `f64` in domain or database boundaries. Rust
@@ -240,6 +236,7 @@ primary_silence_window = "5m"
 
 [recorder]
 hot_raw_retention = "14d"
+canonical_events_retention = "30d"
 collector_health_retention = "7d"
 queue_warning_pct = 80
 queue_critical_pct = 95
@@ -260,6 +257,12 @@ hedge_timeout = "10s"
 Every replay run records the resolved configuration, not only the config file
 path. This keeps historical results reproducible after defaults change.
 
+`liq-cli` validates configuration at startup. Invalid values, such as zero or
+negative retention windows, invalid percentages, unknown source names, or
+fallback sources that are not enabled, produce a non-zero exit with a structured
+list of problems. Silent fallback to defaults is not allowed after a config file
+was explicitly provided.
+
 ## Recorder
 
 TimescaleDB is the primary storage for MVP because the first problem is
@@ -268,8 +271,9 @@ time-series queryability, not cheap archival.
 Tables:
 
 - `raw_source_events`: immutable raw payload audit trail.
-- `archive_manifests`: Parquet archive jobs, row counts, time ranges,
-  checksums, verification status, retry counts, and alert state.
+- `archive_manifests`: Parquet archive jobs, `parquet_schema_version`, row
+  counts, time ranges, checksums, verification status, retry counts, and alert
+  state.
 - `liquidation_events`: canonical normalized liquidation events.
 - `market_quotes`: Polymarket and futures quote snapshots/events.
 - `collector_health`: reconnects, heartbeat gaps, adapter errors, lag.
@@ -300,6 +304,13 @@ canonical event tables in a minimally indexed hot audit table:
 - a scheduled archive job exports cold raw payloads to Parquet on disk;
 - after archive verification, old hot raw rows are eligible for deletion.
 
+Canonical liquidation events have their own retention policy, initially 30
+days. Deleting canonical events is allowed only after the affected time range is
+covered by a verified archive or after an explicit operator decision that the
+range is no longer needed for replay. Long-horizon replay should move to
+Parquet-backed archive reads rather than keeping all canonical events hot
+forever.
+
 Detailed `collector_health` rows have their own retention policy, initially 7
 days. Daily reports retain aggregated health summaries so long-term trends do
 not require an unbounded health table.
@@ -307,10 +318,12 @@ not require an unbounded health table.
 Archive deletion is two-phase and verification-gated:
 
 1. Export the selected raw payload time range to Parquet.
-2. Write an `archive_manifests` row containing source range, row count,
-   min/max timestamps, payload byte count, and file checksums.
-3. Re-open the Parquet output and verify row count, timestamp bounds, and
-   checksum values against the manifest.
+2. Write an `archive_manifests` row containing source range,
+   `parquet_schema_version`, row count, min/max timestamps, payload byte count,
+   file checksums, and expected Parquet metadata.
+3. Re-open the Parquet output and verify row count, timestamp bounds, checksum
+   values, Parquet schema version, file metadata, and column statistics against
+   the manifest.
 4. Mark the manifest as verified only after readback succeeds.
 5. Delete hot raw rows only for verified manifests.
 
@@ -328,7 +341,9 @@ and keeps only content hashes and object references in TimescaleDB.
 Replay from archive is a planned post-MVP mode. `liq-replay` should eventually
 read archived Parquet directly for deep backtests without rehydrating all cold
 raw data into TimescaleDB. The MVP only has to keep archive manifests and
-schemas compatible with this future mode.
+schemas compatible with this future mode. `parquet_schema_version` is stored in
+`archive_manifests` and mirrored as a constant in `liq-replay` so readers can
+reject unsupported archive schemas explicitly.
 
 ## Source Addition Checklist
 
@@ -350,9 +365,13 @@ it:
 8. Add collector health metrics and data-quality report fields for the source.
 9. Add endpoint probes for any backfill candidate and mark backfill quality
    separately from WebSocket quality.
-10. Run mock load tests with the source enabled alongside at least one existing
+10. Validate backfill data against the source WebSocket stream over an
+    overlapping time window before any backfill is used for diagnostics or
+    replay bootstrap.
+11. Add source fixtures to the CI regression test suite.
+12. Run mock load tests with the source enabled alongside at least one existing
    source.
-11. Keep the source excluded from strategy aggregation until the above evidence
+13. Keep the source excluded from strategy aggregation until the above evidence
     is committed.
 
 ## Paper Replay Harness
@@ -438,7 +457,6 @@ Daily reports include:
 - normalization errors by type;
 - unknown-side or unknown-price events;
 - source coverage warning, especially snapshot-only feeds;
-- displayed `source_coverage_estimate` values with a diagnostic-only warning;
 - paper signal count and skipped-signal reasons.
 - anomaly warnings when event counts diverge materially from the rolling
   baseline;
@@ -478,7 +496,8 @@ Required checks:
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `cargo test --workspace --all-features`
-- `sqlx migrate run` against the development database
+- `sqlx migrate run` against the development database, executed twice in a row
+  on the same disposable database to catch non-idempotent migration side effects
 - source fixture regression tests for every committed raw payload fixture
 - `typos`
 - secret scanning with `gitleaks` or an equivalent scanner
@@ -516,6 +535,11 @@ or changing column types is prohibited unless a new schema version, data
 migration plan, backfill/replay compatibility note, and rollback plan are
 approved in the repository.
 
+Backfill data migrations are treated as explicit jobs, not hidden migration
+side effects. A PR that adds a column and intends to populate old rows must
+include the backfill command or script, batch size, expected runtime, resume
+behavior, locking impact, verification query, and rollback/abort instructions.
+
 `cargo deny` is a follow-up before the dependency set grows materially. The
 initial policy should be narrow: approved licenses and advisory checks only.
 Making it mandatory before the workspace is scaffolded would add noise without
@@ -551,6 +575,9 @@ Recommended path:
 - Ingest official exchange docs, architecture docs, runbooks, incident reports,
   replay reports, and strategy notes.
 - Add automatic quality checks for retrieval using known question/answer pairs.
+  A refresh fails or alerts when retrieval accuracy drops below 80% on the
+  tracked evaluation set. The first implementation may use a small project
+  script; RAGAS is a follow-up candidate, not an MVP dependency.
 - Rebuild or refresh RAG indexes on a schedule, initially weekly, and after
   commits that change tracked documentation sources.
 - Provide a manual RAG refresh command for operator-triggered rebuilds after
@@ -563,6 +590,10 @@ Recommended path:
   These snapshots should contain source URL, fetch timestamp, content hash,
   extracted endpoint/schema facts, and relevant text excerpts, not large raw
   HTML dumps. Scheduled jobs may open PRs when snapshots change.
+- Scheduled snapshot jobs generate a machine-readable diff against the previous
+  snapshot. Critical changes such as breaking, deprecated, removed, new
+  required field, and payload format changes open an issue or alert; noncritical
+  changes can be handled as a normal snapshot update PR.
 - Re-evaluate ApeRAG if we need a heavier RAG portal, MCP-first workflows, or
   built-in multi-user management.
 
@@ -588,6 +619,8 @@ The first increment is complete when:
 - migrations create the required TimescaleDB schema;
 - at least two liquidation sources can be collected and normalized;
 - raw payloads and canonical events are persisted durably;
+- `liq-cli` rejects invalid configuration with actionable errors;
+- archive manifests record `parquet_schema_version` and verification metadata;
 - quality reports run over a recorded time window;
 - replay produces deterministic paper signals from stored data;
 - replay runs record strategy version, fill model version, and initial state;
@@ -601,6 +634,9 @@ The first increment is complete when:
   - Linux-only file descriptor tracking during long-running tests via
     `/proc/<pid>/fd` or an equivalent tool. Open descriptors must not grow
     without bound across reconnect cycles;
+  - adapter metrics assert that active WebSocket connection count returns to
+    the expected value after reconnect cycles. Stale active connections fail
+    the test even if file descriptor counts look stable;
   - a multi-hour synthetic run with periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior that records drops explicitly rather than
@@ -618,7 +654,12 @@ The first increment is complete when:
   circuit-breaker transitions.
 - Configuration validation and resolved-config snapshots for replay runs.
 - Schema contract checks from `information_schema.columns`.
+- Backfill data migration runners with resume and verification support.
 - Documentation snapshot refresh jobs that open reviewable PRs.
+- Documentation snapshot diff jobs that classify critical vs noncritical API
+  changes.
+- RAG retrieval-quality checks with an 80% minimum score gate.
+- Adapter connection leak checks in long-running load tests.
 - RAG ingestion of official docs and generated reports.
 - Parquet export after schema stabilization.
 - Retention and compression policy checks for TimescaleDB hypertables.

@@ -144,10 +144,6 @@ Canonical liquidation event включает:
   ordering diagnostics.
 - `source_sequence`: optional sequence или stream offset, если доступно.
 - `source_quality`: all-events, snapshot-only, derived, unknown.
-- `source_coverage_estimate`: optional diagnostic value от 0 до 1.0. Он может
-  использоваться в reports, но MVP strategy не должна автоматически умножать
-  liquidation notional на этот estimate. Reports, которые его показывают,
-  должны маркировать его как diagnostic-only и not signal-adjusting.
 - `raw_payload`: compressed JSON для audit и будущих parser upgrades.
 
 Money и sizes не должны использовать `f64` в domain или database boundaries. Rust
@@ -244,6 +240,7 @@ primary_silence_window = "5m"
 
 [recorder]
 hot_raw_retention = "14d"
+canonical_events_retention = "30d"
 collector_health_retention = "7d"
 queue_warning_pct = 80
 queue_critical_pct = 95
@@ -264,6 +261,12 @@ hedge_timeout = "10s"
 Каждый replay run записывает resolved configuration, а не только путь к config
 file. Это сохраняет historical results reproducible после изменения defaults.
 
+`liq-cli` валидирует configuration при startup. Invalid values, например zero
+или negative retention windows, invalid percentages, unknown source names или
+fallback sources, которые не enabled, дают non-zero exit со structured list of
+problems. Silent fallback to defaults запрещен после явного указания config
+file.
+
 ## Recorder
 
 TimescaleDB является primary storage для MVP, потому что первая проблема -
@@ -272,8 +275,9 @@ time-series queryability, а не дешевый архив.
 Таблицы:
 
 - `raw_source_events`: immutable audit trail raw payloads.
-- `archive_manifests`: Parquet archive jobs, row counts, time ranges,
-  checksums, verification status, retry counts и alert state.
+- `archive_manifests`: Parquet archive jobs, `parquet_schema_version`, row
+  counts, time ranges, checksums, verification status, retry counts и alert
+  state.
 - `liquidation_events`: canonical normalized liquidation events.
 - `market_quotes`: Polymarket и futures quote snapshots/events.
 - `collector_health`: reconnects, heartbeat gaps, adapter errors, lag.
@@ -303,6 +307,12 @@ tables в minimally indexed hot audit table:
 - scheduled archive job экспортирует cold raw payloads в Parquet на диске;
 - после archive verification старые hot raw rows можно удалять.
 
+Canonical liquidation events имеют отдельную retention policy, изначально 30
+days. Удалять canonical events можно только после того, как affected time range
+покрыт verified archive, или после explicit operator decision, что range больше
+не нужен для replay. Long-horizon replay должен переходить на Parquet-backed
+archive reads, а не держать все canonical events hot forever.
+
 Detailed `collector_health` rows имеют отдельную retention policy, изначально 7
 days. Daily reports сохраняют aggregated health summaries, чтобы long-term
 trends не требовали unbounded health table.
@@ -310,10 +320,12 @@ trends не требовали unbounded health table.
 Archive deletion является two-phase и verification-gated:
 
 1. Export выбранного raw payload time range в Parquet.
-2. Записать `archive_manifests` row с source range, row count,
-   min/max timestamps, payload byte count и file checksums.
-3. Повторно открыть Parquet output и проверить row count, timestamp bounds и
-   checksum values against manifest.
+2. Записать `archive_manifests` row с source range,
+   `parquet_schema_version`, row count, min/max timestamps, payload byte count,
+   file checksums и expected Parquet metadata.
+3. Повторно открыть Parquet output и проверить row count, timestamp bounds,
+   checksum values, Parquet schema version, file metadata и column statistics
+   against manifest.
 4. Пометить manifest как verified только после успешного readback.
 5. Удалять hot raw rows только для verified manifests.
 
@@ -331,7 +343,9 @@ archive file name, а не перезаписывает corrupted file.
 Replay from archive является planned post-MVP mode: `liq-replay` сможет читать
 Parquet archives напрямую, минуя hot TimescaleDB tables. Это нужно для deep
 backtests после истечения hot retention window, но не должно блокировать первый
-collector/recorder increment.
+collector/recorder increment. `parquet_schema_version` хранится в
+`archive_manifests` и зеркалится как constant в `liq-replay`, чтобы readers
+явно отклоняли unsupported archive schemas.
 
 ## Source Addition Checklist
 
@@ -353,9 +367,13 @@ signals смогут его использовать:
 8. Добавить collector health metrics и data-quality report fields для source.
 9. Добавить endpoint probes для любого backfill candidate и помечать backfill
    quality отдельно от WebSocket quality.
-10. Запустить mock load tests с новым source вместе минимум с одним existing
+10. Validate backfill data against source WebSocket stream over overlapping
+    time window before any backfill используется для diagnostics или replay
+    bootstrap.
+11. Добавить source fixtures в CI regression test suite.
+12. Запустить mock load tests с новым source вместе минимум с одним existing
    source.
-11. Держать source исключенным из strategy aggregation, пока эти evidence не
+13. Держать source исключенным из strategy aggregation, пока эти evidence не
     закоммичены.
 
 ## Paper Replay Harness
@@ -442,7 +460,6 @@ Daily reports включают:
 - normalization errors by type;
 - unknown-side или unknown-price events;
 - source coverage warning, особенно для snapshot-only feeds;
-- displayed `source_coverage_estimate` values с diagnostic-only warning;
 - paper signal count и skipped-signal reasons.
 - anomaly warnings, когда event counts materially отличаются от rolling
   baseline;
@@ -482,7 +499,9 @@ limits.
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `cargo test --workspace --all-features`
-- `sqlx migrate run` против development database
+- `sqlx migrate run` против development database, executed twice in a row on
+  the same disposable database, чтобы поймать non-idempotent migration side
+  effects
 - source fixture regression tests для каждого committed raw payload fixture
 - `typos`
 - secret scanning через `gitleaks` или equivalent scanner
@@ -520,6 +539,11 @@ nullable columns или columns с explicit defaults. Drop columns, rename colum
 или type changes запрещены без approved new schema version, data migration
 plan, backfill/replay compatibility note и rollback plan в репозитории.
 
+Backfill data migrations являются explicit jobs, а не hidden migration side
+effects. PR, который добавляет column и хочет populate old rows, должен
+содержать backfill command или script, batch size, expected runtime, resume
+behavior, locking impact, verification query и rollback/abort instructions.
+
 `cargo deny` является follow-up до существенного роста dependency set. Initial
 policy должна быть узкой: approved licenses и advisory checks only. Делать его
 обязательным до scaffold workspace добавит noise без улучшения первого design
@@ -555,7 +579,9 @@ RAG полезен, но не блокирует первый collector/replay i
 - Ingest official exchange docs, architecture docs, runbooks, incident reports,
   replay reports и strategy notes.
 - Добавить automatic quality checks для retrieval через known question/answer
-  pairs.
+  pairs. Refresh fails или alerts, если retrieval accuracy падает ниже 80% на
+  tracked evaluation set. Первая реализация может быть небольшим project
+  script; RAGAS является follow-up candidate, а не MVP dependency.
 - Rebuild или refresh RAG indexes по расписанию, изначально weekly, и после
   commits, которые меняют tracked documentation sources.
 - Предоставить manual RAG refresh command для operator-triggered rebuilds после
@@ -568,6 +594,10 @@ RAG полезен, но не блокирует первый collector/replay i
   Snapshots должны содержать source URL, fetch timestamp, content hash,
   extracted endpoint/schema facts и relevant text excerpts, а не большие raw
   HTML dumps. Scheduled jobs могут открывать PR, когда snapshots меняются.
+- Scheduled snapshot jobs генерируют machine-readable diff against previous
+  snapshot. Critical changes, например breaking, deprecated, removed, new
+  required field и payload format changes, открывают issue или alert;
+  noncritical changes идут как normal snapshot update PR.
 - Переоценить ApeRAG, если понадобится более тяжелый RAG portal,
   MCP-first workflows или built-in multi-user management.
 
@@ -593,6 +623,9 @@ RAG полезен, но не блокирует первый collector/replay i
 - migrations создают required TimescaleDB schema;
 - как минимум два liquidation sources можно collect и normalize;
 - raw payloads и canonical events persisted durably;
+- `liq-cli` rejects invalid configuration with actionable errors;
+- archive manifests записывают `parquet_schema_version` и verification
+  metadata;
 - quality reports запускаются по recorded time window;
 - replay производит deterministic paper signals из stored data;
 - replay runs записывают strategy version, fill model version и initial state;
@@ -607,6 +640,9 @@ RAG полезен, но не блокирует первый collector/replay i
   - Linux-only file descriptor tracking во время long-running tests через
     `/proc/<pid>/fd` или equivalent tool. Open descriptors не должны расти
     without bound across reconnect cycles;
+  - adapter metrics assert, что active WebSocket connection count возвращается
+    к expected value после reconnect cycles. Stale active connections fail test,
+    даже если file descriptor counts выглядят stable;
   - multi-hour synthetic run с periodic reconnects;
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior, который records drops explicitly, а не
@@ -624,7 +660,12 @@ RAG полезен, но не блокирует первый collector/replay i
   circuit-breaker transitions.
 - Configuration validation и resolved-config snapshots для replay runs.
 - Schema contract checks из `information_schema.columns`.
+- Backfill data migration runners с resume и verification support.
 - Documentation snapshot refresh jobs, которые открывают reviewable PRs.
+- Documentation snapshot diff jobs, которые классифицируют critical и
+  noncritical API changes.
+- RAG retrieval-quality checks с 80% minimum score gate.
+- Adapter connection leak checks в long-running load tests.
 - Replay-from-archive для deep backtests over Parquet.
 - RAG ingestion official docs и generated reports.
 - API documentation change detection with operator alerts.
