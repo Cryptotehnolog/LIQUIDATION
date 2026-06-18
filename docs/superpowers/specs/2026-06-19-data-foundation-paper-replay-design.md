@@ -141,6 +141,12 @@ The canonical liquidation event includes:
 - `source_quality`: all-events, snapshot-only, derived, unknown.
 - `raw_payload`: compressed JSON for audit and parser upgrades.
 
+`source_quality = derived` is reserved for events not received directly from a
+venue feed, for example future synthesized aggregates or transformed data
+products. MVP adapters should emit `all-events`, `snapshot-only`, or `unknown`;
+derived events are recorded for diagnostics only and excluded from strategy
+signals unless a replay profile explicitly enables them.
+
 Money and sizes must not use `f64` in domain or database boundaries. Rust
 domain types use decimal-safe representations.
 
@@ -148,6 +154,9 @@ Adapters must compute `notional_usd` from venue data, usually `quantity * price`
 when the venue does not provide a notional directly. If price or quantity is
 missing, the normalized event is persisted with validation status `invalid` and
 an exclusion reason, but it is excluded from strategy aggregation.
+Every adapter must include fixture tests for `notional_usd` semantics, including
+venues where reported quantity is contracts or lots rather than base-asset
+quantity.
 
 Deduplication is source-local unless a source is a known mirror of another
 source. Near-simultaneous liquidations on two venues are not duplicates; they
@@ -187,20 +196,20 @@ Strategy aggregation is policy-driven, not implicit summation:
   they are in the configured `source_group`;
 - snapshot-only sources are diagnostic by default and must not be summed with
   all-events sources unless an explicit replay profile enables that behavior;
-- fallback use of a lower-quality source requires a configured silence window,
-  for example primary source silent for more than 5 minutes;
+- fallback use of a lower-quality source is not part of the default MVP signal
+  path and requires an explicit research replay profile;
 - source priority, fallback decisions, and excluded sources are written to
   `strategy_signals` and `replay_runs`.
 
 The MVP default aggregation configuration is intentionally conservative:
 
 - `default_primary_source = "bybit"`;
-- `default_fallback_sources = ["binance"]`;
+- `default_fallback_sources = []`;
 - `default_aggregation_policy = "primary_only"`;
 - Bybit contributes to strategy signals when healthy;
-- Binance is recorded and reported as diagnostic snapshot-only data unless an
-  explicit replay profile enables fallback use after the primary silence
-  window.
+- Binance is recorded and reported as diagnostic snapshot-only data. It is not
+  used for MVP signals, even when Bybit is quiet, unless an explicit research
+  replay profile enables and labels that behavior.
 
 Each connector has a circuit breaker. If reconnects exceed the configured
 threshold within a rolling window, the source is marked degraded, paused for a
@@ -230,7 +239,7 @@ Initial defaults:
 ```toml
 [sources]
 default_primary_source = "bybit"
-default_fallback_sources = ["binance"]
+default_fallback_sources = []
 default_aggregation_policy = "primary_only"
 primary_silence_window = "5m"
 
@@ -294,6 +303,13 @@ source IDs in `collector_health`. Reconnect bursts may be written with database
 micro-batches, but raw liquidation events must not be aggregated before durable
 storage.
 
+For WebSocket protocols that do not support pausing reads, queue pressure above
+`queue_critical_pct` triggers a controlled disconnect/reconnect with a critical
+health event and a gap marker for the affected source window. If the source has
+a documented bounded replay/backfill capability, the collector may attempt a
+gap probe after reconnect. If not, the affected window remains marked degraded.
+Emergency drop mode is a last resort and must produce explicit loss metrics.
+
 Retention policies are part of the recorder design. Canonical events are kept
 in TimescaleDB for queryability. Raw payloads are stored separately from
 canonical event tables in a minimally indexed hot audit table:
@@ -339,6 +355,13 @@ failure reason, and the archive is retried after the configured delay, initially
 affected time range, and blocks retention deletion. Manual recovery writes a new
 archive file name rather than overwriting the corrupted file.
 
+Archive repair is manual. A repair command rebuilds the archive for the same
+time range from durable source rows, writes a new archive path, re-runs full
+verification, and links the replacement manifest to the corrupted manifest.
+Rows must not be silently excluded to make verification pass; if a source row is
+invalid or unrecoverable, the repair report must list the row ID, reason, and
+resulting coverage gap, and canonical deletion remains blocked for that gap.
+
 If measured storage growth crosses the configured limit, a follow-up design
 moves cold raw payload blobs from local Parquet to an S3-compatible object store
 and keeps only content hashes and object references in TimescaleDB.
@@ -351,7 +374,11 @@ schemas compatible with this future mode. `parquet_schema_version` is stored in
 reject unsupported archive schemas explicitly. `liq-replay` maintains a reader
 registry and supports at least the latest two archive schema versions once a
 second version exists. Unsupported versions fail with an explicit
-unsupported-schema error rather than best-effort parsing.
+unsupported-schema error rather than best-effort parsing. When support for an
+older version is scheduled for removal, archives in that version must first be
+converted with a reviewed schema-conversion job or kept readable by a pinned
+fallback reader. MVP starts with a single version, but the compatibility policy
+is versioned from the first archive.
 
 ## Source Addition Checklist
 
@@ -367,6 +394,8 @@ it:
 4. Implement the connector behind the source adapter interface.
 5. Add normalizer tests from fixtures, including side mapping, price type,
    quantity, notional, and validation status.
+   `notional_usd` tests must cover venue-specific quantity semantics, including
+   contracts, lots, quote currency, and base-asset quantity when applicable.
 6. Review and extend the domain model and database schema if the source exposes
    fields required for strategy logic or quality diagnostics.
 7. Confirm `notional_usd` can be computed for strategy-eligible events.
@@ -405,6 +434,9 @@ Replay determinism requires:
   strategy/fill-model versions, ordered input event IDs and payload
   fingerprints, source set, time range, and archive manifest IDs when archives
   are used;
+- `input_hash` includes only semantically relevant inputs. Runtime version,
+  compiler version, host OS, wall-clock start time, and logging configuration do
+  not affect the hash unless they change replay semantics;
 - all inputs come from stored liquidation, quote, trade, and futures data;
 - ordering uses recorded exchange timestamps with deterministic tie-breaking by
   receive timestamp and event ID;
@@ -414,6 +446,14 @@ If a completed `replay_run` already exists with the same `input_hash`, the
 default behavior is to reuse or report the existing result. A new run with the
 same hash requires an explicit `--force-new-run` flag and must still preserve
 both run IDs for audit.
+
+Paper-live uses the same strategy state machine as historical replay, but its
+clock advances from newly recorded data. The collector records normalized
+events, a paper-live worker polls or subscribes to committed windows, evaluates
+the strategy over deterministic window boundaries, writes `strategy_signals`,
+creates simulated `paper_orders`, and records `paper_fills` using the current
+paper fill model. Paper-live never submits real orders and every generated row
+is marked simulated.
 
 `liq-replay` exposes a minimal `Strategy` interface. A strategy consumes a
 deterministically ordered event stream and emits strategy signals, paper orders,
@@ -487,7 +527,9 @@ Daily reports include:
 - outage warnings when a source is silent longer than the configured heartbeat
   threshold.
 - storage warnings including TimescaleDB size, raw hot table size, archive
-  backlog, archive verification failures, and percentage of allocated disk used.
+  backlog, Parquet archive size, archive verification failures, and percentage
+  of allocated database and archive disk used. Parquet archive storage warns at
+  80% of the configured budget.
 
 Reports are generated by CLI and later scheduled by GitHub Actions or a server
 cron/systemd timer. They should write Markdown and machine-readable JSON.
@@ -616,9 +658,11 @@ Recommended path:
 - Ingest official exchange docs, architecture docs, runbooks, incident reports,
   replay reports, and strategy notes.
 - Add automatic quality checks for retrieval using known question/answer pairs.
-  A refresh fails or alerts when retrieval accuracy drops below 80% on the
-  tracked evaluation set. The first implementation may use a small project
-  script; RAGAS is a follow-up candidate, not an MVP dependency.
+  A refresh fails or alerts when top-5 recall or simple answer accuracy drops
+  below 80% on the tracked evaluation set. Mean reciprocal rank is reported as
+  a trend metric so a correct document falling from rank 1 to rank 5 is visible.
+  The first implementation may use a small project script; RAGAS is a follow-up
+  candidate, not an MVP dependency.
 - Rebuild or refresh RAG indexes on a schedule, initially weekly, and after
   commits that change tracked documentation sources.
 - Provide a manual RAG refresh command for operator-triggered rebuilds after
@@ -692,6 +736,9 @@ The first increment is complete when:
   - two concurrent sources writing to the same database;
   - bounded channel overflow behavior that records drops explicitly rather than
     losing events silently;
+- strategy corruption tests cover duplicate events, missing windows, invalid
+  prices, impossible notionals, and out-of-order inputs without panics. The
+  strategy must skip or mark invalid data and emit diagnostics;
 - all generated paper orders/fills are clearly marked as simulated;
 - no production trading secret is required or accepted by default.
 
@@ -701,6 +748,8 @@ The first increment is complete when:
 - Automatic source-feed regression tests from captured raw payload fixtures.
 - Source aggregation policy tests for all-events, snapshot-only, fallback, and
   excluded-source windows.
+- Strategy corruption tests for duplicates, gaps, invalid prices, and
+  out-of-order events.
 - Streaming quality alerts for heartbeat gaps, queue pressure, latency, and
   circuit-breaker transitions.
 - Configuration validation and resolved-config snapshots for replay runs.
@@ -716,6 +765,8 @@ The first increment is complete when:
 - Single-writer source lease check for collector startup.
 - Replay `input_hash` reuse and `replay dry-run` checks.
 - Parquet schema reader registry compatibility tests.
+- Signal weighting research for future all-events sources only; snapshot-only
+  Binance must not receive a production signal weight in MVP.
 - RAG ingestion of official docs and generated reports.
 - Parquet export after schema stabilization.
 - Retention and compression policy checks for TimescaleDB hypertables.
