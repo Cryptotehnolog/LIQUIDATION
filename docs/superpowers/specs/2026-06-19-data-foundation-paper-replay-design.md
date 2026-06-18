@@ -51,6 +51,11 @@ venue must prove that its REST endpoint is public, market-wide, and semantically
 equivalent to the WebSocket stream before it can fill collector gaps. For
 example, Binance `GET /fapi/v1/forceOrders` is a USER_DATA endpoint for the
 authenticated user's force orders, not a public market liquidation history.
+OKX `GET /api/v5/public/liquidation-orders` is a public candidate for bounded
+backfill, but must be treated as limited recent history. Bybit REST liquidation
+history is not considered verified until an official public endpoint is linked
+and an automated endpoint probe passes; the named
+`/v5/market/liquidation-history` endpoint returned 404 during design review.
 
 ## Scope
 
@@ -68,6 +73,8 @@ authenticated user's force orders, not a public market liquidation history.
 - Paper-only strategy replay harness.
 - CI gates for formatting, linting, tests, migrations, and typo checks.
 - Test support utilities for fixtures, mock sources, and replay assertions.
+- Mock load tests that stress the collector and recorder above normal event
+  rates.
 - Development Docker Compose for TimescaleDB and supporting services.
 
 ### Out Of Scope
@@ -95,7 +102,7 @@ loading the whole system.
   metrics.
 - `liq-replay`: replays recorded data through the strategy state machine.
 - `liq-test-utils`: shared test fixtures, mock event sources, deterministic
-  clocks, and replay assertion helpers.
+  clocks, load generators, and replay assertion helpers.
 - `liq-cli`: operator CLI for running collectors, reports, and replay jobs.
 
 The hot path is:
@@ -152,6 +159,15 @@ diagnostics, but they cannot be used to repair gaps unless the endpoint's
 coverage and retention are documented and tested. Backfilled events must carry
 their own source quality and ingestion mode.
 
+Initial backfill policy:
+
+- Binance: disabled for market liquidation recovery because the available
+  official force-order REST endpoint is authenticated USER_DATA.
+- OKX: allowed as an experimental bounded backfill source after endpoint
+  parameters, retention window, and duplication behavior are fixture-tested.
+- Bybit: disabled until a current official public REST liquidation-history page
+  and endpoint probe are added to the repository.
+
 ## Recorder
 
 TimescaleDB is the primary storage for MVP because the first problem is
@@ -175,6 +191,11 @@ kept in TimescaleDB for a configurable hot window, initially 30-60 days.
 Longer-term storage is handled by scheduled Parquet export after table schemas
 are stable. Parquet is not a primary write path in the MVP.
 
+Raw payloads stay in TimescaleDB for the MVP. If measured storage growth crosses
+the configured limit, the follow-up design moves cold raw payload blobs to an
+S3-compatible object store and keeps only content hashes and object references
+in TimescaleDB.
+
 ## Paper Replay Harness
 
 Replay must support two modes:
@@ -192,6 +213,12 @@ Replay determinism requires:
   receive timestamp and event ID;
 - execution simulation rules are versioned and immutable for a completed run.
 
+`liq-replay` exposes a minimal `Strategy` interface. A strategy consumes a
+deterministically ordered event stream and emits strategy signals, paper orders,
+and state transitions. The first implementation is the baseline liquidation
+stink-bid strategy; later variants must plug into the same replay engine rather
+than forking replay logic.
+
 The first strategy implementation mirrors the original idea only as a baseline:
 
 - aggregate liquidation notional over a configurable rolling window;
@@ -205,12 +232,24 @@ The first strategy implementation mirrors the original idea only as a baseline:
 Dynamic `PULLBACK_PCT` is not enabled until replay proves the static baseline.
 The design should make it pluggable, but not optimize before there is data.
 
-The MVP paper-fill model is conservative. A Polymarket limit order is simulated
-as filled only when recorded trades or order book changes prove that the limit
-price was reachable under the selected fill model. Order book touch alone is
-recorded as a separate optimistic model, not the default, because it cannot
-prove queue position. Hyperliquid hedge fills are simulated from recorded best
-bid/ask plus a configurable slippage model.
+The MVP paper-fill model is explicit and versioned:
+
+- `trade_cross`: default conservative model. A Polymarket buy limit fills only
+  if a recorded trade occurs at or below the limit price within the configured
+  validity window. A sell limit fills only if a recorded trade occurs at or
+  above the limit price.
+- `book_depth_cross`: allowed only when recorded order book depth is available.
+  A buy fills if recorded ask depth at or below the limit price is at least the
+  simulated order size; a sell fills if recorded bid depth at or above the limit
+  price is at least the simulated order size.
+- `book_touch`: optimistic diagnostic model. A buy can fill when best ask
+  touches or crosses the limit; a sell can fill when best bid touches or
+  crosses the limit. This model is reported separately and is not the default
+  because it cannot prove queue position.
+
+The fill validity window is configurable, with 5 seconds as the initial replay
+default. Hyperliquid hedge fills are simulated from recorded best bid/ask plus a
+configurable slippage model.
 
 ## Data Quality Reports
 
@@ -235,6 +274,11 @@ Daily reports include:
 Reports are generated by CLI and later scheduled by GitHub Actions or a server
 cron/systemd timer. They should write Markdown and machine-readable JSON.
 
+A Data Quality Review Agent may summarize daily reports, compare them with
+prior reports, and flag trends such as rising latency or source divergence. It
+is advisory only and must not change collector settings, strategy thresholds, or
+risk limits.
+
 ## CI And Developer Workflow
 
 Required checks:
@@ -245,6 +289,7 @@ Required checks:
 - `sqlx migrate run` against the development database
 - `typos`
 - secret scanning with `gitleaks` or an equivalent scanner
+- `cargo audit`
 
 Pre-commit hooks may run the same local checks for convenience. CI remains the
 source of truth.
@@ -255,6 +300,9 @@ compile-time query checking once the database workflow is established.
 The CI workflow should run a disposable database for migrations and integration
 tests. `sqlx` offline metadata can be added once queries stabilize so ordinary
 builds do not require a live database.
+`cargo deny` is a follow-up once the dependency set exists; making license and
+advisory policy mandatory before the workspace is scaffolded would add noise
+without improving the first design decision.
 
 ## Deployment Model
 
@@ -286,6 +334,8 @@ Recommended path:
 - Ingest official exchange docs, architecture docs, runbooks, incident reports,
   replay reports, and strategy notes.
 - Add automatic quality checks for retrieval using known question/answer pairs.
+- Rebuild or refresh RAG indexes on a schedule, initially weekly, and after
+  commits that change tracked documentation sources.
 - Re-evaluate ApeRAG if we need a heavier RAG portal, MCP-first workflows, or
   built-in multi-user management.
 
@@ -293,6 +343,7 @@ Allowed agents:
 
 - Documentation ingestion agent.
 - Data-quality report analyst.
+- Data-quality review agent.
 - Backtest/replay analyst.
 - Risk review assistant.
 - Release/runbook assistant.
@@ -313,6 +364,8 @@ The first increment is complete when:
 - quality reports run over a recorded time window;
 - replay produces deterministic paper signals from stored data;
 - replay runs record strategy version, fill model version, and initial state;
+- mock load tests show the recorder can absorb configured burst rates without
+  data loss;
 - all generated paper orders/fills are clearly marked as simulated;
 - no production trading secret is required or accepted by default.
 
@@ -324,4 +377,5 @@ The first increment is complete when:
 - Parquet export after schema stabilization.
 - Retention and compression policy checks for TimescaleDB hypertables.
 - English/Russian spec synchronization check.
+- Scheduled RAG index refresh and retrieval-quality checks.
 - Alerting for collector downtime, feed gaps, and abnormal source divergence.
