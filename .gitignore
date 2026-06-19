@@ -6,6 +6,8 @@
 /infra/lightrag/data/
 /docs/reports/**/*.tmp
 /docs/reports/**/*.log
+/docs/reports/rag/index-metadata.json
+/docs/reports/rag/eval-report.json
 *.pdb
 *.profraw
 *.profdata

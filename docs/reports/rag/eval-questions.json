@@ -1,0 +1,17 @@
+[
+  {
+    "id": "okx-rest-backfill",
+    "question": "Can OKX REST liquidation backfill be used in MVP?",
+    "expected_answer_contains": ["disabled", "delisted", "WebSocket"]
+  },
+  {
+    "id": "binance-source-quality",
+    "question": "What source quality does Binance liquidation stream have?",
+    "expected_answer_contains": ["snapshot-only", "diagnostic"]
+  },
+  {
+    "id": "rag-source-of-truth",
+    "question": "Is LightRAG the source of truth?",
+    "expected_answer_contains": ["Git", "docs", "source of truth"]
+  }
+]
