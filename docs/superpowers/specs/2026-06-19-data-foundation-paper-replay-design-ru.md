@@ -722,22 +722,49 @@ fixtures; он только показывает, что нужно verify.
 ## RAG и Agents
 
 RAG полезен, но не блокирует первый collector/replay increment.
+Repository documentation является source of truth. LightRAG является
+development memory и semantic index поверх этого source of truth; он не должен
+становиться единственным местом, где живут design decisions, incidents или
+runbooks.
 
 Рекомендованный путь:
 
-- Начать с LightRAG как lightweight documentation/research knowledge base.
-- Ingest official exchange docs, architecture docs, runbooks, incident reports,
-  replay reports и strategy notes.
+- Запустить отдельный LightRAG Dev Memory stack для этого проекта. Не
+  переиспользовать и не менять существующие ApeRAG/Omniroute containers,
+  которые обслуживают другой проект. Docker names, networks, volumes, ports и
+  compose project names должны использовать prefix `liquidation`.
+- Сначала ingest только repo-owned documentation: `docs/`, specs, runbooks,
+  research notes, incident reports, replay reports и strategy notes. Official
+  exchange documentation snapshots можно индексировать после normalization и
+  commit в `docs/snapshots/`.
+- Хранить LightRAG index metadata: indexed Git commit hash, branch, ingestion
+  timestamp, indexed paths, ingestion config version и evaluation result.
+- Предоставить project commands:
+  - `liq-rag ingest docs/`;
+  - `liq-rag eval`;
+  - `liq-rag health`;
+  - `liq-rag status --check-commit`.
+- Stale index не считается надежным. Если indexed commit hash не совпадает с
+  current Git commit для tracked docs, tooling должен warn или fail closed и
+  использовать repository docs напрямую.
+- Запускать daily LightRAG health check, который проверяет service
+  availability, freshness, evaluation score и storage health. Alert нужен, если
+  LightRAG stale, unavailable или ниже retrieval-quality threshold.
 - Добавить automatic quality checks для retrieval через known question/answer
   pairs. Refresh fails или alerts, если top-5 recall или simple answer accuracy
   падает ниже 80% на tracked evaluation set. Mean reciprocal rank reported как
   trend metric, чтобы было видно падение correct document с rank 1 до rank 5.
   Первая реализация может быть небольшим project script; RAGAS является
   follow-up candidate, а не MVP dependency.
-- Rebuild или refresh RAG indexes по расписанию, изначально weekly, и после
-  commits, которые меняют tracked documentation sources.
+- Rebuild или refresh RAG indexes после commits, которые меняют tracked
+  documentation sources, а weekly scheduled rebuild оставить как fallback.
 - Предоставить manual RAG refresh command для operator-triggered rebuilds после
   срочных API announcements.
+- Исключить из ingestion secrets, `.env` files, Infisical exports, private keys,
+  exchange credentials и large raw market-data blobs.
+- Если LightRAG или его LLM provider unavailable, разработка продолжается по
+  repository docs. RAG downtime не должен блокировать collector, replay, CI или
+  paper trading work.
 - Добавить API documentation change detector, который сравнивает versioned
   official documentation snapshots outside the RAG index. Detector ищет
   breaking/deprecated/new required field signals, создает issue или alert и не
@@ -750,8 +777,9 @@ RAG полезен, но не блокирует первый collector/replay i
   snapshot. Critical changes, например breaking, deprecated, removed, new
   required field и payload format changes, открывают issue или alert;
   noncritical changes идут как normal snapshot update PR.
-- Переоценить ApeRAG, если понадобится более тяжелый RAG portal,
-  MCP-first workflows или built-in multi-user management.
+- Переоценить ApeRAG только позже, если понадобится более тяжелый RAG portal,
+  MCP-first workflows или built-in multi-user management. Существующий ApeRAG
+  stack не является project dependency для этого repository.
 
 Разрешенные agents:
 

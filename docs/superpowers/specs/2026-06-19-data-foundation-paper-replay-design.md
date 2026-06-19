@@ -714,22 +714,48 @@ or fixtures; it only informs what to verify.
 ## RAG And Agents
 
 RAG is useful but not blocking for the first collector/replay increment.
+Repository documentation is the source of truth. LightRAG is a development
+memory and semantic index over that source of truth; it must never become the
+only place where design decisions, incidents, or runbooks live.
 
 Recommended path:
 
-- Start with LightRAG for a lightweight documentation/research knowledge base.
-- Ingest official exchange docs, architecture docs, runbooks, incident reports,
-  replay reports, and strategy notes.
+- Run a separate LightRAG Dev Memory stack for this project. Do not reuse or
+  mutate the existing ApeRAG/Omniroute containers that support another project.
+  Docker names, networks, volumes, ports, and compose project names must use a
+  `liquidation` prefix.
+- Ingest repo-owned documentation first: `docs/`, specs, runbooks, research
+  notes, incident reports, replay reports, and strategy notes. Official
+  exchange documentation snapshots may be indexed after they are normalized and
+  committed under `docs/snapshots/`.
+- Store LightRAG index metadata: indexed Git commit hash, branch, ingestion
+  timestamp, indexed paths, ingestion config version, and evaluation result.
+- Provide project commands:
+  - `liq-rag ingest docs/`;
+  - `liq-rag eval`;
+  - `liq-rag health`;
+  - `liq-rag status --check-commit`.
+- A stale index is not trusted. If the indexed commit hash does not match the
+  current Git commit for tracked docs, tooling must warn or fail closed and use
+  repository docs directly.
+- Run a daily LightRAG health check that verifies service availability,
+  freshness, evaluation score, and storage health. Alert when LightRAG is stale,
+  unavailable, or below the retrieval-quality threshold.
 - Add automatic quality checks for retrieval using known question/answer pairs.
   A refresh fails or alerts when top-5 recall or simple answer accuracy drops
   below 80% on the tracked evaluation set. Mean reciprocal rank is reported as
   a trend metric so a correct document falling from rank 1 to rank 5 is visible.
   The first implementation may use a small project script; RAGAS is a follow-up
   candidate, not an MVP dependency.
-- Rebuild or refresh RAG indexes on a schedule, initially weekly, and after
-  commits that change tracked documentation sources.
+- Rebuild or refresh RAG indexes after commits that change tracked
+  documentation sources, and keep a weekly scheduled rebuild as a fallback.
 - Provide a manual RAG refresh command for operator-triggered rebuilds after
   urgent API announcements.
+- Exclude secrets, `.env` files, Infisical exports, private keys, exchange
+  credentials, and large raw market-data blobs from ingestion.
+- If LightRAG or its LLM provider is unavailable, development continues from
+  repository docs. RAG downtime must not block collector, replay, CI, or paper
+  trading work.
 - Add an API documentation change detector that snapshots official source docs,
   diffs the snapshots outside the RAG index, and flags terms such as breaking,
   deprecated, removed, new required field, and payload format changes. RAG may
@@ -742,8 +768,9 @@ Recommended path:
   snapshot. Critical changes such as breaking, deprecated, removed, new
   required field, and payload format changes open an issue or alert; noncritical
   changes can be handled as a normal snapshot update PR.
-- Re-evaluate ApeRAG if we need a heavier RAG portal, MCP-first workflows, or
-  built-in multi-user management.
+- Re-evaluate ApeRAG only later if we need a heavier RAG portal, MCP-first
+  workflows, or built-in multi-user management. The existing ApeRAG stack is not
+  a project dependency for this repository.
 
 Allowed agents:
 
