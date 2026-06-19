@@ -77,8 +77,14 @@ LIGHTRAG_INDEXED_PATHS=docs/
 LIGHTRAG_API_PORT=
 LIQUIDATION_OMNIROUTE_PORT=
 LIQUIDATION_FREE_DEEPSEEK_PORT=
+LIQUIDATION_EMBEDDINGS_PORT=
 LIQUIDATION_OMNIROUTE_BASE_URL=
 LIQUIDATION_FREE_DEEPSEEK_BASE_URL=
+LIQUIDATION_EMBEDDINGS_BASE_URL=
+LIGHTRAG_EMBEDDING_BINDING=
+LIGHTRAG_EMBEDDING_BINDING_HOST=
+LIGHTRAG_EMBEDDING_MODEL=
+LIGHTRAG_EMBEDDING_DIM=
 ```
 
 В repository хранить только `.env.example`. Реальные secrets должны храниться в
@@ -130,6 +136,32 @@ Invoke-WebRequest "$env:LIQUIDATION_FREE_DEEPSEEK_BASE_URL/v1/models" -UseBasicP
 
 Для completion check использовать короткий non-streaming request. Streaming не
 является обязательным для MVP RAG.
+
+## Embeddings
+
+MVP использует отдельный service `liquidation-embeddings`, который предоставляет
+OpenAI-compatible endpoint:
+
+```text
+http://liquidation-embeddings:21435/v1/embeddings
+```
+
+Текущая модель `liquidation-hash-embedding-1024` является локальной
+deterministic hash embedding. Это осознанный компромисс: он не требует внешних
+API, не трогает второй проект и позволяет проверить полный lifecycle
+`ingest/eval/health/status`.
+
+Ограничение: hash embedding не заменяет качественную semantic embedding model.
+Перед тем как использовать RAG как источник сложного semantic search,
+нужно заменить этот backend на реальную локальную или управляемую embedding
+модель и заново прогнать `liq-rag eval`.
+
+Минимальные embedding checks:
+
+```powershell
+Invoke-WebRequest "$env:LIQUIDATION_EMBEDDINGS_BASE_URL/health" -UseBasicParsing
+Invoke-WebRequest "$env:LIQUIDATION_EMBEDDINGS_BASE_URL/v1/models" -UseBasicParsing
+```
 
 ## Health statuses
 

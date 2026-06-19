@@ -9,10 +9,22 @@ param(
     [string]$EnvFile = "infra/lightrag/.env",
 
     [Alias("check-commit")]
-    [switch]$CheckCommit
+    [switch]$CheckCommit,
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Path -eq "--check-commit") {
+    $Path = "docs/"
+    $CheckCommit = $true
+}
+
+if ($RemainingArgs -contains "--check-commit") {
+    $CheckCommit = $true
+}
 
 $ReportDir = "docs/reports/rag"
 $MetadataPath = Join-Path $ReportDir "index-metadata.json"
@@ -93,12 +105,14 @@ function Invoke-HealthRequest {
 function Assert-EmbeddingConfigured {
     param([Parameter(Mandatory = $true)]$Config)
 
-    $provider = Get-ConfigValue $Config "EMBEDDING_PROVIDER_NAME"
-    $model = Get-ConfigValue $Config "EMBEDDING_MODEL"
+    $binding = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_BINDING"
+    $hostUrl = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_BINDING_HOST"
+    $model = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_MODEL"
+    $dimension = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_DIM"
 
-    if ([string]::IsNullOrWhiteSpace($provider) -or [string]::IsNullOrWhiteSpace($model)) {
-        Write-Output "failed: LightRAG embedding provider/model are empty in $EnvFile"
-        Write-Output "Set EMBEDDING_PROVIDER_NAME and EMBEDDING_MODEL before liq-rag ingest."
+    if ([string]::IsNullOrWhiteSpace($binding) -or [string]::IsNullOrWhiteSpace($hostUrl) -or [string]::IsNullOrWhiteSpace($model) -or [string]::IsNullOrWhiteSpace($dimension)) {
+        Write-Output "failed: LightRAG embedding binding/host/model/dim are empty in $EnvFile"
+        Write-Output "Set LIGHTRAG_EMBEDDING_BINDING, LIGHTRAG_EMBEDDING_BINDING_HOST, LIGHTRAG_EMBEDDING_MODEL, and LIGHTRAG_EMBEDDING_DIM before liq-rag ingest."
         exit 1
     }
 }
@@ -113,7 +127,9 @@ function Get-ServiceConfig {
         omniroute_url = "http://${hostName}:$(Get-ConfigValue $config "LIQUIDATION_OMNIROUTE_PORT" "21128")"
         lightrag_url = "http://${hostName}:$(Get-ConfigValue $config "LIGHTRAG_API_PORT" "19621")"
         freedeepseek_url = "http://${hostName}:$(Get-ConfigValue $config "LIQUIDATION_FREE_DEEPSEEK_PORT" "19655")"
+        embeddings_url = "http://${hostName}:$(Get-ConfigValue $config "LIQUIDATION_EMBEDDINGS_PORT" "21435")"
         llm_model = Get-ConfigValue $config "LIGHTRAG_LLM_MODEL"
+        embedding_model = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_MODEL"
     }
 }
 
@@ -160,26 +176,153 @@ function Test-TermInDocs {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Resolve-EnvRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [Parameter(Mandatory = $true)][string]$BaseFile
+    )
+
+    if ([System.IO.Path]::IsPathRooted($Value)) {
+        return [System.IO.Path]::GetFullPath($Value)
+    }
+
+    $baseDir = Split-Path -Parent (Resolve-Path $BaseFile)
+    return [System.IO.Path]::GetFullPath((Join-Path $baseDir $Value))
+}
+
+function Assert-PathInside {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if (-not $candidate.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label path is outside expected root: $candidate"
+    }
+}
+
+function Sync-DocsToLightRagInput {
+    param(
+        [Parameter(Mandatory = $true)][string]$DocsPath,
+        [Parameter(Mandatory = $true)]$Config
+    )
+
+    $dataPath = Resolve-EnvRelativePath (Get-ConfigValue $Config "LIGHTRAG_DATA_PATH" "./data") $EnvFile
+    $inputRoot = Join-Path $dataPath "inputs"
+    $targetRoot = Join-Path $inputRoot "repo-docs"
+
+    Assert-PathInside $targetRoot $inputRoot "LightRAG input mirror"
+    New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+
+    Get-ChildItem -LiteralPath $targetRoot -Force | Remove-Item -Recurse -Force
+
+    $files = git ls-files -- $DocsPath | Sort-Object
+    if (-not $files) {
+        throw "No tracked files found for path '$DocsPath'"
+    }
+
+    $copied = 0
+    foreach ($file in $files) {
+        if (-not (Test-Path $file)) {
+            continue
+        }
+
+        $extension = [System.IO.Path]::GetExtension($file).ToLowerInvariant()
+        if ($extension -notin @(".md", ".txt", ".json", ".yaml", ".yml")) {
+            continue
+        }
+
+        $destination = Join-Path $targetRoot $file
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+        Copy-Item -LiteralPath $file -Destination $destination -Force
+        $copied += 1
+    }
+
+    if ($copied -eq 0) {
+        throw "No supported docs files copied for '$DocsPath'"
+    }
+
+    return [ordered]@{
+        input_root = $inputRoot
+        mirror_root = $targetRoot
+        copied_files = $copied
+    }
+}
+
+function Invoke-LightRagScan {
+    param([Parameter(Mandatory = $true)][string]$BaseUrl)
+
+    Invoke-RestMethod -Uri "$BaseUrl/documents/scan" -Method Post -TimeoutSec 30
+}
+
+function Wait-LightRagPipeline {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [int]$TimeoutSeconds = 900
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastStatus = $null
+    while ((Get-Date) -lt $deadline) {
+        $lastStatus = Invoke-RestMethod -Uri "$BaseUrl/documents/pipeline_status" -Method Get -TimeoutSec 30
+        $counts = Invoke-RestMethod -Uri "$BaseUrl/documents/status_counts" -Method Get -TimeoutSec 30
+        $statusCounts = $counts.status_counts
+
+        $pending = 0
+        $processing = 0
+        if ($statusCounts) {
+            if ($statusCounts.PENDING) { $pending = [int]$statusCounts.PENDING }
+            if ($statusCounts.PROCESSING) { $processing = [int]$statusCounts.PROCESSING }
+        }
+
+        if (-not $lastStatus.busy -and -not $lastStatus.scanning -and -not $lastStatus.request_pending -and $pending -eq 0 -and $processing -eq 0) {
+            return [ordered]@{
+                pipeline = $lastStatus
+                status_counts = $statusCounts
+            }
+        }
+
+        Start-Sleep -Seconds 5
+    }
+
+    throw "LightRAG indexing pipeline did not finish within ${TimeoutSeconds}s. Last status: $($lastStatus | ConvertTo-Json -Depth 5)"
+}
+
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
 
 switch ($Command) {
     "ingest" {
         $config = Read-DotEnv $EnvFile
         Assert-EmbeddingConfigured $config
+        $serviceConfig = Get-ServiceConfig
 
         $commit = Get-CurrentCommit
         $treeHash = Get-DocsTreeHash $Path
+        $mirror = Sync-DocsToLightRagInput -DocsPath $Path -Config $config
+        $scan = Invoke-LightRagScan -BaseUrl $serviceConfig.lightrag_url
+        $pipeline = Wait-LightRagPipeline -BaseUrl $serviceConfig.lightrag_url
         $report = [ordered]@{
             indexed_commit = $commit
             indexed_path = $Path
             docs_tree_hash = $treeHash
             generated_at = (Get-Date).ToUniversalTime().ToString("o")
-            status = "metadata-only"
-            note = "Temporary shim. Real LightRAG ingest is not implemented yet."
+            status = "indexed"
+            lightrag_url = $serviceConfig.lightrag_url
+            embedding_model = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_MODEL"
+            mirror = $mirror
+            scan = $scan
+            pipeline = $pipeline
         }
 
-        $report | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 $MetadataPath
-        Write-Output "ingest metadata written: $MetadataPath"
+        $report | ConvertTo-Json -Depth 12 | Set-Content -Encoding UTF8 $MetadataPath
+        Write-Output "ingest completed: $MetadataPath"
     }
     "eval" {
         if (-not (Test-Path $EvalQuestionsPath)) {
@@ -222,6 +365,8 @@ switch ($Command) {
         $omniroute = Invoke-HealthRequest "omniroute_models" "$($serviceConfig.omniroute_url)/v1/models"
         $lightrag = Invoke-HealthRequest "lightrag_health" "$($serviceConfig.lightrag_url)/health"
         $freedeepseek = Invoke-HealthRequest "freedeepseek_health" "$($serviceConfig.freedeepseek_url)/health"
+        $embeddings = Invoke-HealthRequest "embeddings_health" "$($serviceConfig.embeddings_url)/health"
+        $embeddingModels = Invoke-HealthRequest "embeddings_models" "$($serviceConfig.embeddings_url)/v1/models"
 
         $configuredModelPresent = $false
         $modelCheckError = $null
@@ -236,11 +381,22 @@ switch ($Command) {
 
         $primaryRouteOk = $omniroute.ok -and $configuredModelPresent
         $fallbackRouteOk = $freedeepseek.ok
+        $embeddingRouteOk = $false
+        $embeddingModelPresent = $false
+        if ($embeddings.ok -and $embeddingModels.ok -and -not [string]::IsNullOrWhiteSpace($serviceConfig.embedding_model)) {
+            try {
+                $models = ($embeddingModels.content | ConvertFrom-Json).data
+                $embeddingModelPresent = @($models | Where-Object { $_.id -eq $serviceConfig.embedding_model }).Count -gt 0
+                $embeddingRouteOk = $embeddingModelPresent
+            } catch {
+                $embeddingRouteOk = $false
+            }
+        }
 
-        if ($lightrag.ok -and $primaryRouteOk) {
+        if ($lightrag.ok -and $primaryRouteOk -and $embeddingRouteOk) {
             $status = "ok"
             $exitCode = 0
-        } elseif ($lightrag.ok -and (-not $primaryRouteOk) -and $fallbackRouteOk) {
+        } elseif ($lightrag.ok -and $embeddingRouteOk -and (-not $primaryRouteOk) -and $fallbackRouteOk) {
             $status = "degraded-but-usable"
             $exitCode = 0
         } else {
@@ -272,6 +428,17 @@ switch ($Command) {
                 url = $freedeepseek.url
                 status_code = $freedeepseek.status_code
                 error = $freedeepseek.error
+            }
+            embeddings = [ordered]@{
+                ok = $embeddings.ok
+                url = $embeddings.url
+                status_code = $embeddings.status_code
+                embedding_model = $serviceConfig.embedding_model
+                embedding_model_present = $embeddingModelPresent
+                models_url = $embeddingModels.url
+                models_status_code = $embeddingModels.status_code
+                models_error = $embeddingModels.error
+                error = $embeddings.error
             }
         }
 

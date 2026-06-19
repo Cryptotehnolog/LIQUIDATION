@@ -38,6 +38,23 @@ services:
     networks:
       - liquidation-rag
 
+  liquidation-embeddings:
+    image: ${LIGHTRAG_IMAGE}
+    container_name: liquidation-embeddings
+    restart: unless-stopped
+    entrypoint: ["python", "/app/embedding_server.py"]
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "21435"
+      EMBEDDING_MODEL: ${LIGHTRAG_EMBEDDING_MODEL}
+      EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM}
+    ports:
+      - "${LIGHTRAG_HOST}:${LIQUIDATION_EMBEDDINGS_PORT}:21435"
+    volumes:
+      - ./embedding-server/embedding_server.py:/app/embedding_server.py:ro
+    networks:
+      - liquidation-rag
+
   liquidation-lightrag:
     image: ${LIGHTRAG_IMAGE}
     container_name: liquidation-lightrag
@@ -53,8 +70,10 @@ services:
       LLM_BINDING: openai
       LLM_MODEL: ${LIGHTRAG_LLM_MODEL}
       LLM_BINDING_HOST: ${LIQUIDATION_OMNIROUTE_BASE_URL}/v1
-      EMBEDDING_PROVIDER_NAME: ${EMBEDDING_PROVIDER_NAME}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+      EMBEDDING_BINDING: ${LIGHTRAG_EMBEDDING_BINDING}
+      EMBEDDING_BINDING_HOST: ${LIGHTRAG_EMBEDDING_BINDING_HOST}
+      EMBEDDING_MODEL: ${LIGHTRAG_EMBEDDING_MODEL}
+      EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM}
     volumes:
       - ${LIGHTRAG_DATA_PATH}/rag_storage:/app/data/rag_storage
       - ${LIGHTRAG_DATA_PATH}/inputs:/app/data/inputs
@@ -63,6 +82,7 @@ services:
       - liquidation-rag
     depends_on:
       - liquidation-omniroute
+      - liquidation-embeddings
 
 networks:
   liquidation-rag:
@@ -73,7 +93,6 @@ volumes:
     name: liquidation-omniroute-data
   liquidation-free-deepseek-data:
     name: liquidation-free-deepseek-data
-
 secrets:
   liquidation-free-deepseek-auth:
     name: liquidation-free-deepseek-auth

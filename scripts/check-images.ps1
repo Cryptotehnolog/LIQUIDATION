@@ -54,9 +54,16 @@ function Assert-GitRef {
         [Parameter(Mandatory = $true)][string]$Ref
     )
 
-    git ls-remote --exit-code $Repo $Ref > $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Git ref is not available: $Repo $Ref"
+    if ($Ref -match "^[0-9a-f]{40}$") {
+        $matches = git ls-remote $Repo | Select-String -SimpleMatch $Ref
+        if (-not $matches) {
+            throw "Git commit is not available from remote refs: $Repo $Ref"
+        }
+    } else {
+        git ls-remote --exit-code $Repo $Ref > $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Git ref is not available: $Repo $Ref"
+        }
     }
 
     Write-Output "ok git ref: $Repo $Ref"
