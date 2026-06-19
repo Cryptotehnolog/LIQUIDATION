@@ -115,6 +115,23 @@ FREE_DEEPSEEK_AUTH_JSON=@infra/lightrag/data/secrets/deepseek-auth.json
 
 Это снижает риск утечки через process list или shell history.
 
+### Roundtrip Verification
+
+После публикации обязательно проверить, что secret читается обратно и остаётся валидным FreeDeepseek auth:
+
+```powershell
+.\scripts\verify-infisical-roundtrip.ps1 `
+  -InfisicalProjectId "<LIQUIDATION_PROJECT_ID>" `
+  -InfisicalDomain "http://127.0.0.1:8080"
+```
+
+Скрипт:
+
+- читает `FREE_DEEPSEEK_AUTH_JSON` из Infisical;
+- пишет его во временный ignored файл `infra/lightrag/data/secrets/roundtrip-check/deepseek-auth.json`;
+- запускает `npm run doctor -- --offline`;
+- удаляет временный auth и temp env после проверки.
+
 ### Bootstrap Из Infisical В Local File
 
 1. Убедиться, что локальный `.env` не tracked:

@@ -55,6 +55,7 @@ function Assert-Contains {
 
 $createScript = "scripts/create-freedeepseek-auth.ps1"
 $publishScript = "scripts/publish-freedeepseek-auth-to-infisical.ps1"
+$roundtripScript = "scripts/verify-infisical-roundtrip.ps1"
 
 $createValidate = Invoke-Script $createScript @("-ValidateOnly")
 Assert-True ($createValidate.ExitCode -eq 0) "create script validate-only should succeed for default ignored LIQUIDATION paths"
@@ -83,5 +84,17 @@ Assert-Contains $publishDryRun.Output "dry-run: Infisical secret publish skipped
 $publishSource = Get-Content -Raw -LiteralPath $publishScript
 Assert-True (-not $publishSource.Contains('$SecretName=$authJson')) "publish script must not pass auth JSON through CLI arguments"
 Assert-Contains $publishSource '@$authFullPath' "publish script should use Infisical file reference syntax"
+
+$roundtripValidate = Invoke-Script $roundtripScript @(
+    "-InfisicalProjectId",
+    "liq-test-project-id",
+    "-ValidateOnly"
+)
+Assert-True ($roundtripValidate.ExitCode -eq 0) "roundtrip validate-only should succeed for default ignored paths"
+Assert-Contains $roundtripValidate.Output "verify-infisical-roundtrip validation passed" "roundtrip validate-only should report validation success"
+
+$roundtripWithoutProject = Invoke-Script $roundtripScript @("-ValidateOnly")
+Assert-True ($roundtripWithoutProject.ExitCode -ne 0) "roundtrip script should require explicit LIQUIDATION project id"
+Assert-Contains $roundtripWithoutProject.Output "InfisicalProjectId is required" "roundtrip script should explain missing project id"
 
 Write-Output "freedeepseek auth script tests passed"

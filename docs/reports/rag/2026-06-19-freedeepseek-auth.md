@@ -22,7 +22,8 @@
 
 ## Infisical Decision
 
-- Auth пока находится локально в ignored file и готов к publish.
+- Auth опубликован в LIQUIDATION-owned Infisical project как `FREE_DEEPSEEK_AUTH_JSON`.
+- Roundtrip verification passed: secret прочитан обратно во временный ignored file и прошёл `npm run doctor -- --offline`.
 - Publish в Infisical должен требовать explicit LIQUIDATION project id.
 - Implicit Infisical CLI context запрещён, потому что он может указывать на второй проект.
 - Секрет должен публиковаться через file reference syntax, а не как JSON в CLI argument.
@@ -31,11 +32,12 @@
 
 - `scripts/create-freedeepseek-auth.ps1`: refresh auth, path guards, `doctor --offline`, optional smoke test.
 - `scripts/publish-freedeepseek-auth-to-infisical.ps1`: dry-run и guarded publish с обязательным `-InfisicalProjectId`.
+- `scripts/verify-infisical-roundtrip.ps1`: guarded readback из Infisical, `doctor --offline`, cleanup temp auth.
 - `scripts/test-freedeepseek-auth-scripts.ps1`: regression tests для path guards, required project id и запрета передачи JSON secret через CLI arguments.
 
 ## Known Gaps
 
-- Нужен LIQUIDATION-owned Infisical project id перед фактической публикацией `FREE_DEEPSEEK_AUTH_JSON`.
+- Для полностью non-interactive automation позже нужен LIQUIDATION-owned machine identity token или service token.
 - `FREE_DEEPSEEK_REF=main` всё ещё нужно pin to commit или tag перед production use.
 
 ## Что Улучшить Или Автоматизировать
