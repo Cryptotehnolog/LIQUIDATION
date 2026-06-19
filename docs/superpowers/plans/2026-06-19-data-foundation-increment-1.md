@@ -64,18 +64,20 @@ Modify:
 
 **Files:**
 
-- Create: `.gitignore`
+- Modify: `.gitignore`
 - Create: `.env.example`
 - Create: `Cargo.toml`
 - Create: `rust-toolchain.toml`
 - Create: `rustfmt.toml`
 - Create: `config/default.toml`
 
-- [ ] **Step 1: Create the workspace files**
+- [ ] **Step 1: Create or update the workspace files**
 
-Create `.gitignore`:
+Update `.gitignore` and keep existing RAG/Docker secret ignores:
 
 ```gitignore
+/infra/lightrag/.env
+/infra/lightrag/data/
 /target/
 /.env
 /.env.local

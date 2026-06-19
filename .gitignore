@@ -1,0 +1,11 @@
+/.env
+/.env.local
+/target/
+/.sqlx/
+/infra/lightrag/.env
+/infra/lightrag/data/
+/docs/reports/**/*.tmp
+/docs/reports/**/*.log
+*.pdb
+*.profraw
+*.profdata
