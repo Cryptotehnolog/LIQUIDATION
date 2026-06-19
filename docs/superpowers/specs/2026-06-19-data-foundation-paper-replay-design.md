@@ -52,11 +52,13 @@ venue must prove that its REST endpoint is public, market-wide, and semantically
 equivalent to the WebSocket stream before it can fill collector gaps. For
 example, Binance `GET /fapi/v1/forceOrders` is a USER_DATA endpoint for the
 authenticated user's force orders, not a public market liquidation history.
-OKX `GET /api/v5/public/liquidation-orders` is a public candidate for bounded
-backfill, but must be treated as limited recent history. Bybit REST liquidation
-history is not considered verified until an official public endpoint is linked
-and an automated endpoint probe passes; the named
-`/v5/market/liquidation-history` endpoint returned 404 during design review.
+OKX `GET /api/v5/public/liquidation-orders` is not a verified backfill candidate
+after 2026-06-19 research: the official OKX changelog says the REST endpoint was
+delisted and users should use the WebSocket liquidation orders channel for
+real-time data. Bybit REST liquidation history is not considered verified until
+an official public endpoint is linked and an automated endpoint probe passes;
+the named `/v5/market/liquidation-history` endpoint returned 404 during design
+review.
 
 ## Scope
 
@@ -221,8 +223,10 @@ Initial backfill policy:
 
 - Binance: disabled for market liquidation recovery because the available
   official force-order REST endpoint is authenticated USER_DATA.
-- OKX: allowed as an experimental bounded backfill source after endpoint
-  parameters, retention window, and duplication behavior are fixture-tested.
+- OKX: disabled for REST liquidation backfill after 2026-06-19 research. The
+  official changelog says `GET /api/v5/public/liquidation-orders` was delisted;
+  OKX can be revisited as a WebSocket liquidation-orders source with its own
+  adapter and fixtures.
 - Bybit: disabled until a current official public REST liquidation-history page
   and endpoint probe are added to the repository.
 

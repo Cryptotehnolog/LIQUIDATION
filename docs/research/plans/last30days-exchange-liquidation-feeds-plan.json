@@ -1,0 +1,28 @@
+{
+  "intent": "factual",
+  "freshness_mode": "strict_recent",
+  "cluster_mode": "theme",
+  "subqueries": [
+    {
+      "label": "exchange liquidation websocket reliability",
+      "search_query": "crypto liquidation websocket feed reliability Binance Bybit OKX Hyperliquid",
+      "ranking_query": "What are developers reporting about crypto liquidation websocket feed reliability, missing events, reconnects, and API changes in the last 30 days?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "liquidation backfill endpoints",
+      "search_query": "Bybit OKX liquidation history REST backfill Binance forceOrders public endpoint",
+      "ranking_query": "What recent information affects source-specific liquidation backfill design for Bybit, OKX, Binance, and Hyperliquid?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 0.9
+    },
+    {
+      "label": "data feed incidents",
+      "search_query": "exchange websocket outage liquidation feed incident reconnect crypto data API",
+      "ranking_query": "What recent feed incidents or operational complaints should influence collector resilience and monitoring?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 0.8
+    }
+  ]
+}

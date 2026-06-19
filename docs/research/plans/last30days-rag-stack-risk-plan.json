@@ -1,0 +1,28 @@
+{
+  "intent": "factual",
+  "freshness_mode": "strict_recent",
+  "cluster_mode": "theme",
+  "subqueries": [
+    {
+      "label": "lightrag operational risks",
+      "search_query": "LightRAG Docker deployment RAG index freshness evaluation issues GitHub",
+      "ranking_query": "What recent issues or discussions affect LightRAG deployment, index freshness, evaluation, and operational reliability?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "omniroute provider fallback",
+      "search_query": "OmniRoute Kiro provider fallback OpenAI compatible Docker",
+      "ranking_query": "What recent information affects OmniRoute provider fallback, OpenAI-compatible routing, and Docker operation?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 0.9
+    },
+    {
+      "label": "free deepseek api fallback",
+      "search_query": "FreeDeepseekAPI Docker OpenAI compatible fallback reliability GitHub",
+      "ranking_query": "What recent information affects FreeDeepseekAPI reliability, OpenAI compatibility, and use as fallback provider?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 0.8
+    }
+  ]
+}

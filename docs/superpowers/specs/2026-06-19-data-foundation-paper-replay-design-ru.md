@@ -55,11 +55,13 @@ market-wide и семантически эквивалентным WebSocket str
 использовать его для заполнения gaps. Например, Binance `GET /fapi/v1/forceOrders`
 является USER_DATA endpoint для force orders конкретного authenticated user, а
 не публичной историей рыночных ликвидаций.
-OKX `GET /api/v5/public/liquidation-orders` является публичным кандидатом для
-bounded backfill, но должен считаться ограниченной recent history. Bybit REST
-liquidation history не считается verified, пока в репозиторий не добавлены
-ссылка на official public endpoint и автоматический endpoint probe;
-`/v5/market/liquidation-history` вернул 404 во время design review.
+OKX `GET /api/v5/public/liquidation-orders` не является verified backfill
+candidate после research 2026-06-19: official OKX changelog говорит, что REST
+endpoint был delisted, а пользователям нужно использовать WebSocket liquidation
+orders channel для real-time data. Bybit REST liquidation history не считается
+verified, пока в репозиторий не добавлены ссылка на official public endpoint и
+автоматический endpoint probe; `/v5/market/liquidation-history` вернул 404 во
+время design review.
 
 ## Scope
 
@@ -226,8 +228,10 @@ Initial backfill policy:
 
 - Binance: disabled для market liquidation recovery, потому что доступный
   official force-order REST endpoint является authenticated USER_DATA.
-- OKX: allowed как experimental bounded backfill source после fixture-тестов
-  endpoint parameters, retention window и duplication behavior.
+- OKX: disabled для REST liquidation backfill после research 2026-06-19.
+  Official changelog говорит, что `GET /api/v5/public/liquidation-orders` был
+  delisted; OKX можно пересмотреть как WebSocket liquidation-orders source с
+  отдельным adapter и fixtures.
 - Bybit: disabled, пока current official public REST liquidation-history page и
   endpoint probe не будут добавлены в репозиторий.
 

@@ -1,0 +1,28 @@
+{
+  "intent": "factual",
+  "freshness_mode": "strict_recent",
+  "cluster_mode": "theme",
+  "subqueries": [
+    {
+      "label": "rust websocket data pipeline",
+      "search_query": "Rust websocket crypto market data pipeline tokio tungstenite reconnect backpressure",
+      "ranking_query": "What recent Rust ecosystem signals affect websocket collectors, reconnect logic, backpressure, and async runtime choices?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "rust parquet timescaledb",
+      "search_query": "Rust parquet arrow sqlx TimescaleDB data pipeline",
+      "ranking_query": "What recent Rust ecosystem information affects Parquet archiving, Arrow, sqlx, and TimescaleDB integration?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "rust testing load reliability",
+      "search_query": "Rust load testing async websocket recorder backpressure benchmark criterion",
+      "ranking_query": "What recent practices or issues should influence load testing and reliability testing of Rust async data collectors?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 0.8
+    }
+  ]
+}

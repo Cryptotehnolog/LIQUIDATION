@@ -1,0 +1,28 @@
+{
+  "intent": "factual",
+  "freshness_mode": "strict_recent",
+  "cluster_mode": "theme",
+  "subqueries": [
+    {
+      "label": "hyperliquid API execution reliability",
+      "search_query": "Hyperliquid API execution websocket fills latency slippage developer",
+      "ranking_query": "What recent information affects Hyperliquid execution, fills, latency, websocket reliability, and hedge modeling?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "hyperliquid fees funding",
+      "search_query": "Hyperliquid fees maker taker funding rates API documentation",
+      "ranking_query": "What current fee and funding information should be included in paper replay and hedge PnL?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "hyperliquid incidents risk",
+      "search_query": "Hyperliquid outage API incident websocket last 30 days",
+      "ranking_query": "What recent incidents or complaints should influence risk controls and health monitoring for Hyperliquid integration?",
+      "sources": ["reddit", "hackernews", "github", "grounding"],
+      "weight": 0.8
+    }
+  ]
+}

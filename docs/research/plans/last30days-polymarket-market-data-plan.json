@@ -1,0 +1,28 @@
+{
+  "intent": "factual",
+  "freshness_mode": "strict_recent",
+  "cluster_mode": "theme",
+  "subqueries": [
+    {
+      "label": "polymarket clob market data",
+      "search_query": "Polymarket CLOB API market data websocket order book trades fills",
+      "ranking_query": "What recent developer reports or documentation affect Polymarket CLOB market data collection, order book depth, trades, and fill simulation?",
+      "sources": ["reddit", "hackernews", "github", "polymarket", "grounding"],
+      "weight": 1.0
+    },
+    {
+      "label": "polymarket fees and rewards",
+      "search_query": "Polymarket fees rewards CLOB API maker taker spread order execution",
+      "ranking_query": "What current information affects fee assumptions, rewards, and execution cost modeling for Polymarket paper trading?",
+      "sources": ["reddit", "hackernews", "github", "polymarket", "grounding"],
+      "weight": 0.9
+    },
+    {
+      "label": "prediction market arbitrage tooling",
+      "search_query": "Polymarket arbitrage bot CLOB API latency market making",
+      "ranking_query": "What recent community signals exist around Polymarket arbitrage, market making, latency, and operational risks?",
+      "sources": ["reddit", "hackernews", "github", "polymarket", "grounding"],
+      "weight": 0.8
+    }
+  ]
+}
