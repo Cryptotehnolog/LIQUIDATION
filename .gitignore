@@ -9,6 +9,7 @@
 /docs/reports/**/*.log
 /docs/reports/rag/index-metadata.json
 /docs/reports/rag/eval-report.json
+/docs/reports/rag/health-report.json
 *.pdb
 *.profraw
 *.profdata
