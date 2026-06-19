@@ -57,6 +57,7 @@ Temporary local bootstrap скопировал FreeDeepseek auth file второ
 - `all-minilm` является быстрым локальным default для ноутбука, но качество multilingual retrieval нужно контролировать через eval.
 - `bge-m3` не является default и требует отдельного approval/benchmark перед использованием.
 - `FREE_DEEPSEEK_REF` закреплён на commit `3c8494bd389020c0f2b2bd07094cfc7b44110015`, чтобы rebuild не подтягивал неожиданные изменения.
+- FreeDeepseek fallback сейчас diagnostic-only для RAG health: LightRAG остаётся сконфигурированным на Omniroute, поэтому падение Omniroute считается `failed`, даже если FreeDeepseek отвечает.
 
 ## Что Улучшить Или Автоматизировать
 

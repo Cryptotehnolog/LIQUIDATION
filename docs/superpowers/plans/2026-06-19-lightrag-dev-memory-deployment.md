@@ -1,5 +1,12 @@
 # LightRAG Dev Memory Deployment Implementation Plan
 
+> **Status:** superseded by the implemented scripts and live runbooks:
+> `scripts/liq-rag.ps1`, `scripts/audit-rag.ps1`,
+> `docs/runbooks/rag-operations.md`, and
+> `docs/runbooks/lightrag-dev-memory.md`. Historical snippets in this plan may
+> show intermediate `metadata-only` behavior and must not be used as current
+> operational guidance.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deploy project-owned LightRAG Dev Memory with isolated `liquidation-*` Docker services before Rust foundation execution.

@@ -152,6 +152,28 @@ function Assert-EmbeddingConfigured {
     }
 }
 
+function Test-RagDenylistedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $normalized = $Path.Replace("\", "/").ToLowerInvariant()
+    $fileName = [System.IO.Path]::GetFileName($normalized)
+    $extension = [System.IO.Path]::GetExtension($normalized)
+
+    if ($fileName -eq ".env" -or $fileName.StartsWith(".env.")) {
+        return $true
+    }
+
+    if ($normalized -match "(^|/)(secrets?|credentials?|cookies?|private|keys?)(/|$)") {
+        return $true
+    }
+
+    if ($extension -in @(".pem", ".key", ".p12", ".pfx", ".db", ".sqlite", ".sqlite3", ".parquet")) {
+        return $true
+    }
+
+    return $false
+}
+
 function Get-ServiceConfig {
     $config = Read-DotEnv $EnvFile
     $hostName = Get-ConfigValue $config "LIGHTRAG_HOST" "127.0.0.1"
@@ -165,7 +187,9 @@ function Get-ServiceConfig {
         embeddings_url = Get-ConfigValue $config "LIQUIDATION_EMBEDDINGS_BASE_URL" "http://${hostName}:11434"
         llm_model = Get-ConfigValue $config "LIGHTRAG_LLM_MODEL"
         embedding_binding = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_BINDING"
+        embedding_host = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_BINDING_HOST"
         embedding_model = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_MODEL"
+        embedding_dim = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_DIM"
     }
 }
 
@@ -265,8 +289,14 @@ function Sync-DocsToLightRagInput {
     }
 
     $copied = 0
+    $skippedDenylisted = @()
     foreach ($file in $files) {
         if (-not (Test-Path $file)) {
+            continue
+        }
+
+        if (Test-RagDenylistedPath $file) {
+            $skippedDenylisted += $file
             continue
         }
 
@@ -289,6 +319,50 @@ function Sync-DocsToLightRagInput {
         input_root = $inputRoot
         mirror_root = $targetRoot
         copied_files = $copied
+        skipped_denylisted = $skippedDenylisted
+    }
+}
+
+function Assert-LightRagRuntimeConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)]$Config
+    )
+
+    $health = Invoke-RestMethod -Uri "$BaseUrl/health" -Method Get -TimeoutSec 30
+    $runtime = $health.configuration
+    if (-not $runtime) {
+        throw "LightRAG health response has no configuration block"
+    }
+
+    $expectedLlmModel = Get-ConfigValue $Config "LIGHTRAG_LLM_MODEL"
+    $expectedEmbeddingBinding = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_BINDING"
+    $expectedEmbeddingHost = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_BINDING_HOST"
+    $expectedEmbeddingModel = Get-ConfigValue $Config "LIGHTRAG_EMBEDDING_MODEL"
+
+    $problems = @()
+    if ($runtime.llm_model -ne $expectedLlmModel) {
+        $problems += "llm_model runtime=$($runtime.llm_model) expected=$expectedLlmModel"
+    }
+    if ($runtime.embedding_binding -ne $expectedEmbeddingBinding) {
+        $problems += "embedding_binding runtime=$($runtime.embedding_binding) expected=$expectedEmbeddingBinding"
+    }
+    if ($runtime.embedding_binding_host -ne $expectedEmbeddingHost) {
+        $problems += "embedding_binding_host runtime=$($runtime.embedding_binding_host) expected=$expectedEmbeddingHost"
+    }
+    if ($runtime.embedding_model -ne $expectedEmbeddingModel) {
+        $problems += "embedding_model runtime=$($runtime.embedding_model) expected=$expectedEmbeddingModel"
+    }
+
+    if ($problems.Count -gt 0) {
+        throw "LightRAG runtime config mismatch: $($problems -join '; ')"
+    }
+
+    return [ordered]@{
+        llm_model = $runtime.llm_model
+        embedding_binding = $runtime.embedding_binding
+        embedding_binding_host = $runtime.embedding_binding_host
+        embedding_model = $runtime.embedding_model
     }
 }
 
@@ -318,10 +392,20 @@ function Wait-LightRagPipeline {
             if ($statusCounts.PROCESSING) { $processing = [int]$statusCounts.PROCESSING }
         }
 
+        $failed = 0
+        if ($statusCounts -and $statusCounts.failed) {
+            $failed = [int]$statusCounts.failed
+        }
+
         if (-not $lastStatus.busy -and -not $lastStatus.scanning -and -not $lastStatus.request_pending -and $pending -eq 0 -and $processing -eq 0) {
+            if ($failed -gt 0) {
+                throw "LightRAG indexing finished with failed_documents=$failed"
+            }
+
             return [ordered]@{
                 pipeline = $lastStatus
                 status_counts = $statusCounts
+                failed_documents = $failed
             }
         }
 
@@ -341,6 +425,7 @@ switch ($Command) {
 
         $commit = Get-CurrentCommit
         $treeHash = Get-DocsTreeHash $Path
+        $runtimeConfig = Assert-LightRagRuntimeConfig -BaseUrl $serviceConfig.lightrag_url -Config $config
         $mirror = Sync-DocsToLightRagInput -DocsPath $Path -Config $config
         $scan = Invoke-LightRagScan -BaseUrl $serviceConfig.lightrag_url
         $pipeline = Wait-LightRagPipeline -BaseUrl $serviceConfig.lightrag_url
@@ -352,6 +437,8 @@ switch ($Command) {
             status = "indexed"
             lightrag_url = $serviceConfig.lightrag_url
             embedding_model = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_MODEL"
+            embedding_dim = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_DIM"
+            runtime_config = $runtimeConfig
             mirror = $mirror
             scan = $scan
             pipeline = $pipeline
@@ -456,9 +543,6 @@ switch ($Command) {
         if ($lightrag.ok -and $primaryRouteOk -and $embeddingRouteOk) {
             $status = "ok"
             $exitCode = 0
-        } elseif ($lightrag.ok -and $embeddingRouteOk -and (-not $primaryRouteOk) -and $fallbackRouteOk) {
-            $status = "degraded-but-usable"
-            $exitCode = 0
         } else {
             $status = "failed"
             $exitCode = 1
@@ -487,6 +571,8 @@ switch ($Command) {
                 ok = $freedeepseek.ok
                 url = $freedeepseek.url
                 status_code = $freedeepseek.status_code
+                fallback_available = $fallbackRouteOk
+                fallback_note = "Diagnostic only. LightRAG is configured for Omniroute, so FreeDeepseek availability alone does not make RAG usable."
                 error = $freedeepseek.error
             }
             embeddings = [ordered]@{

@@ -18,15 +18,17 @@ semantic index и должен доказывать свежесть через 
 LightRAG -> liquidation-omniroute -> Kiro combo
 ```
 
-Аварийный путь:
+Аварийный LLM route:
 
 ```text
-LightRAG/liq-rag -> liquidation-free-deepseek
+operator/liq-rag direct check -> liquidation-free-deepseek
 ```
 
-`liquidation-free-deepseek` является обязательным резервом. Если
-`liquidation-omniroute` недоступен, но `liquidation-free-deepseek` отвечает,
-RAG считается пригодным для development use в режиме `degraded-but-usable`.
+`liquidation-free-deepseek` является обязательным резервом для LLM-доступа, но
+не является автоматическим fallback для LightRAG, пока LightRAG
+сконфигурирован на `liquidation-omniroute`. Если `liquidation-omniroute`
+недоступен, RAG считается `failed`, а доступность FreeDeepseek записывается как
+diagnostic `fallback_available`.
 
 ## Docker isolation
 
@@ -120,11 +122,12 @@ project/environment для `LIQUIDATION`.
 - Kiro MiniMax M2.5;
 - Kiro Qwen3 Coder Next.
 
-`liquidation-free-deepseek` подключается как emergency route. Если возможно
+`liquidation-free-deepseek` подключается как emergency LLM route. Если возможно
 подключить его в `liquidation-omniroute` как OpenAI-compatible provider, он
-может быть last fallback в combo. Но direct fallback из `liq-rag` в
-`liquidation-free-deepseek` должен оставаться даже при наличии combo
-integration.
+может быть last fallback в combo. Direct fallback из `liq-rag` можно считать
+usable только после отдельной команды, которая действительно выполняет RAG query
+или LLM task через FreeDeepseek. Один только `/health` FreeDeepseek не делает
+LightRAG usable.
 
 Минимальные provider checks:
 
@@ -175,14 +178,13 @@ Invoke-WebRequest "http://127.0.0.1:11434/api/tags" -UseBasicParsing
 
 `liq-rag health` должен возвращать один из статусов:
 
-- `ok`: `liquidation-omniroute` доступен, Kiro combo отвечает, LightRAG доступен,
-  index fresh, последний `liq-rag eval` выше threshold.
-- `degraded-but-usable`: `liquidation-omniroute` недоступен или Kiro combo не
-  отвечает, но `liquidation-free-deepseek` отвечает напрямую; development RAG
-  можно использовать с предупреждением.
-- `failed`: не работают ни `liquidation-omniroute`, ни
-  `liquidation-free-deepseek`, или LightRAG unavailable, или index/eval
-  непригодны.
+- `ok`: `liquidation-omniroute` доступен, Kiro combo отвечает, LightRAG
+  доступен, embedding route отвечает, index fresh, последний `liq-rag eval`
+  выше threshold.
+- `failed`: primary route, LightRAG, embedding route, index freshness или eval
+  непригодны. Если FreeDeepseek отвечает, report должен показывать
+  `fallback_available = true`, но это diagnostic-only, пока LightRAG не умеет
+  переключаться на него.
 
 Если indexed Git commit hash не совпадает с текущим Git commit для tracked docs,
 status должен включать `stale`. Stale RAG output нельзя использовать как
@@ -200,6 +202,8 @@ Ingest должен:
 
 - читать только paths из `LIGHTRAG_INDEXED_PATHS`;
 - применять denylist для secrets и raw data;
+- проверять, что runtime config LightRAG совпадает с `.env`;
+- падать, если LightRAG возвращает failed documents после pipeline;
 - сохранять indexed Git commit hash;
 - сохранять ingestion timestamp;
 - сохранять indexed paths;
@@ -319,8 +323,9 @@ docs/reports/rag/YYYY-MM-DD.md
 
 Минимальное содержимое report:
 
-- status: `ok`, `degraded-but-usable` или `failed`;
+- status: `ok` или `failed`;
 - active provider path;
+- fallback availability как diagnostic field;
 - indexed commit;
 - current commit;
 - index age;
@@ -351,9 +356,9 @@ liq-rag health
 liq-rag status --check-commit
 ```
 
-`degraded-but-usable` допустим для development work, но должен быть виден в
-logs/reports/dashboard. `failed` блокирует использование RAG и требует fallback
-на repository docs.
+`failed` блокирует использование RAG и требует fallback на repository docs.
+FreeDeepseek availability может помочь оператору, но не заменяет LightRAG
+fallback без отдельной реализации direct route.
 
 ## Что улучшить или автоматизировать
 

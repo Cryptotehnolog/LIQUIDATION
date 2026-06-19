@@ -86,10 +86,12 @@ Health status должен различать:
 
 - `ok`: `liquidation-omniroute` и Kiro combo работают, index fresh, eval выше
   threshold;
-- `degraded-but-usable`: `liquidation-omniroute` недоступен, но
-  `liquidation-free-deepseek` отвечает напрямую;
-- `failed`: не работают ни `liquidation-omniroute`, ни
-  `liquidation-free-deepseek`, или LightRAG/index/eval непригодны.
+- `failed`: primary route, LightRAG, embedding route, index freshness или eval
+  непригодны.
+
+FreeDeepseek availability is diagnostic-only для текущего LightRAG deployment:
+пока LightRAG сконфигурирован на `liquidation-omniroute`, один только живой
+`liquidation-free-deepseek` не делает RAG usable.
 
 `liq-rag status --check-commit` сравнивает indexed Git commit hash с текущим
 Git commit. Если индекс отстал от repository docs, команда должна вернуть
