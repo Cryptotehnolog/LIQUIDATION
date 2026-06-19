@@ -82,6 +82,15 @@ Mean reciprocal rank сохраняется как trend metric.
 `liq-rag health` проверяет доступность LightRAG, storage health, возраст
 последнего ingest и результат последнего eval.
 
+Health status должен различать:
+
+- `ok`: `liquidation-omniroute` и Kiro combo работают, index fresh, eval выше
+  threshold;
+- `degraded-but-usable`: `liquidation-omniroute` недоступен, но
+  `liquidation-free-deepseek` отвечает напрямую;
+- `failed`: не работают ни `liquidation-omniroute`, ни
+  `liquidation-free-deepseek`, или LightRAG/index/eval непригодны.
+
 `liq-rag status --check-commit` сравнивает indexed Git commit hash с текущим
 Git commit. Если индекс отстал от repository docs, команда должна вернуть
 ошибку или high-severity warning.
