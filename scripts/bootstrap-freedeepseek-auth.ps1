@@ -6,8 +6,6 @@ param(
     [string]$InfisicalProjectId = "",
     [string]$InfisicalToken = "",
     [string]$InfisicalDomain = "",
-    [string]$SourceAuthFile = "",
-    [switch]$AllowCrossProjectCopy,
     [switch]$StartFallback,
     [switch]$ValidateOnly
 )
@@ -52,6 +50,21 @@ function Resolve-AuthPath {
     return (Join-Path "infra/lightrag" $configured)
 }
 
+function Assert-AuthPathScope {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        $candidate = [System.IO.Path]::GetFullPath($Path)
+    } else {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
+    }
+
+    if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to use FreeDeepseek auth path outside LIQUIDATION infra/lightrag/data: $Path"
+    }
+}
+
 function Assert-Ignored {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -69,6 +82,18 @@ function Assert-Json {
     } catch {
         throw "Auth content is not valid JSON: $($_.Exception.Message)"
     }
+}
+
+function Join-NativeArgs {
+    param([Parameter(Mandatory = $true)][string[]]$Items)
+
+    return (($Items | ForEach-Object {
+        if ($_ -match '[\s"]') {
+            '"' + $_.Replace('\', '\\').Replace('"', '\"') + '"'
+        } else {
+            $_
+        }
+    }) -join " ")
 }
 
 function Get-InfisicalSecret {
@@ -95,8 +120,22 @@ function Get-InfisicalSecret {
         $args += "--domain=$InfisicalDomain"
     }
 
-    $output = & $cmd @args 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $processInfo.FileName = $cmd
+    $processInfo.Arguments = Join-NativeArgs $args
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $processInfo.UseShellExecute = $false
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $processInfo
+    $process.Start() | Out-Null
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+
+    $output = (($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
+    if ($process.ExitCode -ne 0) {
         throw "Infisical secret fetch failed. Provide LIQUIDATION project binding, --projectId, or --token. CLI output: $($output | Out-String)"
     }
 
@@ -106,6 +145,7 @@ function Get-InfisicalSecret {
 $config = Read-DotEnv $EnvFile
 $authPath = Resolve-AuthPath $config
 
+Assert-AuthPathScope $authPath
 Assert-Ignored $authPath
 
 if ($ValidateOnly) {
@@ -113,18 +153,7 @@ if ($ValidateOnly) {
     exit 0
 }
 
-if (-not [string]::IsNullOrWhiteSpace($SourceAuthFile)) {
-    if (-not $AllowCrossProjectCopy) {
-        throw "Refusing to copy SourceAuthFile without -AllowCrossProjectCopy. This prevents accidental reuse of another project's DeepSeek session."
-    }
-    if (-not (Test-Path $SourceAuthFile)) {
-        throw "SourceAuthFile not found: $SourceAuthFile"
-    }
-
-    $authJson = (Get-Content -Raw $SourceAuthFile).TrimStart([char]0xFEFF)
-} else {
-    $authJson = (Get-InfisicalSecret).TrimStart([char]0xFEFF)
-}
+$authJson = (Get-InfisicalSecret).TrimStart([char]0xFEFF)
 
 Assert-Json $authJson
 

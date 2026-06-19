@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Этот runbook описывает безопасный способ подготовить `deepseek-auth.json` для `liquidation-free-deepseek`, не коммитя secrets в Git и не переиспользуя containers второго проекта.
+Этот runbook описывает безопасный способ подготовить `deepseek-auth.json` для `liquidation-free-deepseek`, не коммитя secrets в Git и не переиспользуя containers, networks, volumes или auth files второго проекта.
 
 ## Важное Ограничение
 
@@ -23,9 +23,21 @@ liq-rag / LightRAG -> liquidation-free-deepseek напрямую
 ## Что Нельзя Делать
 
 - Не копировать auth files из второго проекта.
+- Не использовать `deepseek-auth.json`, browser session, cookies или exports второго проекта даже временно.
 - Не подключать `liquidation-free-deepseek` к Docker networks второго проекта.
 - Не коммитить `deepseek-auth.json`, browser cookies, Infisical exports или `.env`.
 - Не запускать `docker compose --profile fallback up -d`, пока auth file не создан и не проверен.
+
+## Исправление От 2026-06-19
+
+Ранее был выполнен временный local bootstrap через read-only copy auth file второго проекта. Это было неправильное решение: оно нарушает границу между проектами и может создать скрытую зависимость от чужой session.
+
+Корректирующее действие:
+
+- `liquidation-free-deepseek` остановлен.
+- Локальная копия `infra/lightrag/data/secrets/deepseek-auth.json` удалена из проекта LIQUIDATION.
+- `scripts/bootstrap-freedeepseek-auth.ps1` больше не поддерживает чтение auth из произвольного source file.
+- Единственный разрешённый путь bootstrap: LIQUIDATION-owned secret `FREE_DEEPSEEK_AUTH_JSON` из Infisical.
 
 ## Secret Layout
 
@@ -136,6 +148,6 @@ docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p l
 
 ## Что Улучшить Или Автоматизировать
 
-- Создать LIQUIDATION-owned `FREE_DEEPSEEK_AUTH_JSON` в Infisical и убрать временный cross-project copy.
+- Создать LIQUIDATION-owned `FREE_DEEPSEEK_AUTH_JSON` в Infisical.
 - Добавить проверку JSON schema для `deepseek-auth.json`.
 - Добавить dashboard tile для fallback route status.

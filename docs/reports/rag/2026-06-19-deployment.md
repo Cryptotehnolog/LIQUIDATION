@@ -1,26 +1,26 @@
 # LightRAG Dev Memory Deployment - 2026-06-19
 
-## Services
+## Сервисы
 
-- `liquidation-omniroute`: running, Docker health `healthy`
-- `liquidation-lightrag`: running, `/health` returns `200`
-- `liquidation-free-deepseek`: running under compose profile `fallback` after temporary local auth bootstrap
+- `liquidation-omniroute`: запущен, Docker health `healthy`
+- `liquidation-lightrag`: запущен, `/health` возвращает `200`
+- `liquidation-free-deepseek`: остановлен; fallback отключён, пока не настроен LIQUIDATION-owned Infisical auth
 
-## Ports
+## Порты
 
 - Omniroute: `127.0.0.1:21128 -> 20128`
 - LightRAG: `127.0.0.1:19621 -> 9621`
-- FreeDeepseek fallback: `127.0.0.1:19655 -> 9655`
+- FreeDeepseek fallback: `127.0.0.1:19655 -> 9655`, только при явном запуске compose profile `fallback`
 
 ## Health
 
 - Omniroute `/v1/models`: `200`
 - LightRAG `/health`: `200`
-- LightRAG `/`: `200` after redirect to Web UI
-- FreeDeepseek `/health`: `200`
-- FreeDeepseek `/v1/models`: `200`
+- LightRAG `/`: `200` после redirect в Web UI
+- FreeDeepseek `/health`: недоступен, пока fallback остановлен
+- FreeDeepseek `/v1/models`: недоступен, пока fallback остановлен
 
-## Docker Objects Created
+## Созданные Docker Объекты
 
 - network: `liquidation-rag`
 - volumes:
@@ -31,20 +31,30 @@
 
 ## Safety Verification
 
-- Existing second-project containers were not restarted, removed, renamed, or reconfigured.
+- Existing second-project containers не были restarted, removed, renamed или reconfigured.
 - `scripts/guard-compose.ps1 -EnvFile infra/lightrag/.env` passed.
-- `scripts/check-images.ps1 -EnvFile infra/lightrag/.env` passed.
+- `scripts/check-images.ps1 -EnvFile infra/lightrag/.env` passed before corrective shutdown.
 - `docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p liquidation config` passed.
 
-## Blockers
+## Корректирующее Действие
 
-- FreeDeepseek is currently usable as a fallback route, but auth was bootstrapped from a read-only copy of the second project's `deepseek-auth.json`. This is acceptable only as a temporary local bootstrap.
-- Long-term FreeDeepseek auth still needs a LIQUIDATION-owned Infisical secret `FREE_DEEPSEEK_AUTH_JSON`.
-- LightRAG starts, but logs show embedding binding is still defaulting to `ollama` with an empty embedding model. Real ingest/eval should remain blocked until embedding provider/model are configured and verified.
-- `FREE_DEEPSEEK_REF=main` is acceptable for local skeleton validation only. It must be pinned to a commit or tag before relying on the fallback path.
+Temporary local bootstrap скопировал FreeDeepseek auth file второго проекта в ignored data directory LIQUIDATION. Это было неправильное решение: LIQUIDATION не должен зависеть от auth state второго проекта.
 
-## What To Improve Or Automate
+Корректирующее действие выполнено:
 
-- Keep `liq-rag health` wired to real service checks for Omniroute, LightRAG, and FreeDeepseek fallback.
-- Replace temporary cross-project auth copy with a LIQUIDATION-owned Infisical secret.
-- Add a LightRAG embedding configuration check that fails before ingest when provider/model are empty.
+- `liquidation-free-deepseek` остановлен.
+- Скопированный `infra/lightrag/data/secrets/deepseek-auth.json` удалён из LIQUIDATION.
+- `scripts/bootstrap-freedeepseek-auth.ps1` больше не поддерживает source-file auth bootstrap.
+- `docs/runbooks/freedeepseek-infisical-auth.md` явно запрещает cross-project auth reuse.
+
+## Блокеры
+
+- FreeDeepseek fallback не usable, пока в LIQUIDATION не создан собственный Infisical secret `FREE_DEEPSEEK_AUTH_JSON`.
+- LightRAG запускается, но logs показывают, что embedding binding всё ещё defaulting to `ollama` с empty embedding model. Real ingest/eval должен оставаться заблокированным, пока embedding provider/model не настроены и не проверены.
+- `FREE_DEEPSEEK_REF=main` допустим только для local skeleton validation. Перед использованием fallback path нужно pin to commit или tag.
+
+## Что Улучшить Или Автоматизировать
+
+- Держать `liq-rag health` привязанным к real service checks для Omniroute, LightRAG и FreeDeepseek fallback.
+- Добавить LIQUIDATION-owned Infisical secret для FreeDeepseek auth перед новым запуском fallback.
+- Добавить LightRAG embedding configuration check, который fails before ingest при empty provider/model.
