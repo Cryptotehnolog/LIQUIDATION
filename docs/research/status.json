@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "project": "LIQUIDATION",
+  "research_date": "2026-06-19",
+  "git_commit": "436dcdf9b05fbfb79e39b21b064fbdae536f2596",
+  "source_coverage": {
+    "last30days": {
+      "available_sources": [
+        "reddit",
+        "hackernews",
+        "polymarket",
+        "github",
+        "grounding"
+      ],
+      "missing_sources": [
+        "x",
+        "youtube",
+        "tiktok",
+        "instagram"
+      ],
+      "role": "community_and_risk_signal_layer"
+    },
+    "official_docs": {
+      "role": "source_of_truth_for_api_fees_and_endpoint_semantics",
+      "checked_topics": [
+        "binance_liquidation_streams",
+        "bybit_all_liquidation_websocket",
+        "okx_liquidation_orders_changes",
+        "polymarket_clob_market_data_and_fees",
+        "hyperliquid_fees_funding_info_endpoint",
+        "lightrag_omniroute_freedeepseek_operations",
+        "rust_websocket_sqlx_parquet_stack"
+      ]
+    }
+  },
+  "research_notes": [
+    "docs/research/exchange-liquidation-feeds.md",
+    "docs/research/polymarket-market-data-and-fees.md",
+    "docs/research/hyperliquid-execution-fees.md",
+    "docs/research/rag-stack-risk-review.md",
+    "docs/research/rust-data-stack.md"
+  ],
+  "raw_outputs": [
+    "docs/research/raw/crypto-liquidation-websocket-feed-reliability-raw-exchange-liquidation-feeds.md",
+    "docs/research/raw/polymarket-clob-api-market-data-fees-arbitrage-raw-polymarket-market-data.md",
+    "docs/research/raw/hyperliquid-api-fees-funding-execution-slippage-raw-hyperliquid-fees-execution.md",
+    "docs/research/raw/lightrag-omniroute-freedeepseekapi-docker-reliability-raw-rag-stack-risk.md",
+    "docs/research/raw/rust-websocket-parquet-timescaledb-crypto-market-data-pipeline-raw-rust-data-stack.md"
+  ],
+  "spec_sections_changed": [
+    {
+      "file": "docs/superpowers/specs/2026-06-19-data-foundation-paper-replay-design.md",
+      "sections": [
+        "source_specific_backfill_policy",
+        "initial_backfill_policy"
+      ]
+    },
+    {
+      "file": "docs/superpowers/specs/2026-06-19-data-foundation-paper-replay-design-ru.md",
+      "sections": [
+        "source_specific_backfill_policy",
+        "initial_backfill_policy"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "okx_rest_backfill_disabled",
+      "summary": "OKX REST liquidation backfill is disabled after research; official OKX changelog says the REST endpoint was delisted and WebSocket liquidation-orders channel should be used for real-time data."
+    },
+    {
+      "id": "bybit_primary_source",
+      "summary": "Bybit all-liquidation WebSocket remains the MVP primary source for strategy liquidation signals when health checks pass."
+    },
+    {
+      "id": "binance_diagnostic_snapshot_only",
+      "summary": "Binance liquidation streams remain diagnostic because official docs describe snapshot-only semantics per 1000 ms window."
+    },
+    {
+      "id": "polymarket_recorder_required",
+      "summary": "Polymarket historical data limitations strengthen the requirement for a project-owned recorder and replay archive."
+    },
+    {
+      "id": "hyperliquid_fees_funding_required",
+      "summary": "Hyperliquid hedge simulation must include dated fee schedule, funding model, slippage, and limited-depth assumptions."
+    },
+    {
+      "id": "rag_health_eval_required",
+      "summary": "LightRAG, OmniRoute, and FreeDeepseek are useful but must be guarded by health, eval, freshness, and fallback checks."
+    }
+  ],
+  "next_refresh": {
+    "recommended_before": [
+      "adding_okx_adapter",
+      "turning_on_real_orders",
+      "changing_fee_model",
+      "changing_rag_provider_stack"
+    ],
+    "max_age_days_for_api_and_fee_decisions": 30
+  }
+}
