@@ -20,14 +20,24 @@
 - `POST /v1/chat/completions` with `deepseek-chat`: returned `ok`.
 - `scripts/liq-rag.ps1 health -EnvFile infra/lightrag/.env`: `ok`.
 
+## Infisical Decision
+
+- Auth пока находится локально в ignored file и готов к publish.
+- Publish в Infisical должен требовать explicit LIQUIDATION project id.
+- Implicit Infisical CLI context запрещён, потому что он может указывать на второй проект.
+- Секрет должен публиковаться через file reference syntax, а не как JSON в CLI argument.
+
+## Automation Added
+
+- `scripts/create-freedeepseek-auth.ps1`: refresh auth, path guards, `doctor --offline`, optional smoke test.
+- `scripts/publish-freedeepseek-auth-to-infisical.ps1`: dry-run и guarded publish с обязательным `-InfisicalProjectId`.
+- `scripts/test-freedeepseek-auth-scripts.ps1`: regression tests для path guards, required project id и запрета передачи JSON secret через CLI arguments.
+
 ## Known Gaps
 
-- Auth пока находится только локально в ignored file. Его нужно перенести в LIQUIDATION-owned Infisical secret `FREE_DEEPSEEK_AUTH_JSON`.
-- Infisical CLI context не использовался для записи secret, чтобы не рискнуть записью во второй проект.
+- Нужен LIQUIDATION-owned Infisical project id перед фактической публикацией `FREE_DEEPSEEK_AUTH_JSON`.
 - `FREE_DEEPSEEK_REF=main` всё ещё нужно pin to commit или tag перед production use.
 
 ## Что Улучшить Или Автоматизировать
 
-- Добавить `scripts/create-freedeepseek-auth.ps1` для повторяемого refresh auth без ручных путей.
-- Добавить `scripts/publish-freedeepseek-auth-to-infisical.ps1`, который требует explicit LIQUIDATION project id и отказывается работать без него.
 - Добавить scheduled health check для `liquidation-free-deepseek`, который пишет status в dashboard/reports.

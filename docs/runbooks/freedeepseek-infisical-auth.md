@@ -60,6 +60,63 @@ infra/lightrag/data/secrets/deepseek-auth.json
 
 ## Bootstrap
 
+### Автоматический Refresh Auth
+
+Для создания или обновления собственного LIQUIDATION auth используйте:
+
+```powershell
+.\scripts\create-freedeepseek-auth.ps1
+```
+
+Скрипт:
+
+- пишет auth только в `infra/lightrag/data/secrets/deepseek-auth.json`;
+- использует Chrome profile только в `infra/lightrag/data/chrome-profiles/freedeepseek-liq`;
+- блокирует paths вне `infra/lightrag/data`;
+- запускает `npm run doctor -- --offline`;
+- нормализует JSON в UTF-8 без BOM.
+
+Если нужно проверить уже созданный auth без открытия браузера:
+
+```powershell
+.\scripts\create-freedeepseek-auth.ps1 -SkipInteractive
+```
+
+Если `liquidation-free-deepseek` уже запущен и нужен live smoke test:
+
+```powershell
+.\scripts\create-freedeepseek-auth.ps1 -SkipInteractive -SmokeTest
+```
+
+### Publish В Infisical
+
+Публикация в Infisical разрешена только с explicit LIQUIDATION project id:
+
+```powershell
+.\scripts\publish-freedeepseek-auth-to-infisical.ps1 `
+  -InfisicalProjectId "<LIQUIDATION_PROJECT_ID>"
+```
+
+Dry-run без записи:
+
+```powershell
+.\scripts\publish-freedeepseek-auth-to-infisical.ps1 `
+  -InfisicalProjectId "<LIQUIDATION_PROJECT_ID>" `
+  -DryRun
+```
+
+Почему project id обязателен: CLI context может указывать на второй проект. Скрипт специально отказывается публиковать secret без `-InfisicalProjectId`, чтобы исключить accidental write в чужой Infisical project.
+
+Секрет не передаётся в command line как JSON. Скрипт использует Infisical file reference syntax:
+
+```text
+FREE_DEEPSEEK_AUTH_JSON=@infra/lightrag/data/secrets/deepseek-auth.json
+```
+
+Это снижает риск утечки через process list или shell history.
+
+### Bootstrap Из Infisical В Local File
+
 1. Убедиться, что локальный `.env` не tracked:
 
 ```powershell
@@ -148,6 +205,5 @@ docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p l
 
 ## Что Улучшить Или Автоматизировать
 
-- Создать LIQUIDATION-owned `FREE_DEEPSEEK_AUTH_JSON` в Infisical.
 - Добавить проверку JSON schema для `deepseek-auth.json`.
 - Добавить dashboard tile для fallback route status.
