@@ -14,8 +14,9 @@
 
 ```powershell
 .\scripts\preflight.ps1
-.\scripts\guard-compose.ps1
-docker compose --env-file infra/lightrag/.env.example -f infra/lightrag/compose.yml -p liquidation config
+.\scripts\check-images.ps1 -EnvFile infra/lightrag/.env
+.\scripts\guard-compose.ps1 -EnvFile infra/lightrag/.env
+docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p liquidation config
 ```
 
 ## Image Policy
@@ -25,6 +26,17 @@ docker compose --env-file infra/lightrag/.env.example -f infra/lightrag/compose.
 - `forgetmeai/freedeepseekapi:latest` не подтвержден: registry вернул `denied/unauthorized`, а GitHub repository не публикует container package. Поэтому `liquidation-free-deepseek` собирается локально из `ForgetMeAI/FreeDeepseekAPI` через `infra/lightrag/free-deepseek/Dockerfile`.
 
 Перед production-like запуском нужно заменить `FREE_DEEPSEEK_REF=main` на pinned commit или tag. `main` подходит только для первичного skeleton и ручной проверки.
+
+## FreeDeepseek Fallback
+
+`liquidation-free-deepseek` находится в compose profile `fallback` и не запускается default-командой `docker compose up -d`.
+
+Причина: FreeDeepseek требует `deepseek-auth.json`. Без него контейнер либо показывает interactive menu, либо падает в non-interactive режиме. Запускать fallback можно только после создания ignored auth file и проверки:
+
+```powershell
+.\scripts\check-images.ps1 -EnvFile infra/lightrag/.env
+docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p liquidation --profile fallback up -d liquidation-free-deepseek
+```
 
 ## Source Of Truth
 

@@ -13,6 +13,8 @@ services:
       - liquidation-rag
 
   liquidation-free-deepseek:
+    profiles:
+      - fallback
     image: ${FREE_DEEPSEEK_LOCAL_IMAGE}
     build:
       context: ./free-deepseek
@@ -24,10 +26,14 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "9655"
+      NON_INTERACTIVE: "1"
+      DEEPSEEK_AUTH_PATH: /run/secrets/deepseek-auth.json
     ports:
       - "${LIGHTRAG_HOST}:${LIQUIDATION_FREE_DEEPSEEK_PORT}:9655"
     volumes:
       - liquidation-free-deepseek-data:/app/data
+    secrets:
+      - liquidation-free-deepseek-auth
     networks:
       - liquidation-rag
 
@@ -56,7 +62,6 @@ services:
       - liquidation-rag
     depends_on:
       - liquidation-omniroute
-      - liquidation-free-deepseek
 
 networks:
   liquidation-rag:
@@ -67,3 +72,8 @@ volumes:
     name: liquidation-omniroute-data
   liquidation-free-deepseek-data:
     name: liquidation-free-deepseek-data
+
+secrets:
+  liquidation-free-deepseek-auth:
+    name: liquidation-free-deepseek-auth
+    file: ${FREE_DEEPSEEK_AUTH_FILE}
