@@ -77,7 +77,6 @@ LIGHTRAG_INDEXED_PATHS=docs/
 LIGHTRAG_API_PORT=
 LIQUIDATION_OMNIROUTE_PORT=
 LIQUIDATION_FREE_DEEPSEEK_PORT=
-LIQUIDATION_EMBEDDINGS_PORT=
 LIQUIDATION_OMNIROUTE_BASE_URL=
 LIQUIDATION_FREE_DEEPSEEK_BASE_URL=
 LIQUIDATION_EMBEDDINGS_BASE_URL=
@@ -139,28 +138,37 @@ Invoke-WebRequest "$env:LIQUIDATION_FREE_DEEPSEEK_BASE_URL/v1/models" -UseBasicP
 
 ## Embeddings
 
-MVP использует отдельный service `liquidation-embeddings`, который предоставляет
-OpenAI-compatible endpoint:
+MVP использует Ollama, установленную на Windows host, как embedding backend.
+LightRAG работает в Docker и обращается к host Ollama через:
 
 ```text
-http://liquidation-embeddings:21435/v1/embeddings
+http://host.docker.internal:11434
 ```
 
-Текущая модель `liquidation-hash-embedding-1024` является локальной
-deterministic hash embedding. Это осознанный компромисс: он не требует внешних
-API, не трогает второй проект и позволяет проверить полный lifecycle
-`ingest/eval/health/status`.
+Host-side scripts проверяют Ollama через:
 
-Ограничение: hash embedding не заменяет качественную semantic embedding model.
-Перед тем как использовать RAG как источник сложного semantic search,
-нужно заменить этот backend на реальную локальную или управляемую embedding
-модель и заново прогнать `liq-rag eval`.
+```text
+http://127.0.0.1:11434
+```
+
+Default model: `all-minilm`.
+
+Причина выбора: на текущем ноутбуке `all-minilm` занимает около 45 MB,
+возвращает 384-dimensional embeddings и показал низкую latency в локальном
+smoke benchmark. `bge-m3` не является default, потому что он тяжелее и может
+создавать лишнюю нагрузку на ноутбук и Docker Desktop.
+
+Если embedding model меняется, старый LightRAG index нельзя использовать как
+совместимый. Нужно остановить `liquidation-lightrag`, перенести старый
+`rag_storage` в `infra/lightrag/backups/`, поднять LightRAG заново и выполнить
+полный `liq-rag ingest docs/`.
 
 Минимальные embedding checks:
 
 ```powershell
-Invoke-WebRequest "$env:LIQUIDATION_EMBEDDINGS_BASE_URL/health" -UseBasicParsing
-Invoke-WebRequest "$env:LIQUIDATION_EMBEDDINGS_BASE_URL/v1/models" -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:11434/api/version" -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:11434/api/tags" -UseBasicParsing
+.\scripts\benchmark-ollama-embeddings.ps1
 ```
 
 ## Health statuses

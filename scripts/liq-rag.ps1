@@ -102,6 +102,41 @@ function Invoke-HealthRequest {
     }
 }
 
+function Invoke-JsonPostRequest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)]$Body
+    )
+
+    try {
+        $jsonBody = $Body | ConvertTo-Json -Depth 10
+        $response = Invoke-WebRequest $Url -UseBasicParsing -Method Post -ContentType "application/json" -Body $jsonBody -TimeoutSec 30
+        return [ordered]@{
+            name = $Name
+            url = $Url
+            ok = $true
+            status_code = [int]$response.StatusCode
+            error = $null
+            content = $response.Content
+        }
+    } catch {
+        $statusCode = $null
+        if ($_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+        }
+
+        return [ordered]@{
+            name = $Name
+            url = $Url
+            ok = $false
+            status_code = $statusCode
+            error = $_.Exception.Message
+            content = $null
+        }
+    }
+}
+
 function Assert-EmbeddingConfigured {
     param([Parameter(Mandatory = $true)]$Config)
 
@@ -127,8 +162,9 @@ function Get-ServiceConfig {
         omniroute_url = "http://${hostName}:$(Get-ConfigValue $config "LIQUIDATION_OMNIROUTE_PORT" "21128")"
         lightrag_url = "http://${hostName}:$(Get-ConfigValue $config "LIGHTRAG_API_PORT" "19621")"
         freedeepseek_url = "http://${hostName}:$(Get-ConfigValue $config "LIQUIDATION_FREE_DEEPSEEK_PORT" "19655")"
-        embeddings_url = "http://${hostName}:$(Get-ConfigValue $config "LIQUIDATION_EMBEDDINGS_PORT" "21435")"
+        embeddings_url = Get-ConfigValue $config "LIQUIDATION_EMBEDDINGS_BASE_URL" "http://${hostName}:11434"
         llm_model = Get-ConfigValue $config "LIGHTRAG_LLM_MODEL"
+        embedding_binding = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_BINDING"
         embedding_model = Get-ConfigValue $config "LIGHTRAG_EMBEDDING_MODEL"
     }
 }
@@ -365,8 +401,9 @@ switch ($Command) {
         $omniroute = Invoke-HealthRequest "omniroute_models" "$($serviceConfig.omniroute_url)/v1/models"
         $lightrag = Invoke-HealthRequest "lightrag_health" "$($serviceConfig.lightrag_url)/health"
         $freedeepseek = Invoke-HealthRequest "freedeepseek_health" "$($serviceConfig.freedeepseek_url)/health"
-        $embeddings = Invoke-HealthRequest "embeddings_health" "$($serviceConfig.embeddings_url)/health"
-        $embeddingModels = Invoke-HealthRequest "embeddings_models" "$($serviceConfig.embeddings_url)/v1/models"
+        $embeddings = $null
+        $embeddingModels = $null
+        $embeddingProbe = $null
 
         $configuredModelPresent = $false
         $modelCheckError = $null
@@ -383,13 +420,36 @@ switch ($Command) {
         $fallbackRouteOk = $freedeepseek.ok
         $embeddingRouteOk = $false
         $embeddingModelPresent = $false
-        if ($embeddings.ok -and $embeddingModels.ok -and -not [string]::IsNullOrWhiteSpace($serviceConfig.embedding_model)) {
-            try {
-                $models = ($embeddingModels.content | ConvertFrom-Json).data
-                $embeddingModelPresent = @($models | Where-Object { $_.id -eq $serviceConfig.embedding_model }).Count -gt 0
-                $embeddingRouteOk = $embeddingModelPresent
-            } catch {
-                $embeddingRouteOk = $false
+
+        if ($serviceConfig.embedding_binding -eq "ollama") {
+            $embeddings = Invoke-HealthRequest "ollama_tags" "$($serviceConfig.embeddings_url)/api/tags"
+            if ($embeddings.ok -and -not [string]::IsNullOrWhiteSpace($serviceConfig.embedding_model)) {
+                try {
+                    $models = ($embeddings.content | ConvertFrom-Json).models
+                    $embeddingModelPresent = @($models | Where-Object { $_.name -eq $serviceConfig.embedding_model -or $_.name -eq "$($serviceConfig.embedding_model):latest" }).Count -gt 0
+                } catch {
+                    $embeddingModelPresent = $false
+                }
+            }
+
+            if ($embeddingModelPresent) {
+                $embeddingProbe = Invoke-JsonPostRequest "ollama_embed" "$($serviceConfig.embeddings_url)/api/embed" @{
+                    model = $serviceConfig.embedding_model
+                    input = "LIQUIDATION LightRAG health check"
+                }
+                $embeddingRouteOk = $embeddingProbe.ok
+            }
+        } else {
+            $embeddings = Invoke-HealthRequest "embeddings_health" "$($serviceConfig.embeddings_url)/health"
+            $embeddingModels = Invoke-HealthRequest "embeddings_models" "$($serviceConfig.embeddings_url)/v1/models"
+            if ($embeddings.ok -and $embeddingModels.ok -and -not [string]::IsNullOrWhiteSpace($serviceConfig.embedding_model)) {
+                try {
+                    $models = ($embeddingModels.content | ConvertFrom-Json).data
+                    $embeddingModelPresent = @($models | Where-Object { $_.id -eq $serviceConfig.embedding_model }).Count -gt 0
+                    $embeddingRouteOk = $embeddingModelPresent
+                } catch {
+                    $embeddingRouteOk = $false
+                }
             }
         }
 
@@ -430,15 +490,19 @@ switch ($Command) {
                 error = $freedeepseek.error
             }
             embeddings = [ordered]@{
-                ok = $embeddings.ok
-                url = $embeddings.url
-                status_code = $embeddings.status_code
+                ok = $embeddingRouteOk
+                binding = $serviceConfig.embedding_binding
+                url = $serviceConfig.embeddings_url
+                status_code = $(if ($embeddings) { $embeddings.status_code } else { $null })
                 embedding_model = $serviceConfig.embedding_model
                 embedding_model_present = $embeddingModelPresent
-                models_url = $embeddingModels.url
-                models_status_code = $embeddingModels.status_code
-                models_error = $embeddingModels.error
-                error = $embeddings.error
+                models_url = $(if ($embeddingModels) { $embeddingModels.url } else { $null })
+                models_status_code = $(if ($embeddingModels) { $embeddingModels.status_code } else { $null })
+                models_error = $(if ($embeddingModels) { $embeddingModels.error } else { $null })
+                probe_url = $(if ($embeddingProbe) { $embeddingProbe.url } else { $null })
+                probe_status_code = $(if ($embeddingProbe) { $embeddingProbe.status_code } else { $null })
+                probe_error = $(if ($embeddingProbe) { $embeddingProbe.error } else { $null })
+                error = $(if ($embeddings) { $embeddings.error } else { $null })
             }
         }
 

@@ -10,6 +10,7 @@
 /docs/reports/rag/index-metadata.json
 /docs/reports/rag/eval-report.json
 /docs/reports/rag/health-report.json
+/docs/reports/rag/ollama-embedding-benchmark.json
 *.pdb
 *.profraw
 *.profdata

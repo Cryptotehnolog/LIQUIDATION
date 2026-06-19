@@ -5,14 +5,14 @@
 - `liquidation-omniroute`: запущен, Docker health `healthy`
 - `liquidation-lightrag`: запущен, `/health` возвращает `200`
 - `liquidation-free-deepseek`: настроен как LIQUIDATION-owned fallback через Infisical auth
-- `liquidation-embeddings`: проектный OpenAI-compatible embedding service для LightRAG Dev Memory
+- Ollama host service: используется как embedding backend для LightRAG Dev Memory
 
 ## Порты
 
 - Omniroute: `127.0.0.1:21128 -> 20128`
 - LightRAG: `127.0.0.1:19621 -> 9621`
 - FreeDeepseek fallback: `127.0.0.1:19655 -> 9655`, только при явном запуске compose profile `fallback`
-- Embeddings: `127.0.0.1:21435 -> 21435`
+- Ollama host API: `127.0.0.1:11434`
 
 ## Health
 
@@ -21,8 +21,9 @@
 - LightRAG `/`: `200` после redirect в Web UI
 - FreeDeepseek `/health`: ожидается `200`, если fallback profile запущен
 - FreeDeepseek `/v1/models`: ожидается `200`, если fallback profile запущен
-- Embeddings `/health`: ожидается `200`
-- Embeddings `/v1/models`: должен содержать `liquidation-hash-embedding-1024`
+- Ollama `/api/version`: `200`
+- Ollama `/api/tags`: содержит `all-minilm:latest`
+- Ollama `/api/embed`: возвращает 384-dimensional embeddings
 
 ## Созданные Docker Объекты
 
@@ -53,12 +54,11 @@ Temporary local bootstrap скопировал FreeDeepseek auth file второ
 
 ## Блокеры
 
-- `liquidation-hash-embedding-1024` является MVP-компромиссом. Он достаточен для проверки инженерного lifecycle, но не является финальной semantic embedding model.
-- Перед production-grade semantic RAG нужно заменить embedding backend на качественную модель и обновить eval threshold.
+- `all-minilm` является быстрым локальным default для ноутбука, но качество multilingual retrieval нужно контролировать через eval.
+- `bge-m3` не является default и требует отдельного approval/benchmark перед использованием.
 - `FREE_DEEPSEEK_REF` закреплён на commit `3c8494bd389020c0f2b2bd07094cfc7b44110015`, чтобы rebuild не подтягивал неожиданные изменения.
 
 ## Что Улучшить Или Автоматизировать
 
-- Заменить `liquidation-hash-embedding-1024` на реальную embedding model после стабилизации Docker image pull или выбора managed provider.
-- Добавить regression eval, который сравнивает качество hash backend и будущей semantic model.
+- Добавить regression eval, который сравнивает `all-minilm` с будущими кандидатами вроде `bge-m3:567m`.
 - Добавить dashboard виджет: active LLM route, embedding model, indexed/current commit, eval status.
