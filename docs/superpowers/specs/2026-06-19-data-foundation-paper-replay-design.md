@@ -629,6 +629,12 @@ Local development:
 
 - Windows host is acceptable for editing and tests.
 - Docker Compose provides TimescaleDB and optional support services.
+- Compose project name must be `liquidation`, and all project-owned containers,
+  networks, and volumes must use a `liquidation` prefix.
+- Docker commands must not target existing `aperag-*`, `stat-arb-*`,
+  `free_*`, or `omniroute` containers, networks, or volumes.
+- Destructive Docker commands such as `docker system prune`, `docker volume
+  prune`, or unscoped `docker compose down --remove-orphans` are prohibited.
 - The development database uses a persistent volume by default.
 - Adminer or pgAdmin may be exposed behind a dev-only Compose profile, never in
   the default service set.
@@ -647,6 +653,63 @@ Server/paper-live:
   follow-up only if the deployment outgrows the database-backed lease.
 
 Production live trading is intentionally excluded.
+
+## Dashboard And Visualization
+
+The project needs an operational dashboard, but it must be read-only for MVP.
+The dashboard is not a marketing surface; it is an operator workspace for
+understanding data quality, replay behavior, and paper risk.
+
+Initial dashboard scope:
+
+- source health, heartbeat gaps, reconnects, and circuit-breaker state;
+- exchange-to-receive latency and stale/offline states;
+- liquidation notional by source, symbol, side, and time window;
+- strategy signals, skipped-signal reasons, and paper-live state;
+- paper orders, paper fills, fill model, fill rate, and unhedged exposure;
+- fee-adjusted paper PnL, slippage, and hedge penalties;
+- TimescaleDB storage, Parquet archive storage, archive verification status,
+  and canonical deletion watermarks.
+
+Dashboard implementation must use the same persisted data and quality reports
+as replay. It must not create a second source of truth, and it must not submit
+real orders or mutate strategy/risk settings in MVP.
+
+Dashboard work should use Superpowers, design-engineer, data-visualization, and
+browser/visual checks. Required guards include responsive desktop/mobile
+screens, no overlapping text, readable stale/offline states, and tests for
+empty, loading, partial-data, and error states.
+
+## Fee Model
+
+Paper PnL is not decision-grade unless fees and other execution costs are
+included. MVP fee modeling starts with Polymarket and Hyperliquid because they
+are the first venues used by the strategy path.
+
+The first fee model includes:
+
+- Polymarket trading fees or explicit zero-fee assumption with source and date;
+- Hyperliquid taker/maker fees for hedge simulation;
+- funding or holding cost where applicable;
+- slippage model for both Polymarket paper fills and Hyperliquid hedge fills;
+- failed hedge, partial hedge, and timeout penalties;
+- configurable fee schedule version recorded in every `replay_run`.
+
+Fee schedules must be versioned and dated. A replay result must report gross
+PnL, fees, slippage, funding/holding costs, penalties, and net PnL separately.
+Real trading remains blocked until net paper PnL is stable after costs.
+
+## Research Before Implementation
+
+Before the implementation plan, run a short research pass to validate current
+assumptions that may change quickly: exchange APIs, fee schedules, Polymarket
+market-data behavior, Hyperliquid execution/funding details, and recent
+community reports about feed reliability.
+
+Research outputs must be committed as Markdown notes under `docs/research/`.
+They should include source links, dates checked, caveats, and design decisions
+that changed because of the research. Research does not replace official docs
+or fixtures; it only informs what to verify.
 
 ## RAG And Agents
 
@@ -740,6 +803,12 @@ The first increment is complete when:
   prices, impossible notionals, and out-of-order inputs without panics. The
   strategy must skip or mark invalid data and emit diagnostics;
 - all generated paper orders/fills are clearly marked as simulated;
+- dashboard requirements are documented and remain read-only for MVP;
+- replay reports include gross PnL, fees, slippage, penalties, and net PnL;
+- Docker Compose usage is scoped to project name `liquidation` and does not
+  affect existing containers from other projects;
+- pre-implementation research notes are committed for time-sensitive
+  assumptions;
 - no production trading secret is required or accepted by default.
 
 ## Next Improvements To Automate
@@ -777,3 +846,7 @@ The first increment is complete when:
 - English/Russian spec synchronization check.
 - Scheduled RAG index refresh and retrieval-quality checks.
 - Alerting for collector downtime, feed gaps, and abnormal source divergence.
+- Read-only operational dashboard with visual and responsive QA.
+- Fee schedule ingestion and fee-adjusted replay reports.
+- Docker safety checks for compose project name, ports, networks, and volumes.
+- Pre-implementation research checklist and report template.

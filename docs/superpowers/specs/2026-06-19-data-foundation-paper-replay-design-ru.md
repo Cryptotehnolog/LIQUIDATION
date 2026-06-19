@@ -635,6 +635,12 @@ Local development:
 
 - Windows host подходит для editing и tests.
 - Docker Compose предоставляет TimescaleDB и optional support services.
+- Compose project name должен быть `liquidation`, а все принадлежащие проекту
+  containers, networks и volumes должны использовать prefix `liquidation`.
+- Docker commands не должны target существующие `aperag-*`, `stat-arb-*`,
+  `free_*` или `omniroute` containers, networks или volumes.
+- Destructive Docker commands, например `docker system prune`, `docker volume
+  prune` или unscoped `docker compose down --remove-orphans`, запрещены.
 - Development database по умолчанию использует persistent volume.
 - Adminer или pgAdmin можно открыть только через dev-only Compose profile, но не
   в default service set.
@@ -654,6 +660,64 @@ Server/paper-live:
   перерастет database-backed lease.
 
 Production live trading намеренно исключен.
+
+## Dashboard и визуализация
+
+Проекту нужен operational dashboard, но в MVP он должен быть read-only.
+Dashboard не является marketing surface; это operator workspace для понимания
+data quality, replay behavior и paper risk.
+
+Initial dashboard scope:
+
+- source health, heartbeat gaps, reconnects и circuit-breaker state;
+- exchange-to-receive latency и stale/offline states;
+- liquidation notional по source, symbol, side и time window;
+- strategy signals, skipped-signal reasons и paper-live state;
+- paper orders, paper fills, fill model, fill rate и unhedged exposure;
+- fee-adjusted paper PnL, slippage и hedge penalties;
+- TimescaleDB storage, Parquet archive storage, archive verification status и
+  canonical deletion watermarks.
+
+Dashboard implementation должен использовать те же persisted data и quality
+reports, что replay. Он не должен создавать second source of truth и не должен
+submit real orders или менять strategy/risk settings в MVP.
+
+Dashboard work должен использовать Superpowers, design-engineer,
+data-visualization и browser/visual checks. Required guards: responsive
+desktop/mobile screens, отсутствие overlapping text, readable stale/offline
+states и tests для empty, loading, partial-data и error states.
+
+## Fee Model
+
+Paper PnL нельзя считать decision-grade, если fees и execution costs не учтены.
+MVP fee modeling начинается с Polymarket и Hyperliquid, потому что это первые
+venues в strategy path.
+
+Первая fee model включает:
+
+- Polymarket trading fees или explicit zero-fee assumption с source и date;
+- Hyperliquid taker/maker fees для hedge simulation;
+- funding или holding cost, где применимо;
+- slippage model для Polymarket paper fills и Hyperliquid hedge fills;
+- failed hedge, partial hedge и timeout penalties;
+- configurable fee schedule version, записанный в каждый `replay_run`.
+
+Fee schedules должны быть versioned и dated. Replay result должен отдельно
+показывать gross PnL, fees, slippage, funding/holding costs, penalties и net
+PnL. Real trading остается blocked, пока net paper PnL после costs не станет
+stable.
+
+## Research Before Implementation
+
+Перед implementation plan нужен короткий research pass для проверки assumptions,
+которые быстро меняются: exchange APIs, fee schedules, Polymarket market-data
+behavior, Hyperliquid execution/funding details и recent community reports о
+feed reliability.
+
+Research outputs должны быть committed как Markdown notes в `docs/research/`.
+Они должны включать source links, dates checked, caveats и design decisions,
+которые изменились из-за research. Research не заменяет official docs или
+fixtures; он только показывает, что нужно verify.
 
 ## RAG и Agents
 
@@ -748,6 +812,11 @@ RAG полезен, но не блокирует первый collector/replay i
   invalid prices, impossible notionals и out-of-order inputs без panics.
   Strategy должна skip или mark invalid data и emit diagnostics;
 - все generated paper orders/fills явно помечены как simulated;
+- dashboard requirements documented и остаются read-only для MVP;
+- replay reports включают gross PnL, fees, slippage, penalties и net PnL;
+- Docker Compose usage scoped to project name `liquidation` и не влияет на
+  existing containers других проектов;
+- pre-implementation research notes committed для time-sensitive assumptions;
 - production trading secret не требуется и не принимается by default.
 
 ## Следующие улучшения для автоматизации
@@ -785,3 +854,7 @@ RAG полезен, но не блокирует первый collector/replay i
 - English/Russian spec synchronization check.
 - Scheduled RAG index refresh и retrieval-quality checks.
 - Alerting для collector downtime, feed gaps и abnormal source divergence.
+- Read-only operational dashboard с visual и responsive QA.
+- Fee schedule ingestion и fee-adjusted replay reports.
+- Docker safety checks для compose project name, ports, networks и volumes.
+- Pre-implementation research checklist и report template.
