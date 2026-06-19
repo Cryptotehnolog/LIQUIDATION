@@ -54,19 +54,32 @@ infra/lightrag/data/secrets/deepseek-auth.json
 git check-ignore -v infra/lightrag/.env
 ```
 
-2. Создать локальную директорию для secrets:
+2. Проверить target path:
+
+```powershell
+.\scripts\bootstrap-freedeepseek-auth.ps1 -ValidateOnly
+```
+
+3. Создать локальную директорию для secrets:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path infra/lightrag/data/secrets | Out-Null
 ```
 
-3. Получить secret из Infisical и записать его в ignored файл.
+4. Получить secret из Infisical и записать его в ignored файл.
 
-Пример команды зависит от выбранного Infisical CLI/profile. Безопасный шаблон:
+Если repository уже связан с LIQUIDATION project через `infisical init`:
 
 ```powershell
-$authJson = infisical secrets get FREE_DEEPSEEK_AUTH_JSON --plain
-$authJson | Set-Content -Encoding UTF8 infra/lightrag/data/secrets/deepseek-auth.json
+.\scripts\bootstrap-freedeepseek-auth.ps1
+```
+
+Если используется explicit project id или machine identity token:
+
+```powershell
+.\scripts\bootstrap-freedeepseek-auth.ps1 `
+  -InfisicalProjectId "<LIQUIDATION_PROJECT_ID>" `
+  -InfisicalToken "<MACHINE_IDENTITY_OR_SERVICE_TOKEN>"
 ```
 
 Если CLI возвращает quoted string или escaped JSON, сначала проверить файл вручную:
@@ -75,7 +88,9 @@ $authJson | Set-Content -Encoding UTF8 infra/lightrag/data/secrets/deepseek-auth
 Get-Content -Raw infra/lightrag/data/secrets/deepseek-auth.json | ConvertFrom-Json | Out-Null
 ```
 
-4. Проверить, что файл ignored:
+`scripts/bootstrap-freedeepseek-auth.ps1` записывает JSON как UTF-8 без BOM. Это важно: Node `JSON.parse` падает, если файл начинается с BOM.
+
+5. Проверить, что файл ignored:
 
 ```powershell
 git check-ignore -v infra/lightrag/data/secrets/deepseek-auth.json
@@ -121,6 +136,6 @@ docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p l
 
 ## Что Улучшить Или Автоматизировать
 
-- Добавить `scripts/bootstrap-freedeepseek-auth.ps1`, когда будет выбран точный Infisical CLI profile.
+- Создать LIQUIDATION-owned `FREE_DEEPSEEK_AUTH_JSON` в Infisical и убрать временный cross-project copy.
 - Добавить проверку JSON schema для `deepseek-auth.json`.
 - Добавить dashboard tile для fallback route status.

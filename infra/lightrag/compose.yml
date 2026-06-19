@@ -33,7 +33,8 @@ services:
     volumes:
       - liquidation-free-deepseek-data:/app/data
     secrets:
-      - liquidation-free-deepseek-auth
+      - source: liquidation-free-deepseek-auth
+        target: deepseek-auth.json
     networks:
       - liquidation-rag
 
