@@ -1,7 +1,7 @@
 FROM node:22-alpine
 
 ARG FREE_DEEPSEEK_REPO=https://github.com/ForgetMeAI/FreeDeepseekAPI.git
-ARG FREE_DEEPSEEK_REF=main
+ARG FREE_DEEPSEEK_REF=e54d324e1d6be1f4d074f5c7f078ae5d94deade8
 
 RUN apk add --no-cache git
 

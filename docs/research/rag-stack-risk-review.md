@@ -44,7 +44,7 @@ the OmniRoute container perspective. If provider and OmniRoute run in Docker,
 container name/network addressing is safer than `localhost`.
 
 FreeDeepseekAPI is useful as emergency route, but it depends on DeepSeek Web
-behavior. Treat it as `degraded-but-usable`, not as `ok`.
+behavior. Treat it as diagnostic fallback availability, not as `ok`.
 
 Local check on 2026-06-19:
 
@@ -62,8 +62,9 @@ need for separate `liquidation-free-deepseek`.
 - Keep emergency route:
   `LightRAG/liq-rag -> liquidation-free-deepseek`.
 - Do not reuse second project's `omniroute` or `stat-arb-free-deepseek`.
-- `liq-rag health` must expose `ok`, `degraded-but-usable`, `failed`, and
-  `stale`.
+- `liq-rag health` MVP must expose `ok` or `failed`. Direct FreeDeepseek
+  availability is reported as diagnostic `fallback_available`, not as usable
+  RAG status until direct failover is implemented and evaluated.
 - RAG index is not source of truth. Git docs remain authoritative.
 
 ## Что улучшить или автоматизировать

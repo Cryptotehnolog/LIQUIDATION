@@ -6,6 +6,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Read-DotEnv {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        throw "Env file not found: $Path"
+    }
+
+    $values = @{}
+    foreach ($line in Get-Content $Path) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) {
+            continue
+        }
+
+        $parts = $trimmed -split "=", 2
+        if ($parts.Count -eq 2) {
+            $values[$parts[0]] = $parts[1].Trim('"').Trim("'")
+        }
+    }
+
+    return $values
+}
+
 function Assert-LiquidationName {
     param(
         [Parameter(Mandatory = $true)][string]$Kind,
@@ -17,8 +40,36 @@ function Assert-LiquidationName {
     }
 }
 
+function Assert-PathInside {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    if (-not $candidate.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label path is outside LIQUIDATION infra/lightrag/data: $candidate"
+    }
+}
+
+$envValues = Read-DotEnv $EnvFile
+$lightRagHost = $envValues["LIGHTRAG_HOST"]
+if ([string]::IsNullOrWhiteSpace($lightRagHost)) {
+    throw "LIGHTRAG_HOST is required in $EnvFile"
+}
+if ($lightRagHost -notin @("127.0.0.1", "localhost")) {
+    throw "LIGHTRAG_HOST must stay loopback-only for local safety. Refusing: $lightRagHost"
+}
+
 $configText = docker compose --env-file $EnvFile -f $ComposeFile -p $ProjectName config --format json
 $config = $configText | ConvertFrom-Json
+$allowedDataRoot = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
 
 foreach ($service in $config.services.PSObject.Properties) {
     Assert-LiquidationName "service" $service.Name
@@ -31,6 +82,14 @@ foreach ($service in $config.services.PSObject.Properties) {
     if ($service.Value.networks) {
         foreach ($networkName in $service.Value.networks.PSObject.Properties.Name) {
             Assert-LiquidationName "service network" $networkName
+        }
+    }
+
+    if ($service.Value.volumes) {
+        foreach ($volume in $service.Value.volumes) {
+            if ($volume.type -eq "bind" -and $volume.source) {
+                Assert-PathInside ([string]$volume.source) $allowedDataRoot "bind mount"
+            }
         }
     }
 }

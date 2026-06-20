@@ -40,6 +40,9 @@ function Assert-DataPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $root += [System.IO.Path]::DirectorySeparatorChar
+    }
     $candidate = Resolve-ProjectPath $Path
 
     if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {

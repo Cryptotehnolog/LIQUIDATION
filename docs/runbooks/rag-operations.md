@@ -86,6 +86,7 @@ LIGHTRAG_EMBEDDING_BINDING=
 LIGHTRAG_EMBEDDING_BINDING_HOST=
 LIGHTRAG_EMBEDDING_MODEL=
 LIGHTRAG_EMBEDDING_DIM=
+LIGHTRAG_INGEST_TIMEOUT_SECONDS=
 ```
 
 В repository хранить только `.env.example`. Реальные secrets должны храниться в
@@ -154,12 +155,17 @@ Host-side scripts проверяют Ollama через:
 http://127.0.0.1:11434
 ```
 
-Default model: `all-minilm`.
+Default model: `nomic-embed-text`.
 
-Причина выбора: на текущем ноутбуке `all-minilm` занимает около 45 MB,
-возвращает 384-dimensional embeddings и показал низкую latency в локальном
-smoke benchmark. `bge-m3` не является default, потому что он тяжелее и может
-создавать лишнюю нагрузку на ноутбук и Docker Desktop.
+Причина выбора: `all-minilm` был быстрым, но оказался несовместим с текущим
+LightRAG graph indexing: entity/relation embeddings превышали контекст модели.
+`nomic-embed-text` возвращает 768-dimensional embeddings и лучше подходит для
+локального LightRAG Dev Memory. `bge-m3` не является default, потому что он
+тяжелее и может создавать лишнюю нагрузку на ноутбук и Docker Desktop.
+
+Default chunking для `nomic-embed-text`: `LIGHTRAG_CHUNK_TOKEN_SIZE=900` и
+`LIGHTRAG_CHUNK_OVERLAP_TOKEN_SIZE=100`. Меньшие значения вроде `256/32`
+создают слишком много chunks и резко замедляют graph extraction через LLM.
 
 Если embedding model меняется, старый LightRAG index нельзя использовать как
 совместимый. Нужно остановить `liquidation-lightrag`, перенести старый
@@ -201,9 +207,12 @@ liq-rag ingest docs/
 Ingest должен:
 
 - читать только paths из `LIGHTRAG_INDEXED_PATHS`;
-- применять denylist для secrets и raw data;
+- применять denylist для secrets, raw data и тяжёлых planning artifacts,
+  включая `docs/research/raw/` и `docs/superpowers/`;
 - проверять, что runtime config LightRAG совпадает с `.env`;
 - падать, если LightRAG возвращает failed documents после pipeline;
+- использовать `LIGHTRAG_INGEST_TIMEOUT_SECONDS` для длинных graph-indexing
+  runs, вместо hardcoded бесконечного ожидания;
 - сохранять indexed Git commit hash;
 - сохранять ingestion timestamp;
 - сохранять indexed paths;

@@ -63,6 +63,9 @@ function Assert-DataPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $root += [System.IO.Path]::DirectorySeparatorChar
+    }
     $candidate = Resolve-ProjectPath $Path
 
     if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -101,7 +104,10 @@ function Join-NativeArgs {
 }
 
 function Invoke-Infisical {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$Token = ""
+    )
 
     $cmd = (Get-Command infisical.cmd -ErrorAction SilentlyContinue).Source
     if (-not $cmd) {
@@ -114,6 +120,9 @@ function Invoke-Infisical {
     $processInfo.RedirectStandardOutput = $true
     $processInfo.RedirectStandardError = $true
     $processInfo.UseShellExecute = $false
+    if (-not [string]::IsNullOrWhiteSpace($Token)) {
+        $processInfo.EnvironmentVariables["INFISICAL_TOKEN"] = $Token
+    }
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $processInfo
@@ -167,12 +176,9 @@ $args = @(
     "--silent"
 )
 
-if (-not [string]::IsNullOrWhiteSpace($InfisicalToken)) {
-    $args += "--token=$InfisicalToken"
-}
 if (-not [string]::IsNullOrWhiteSpace($InfisicalDomain)) {
     $args += "--domain=$InfisicalDomain"
 }
 
-Invoke-Infisical $args | Out-Null
+Invoke-Infisical -Arguments $args -Token $InfisicalToken | Out-Null
 Write-Output "FreeDeepseek auth published to LIQUIDATION Infisical secret: $SecretName"

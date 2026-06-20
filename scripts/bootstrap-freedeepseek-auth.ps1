@@ -54,6 +54,9 @@ function Assert-AuthPathScope {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $root += [System.IO.Path]::DirectorySeparatorChar
+    }
     if ([System.IO.Path]::IsPathRooted($Path)) {
         $candidate = [System.IO.Path]::GetFullPath($Path)
     } else {
@@ -113,9 +116,6 @@ function Get-InfisicalSecret {
     if (-not [string]::IsNullOrWhiteSpace($InfisicalProjectId)) {
         $args += "--projectId=$InfisicalProjectId"
     }
-    if (-not [string]::IsNullOrWhiteSpace($InfisicalToken)) {
-        $args += "--token=$InfisicalToken"
-    }
     if (-not [string]::IsNullOrWhiteSpace($InfisicalDomain)) {
         $args += "--domain=$InfisicalDomain"
     }
@@ -126,6 +126,9 @@ function Get-InfisicalSecret {
     $processInfo.RedirectStandardOutput = $true
     $processInfo.RedirectStandardError = $true
     $processInfo.UseShellExecute = $false
+    if (-not [string]::IsNullOrWhiteSpace($InfisicalToken)) {
+        $processInfo.EnvironmentVariables["INFISICAL_TOKEN"] = $InfisicalToken
+    }
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $processInfo
@@ -151,6 +154,10 @@ Assert-Ignored $authPath
 if ($ValidateOnly) {
     Write-Output "auth target is ignored: $authPath"
     exit 0
+}
+
+if ([string]::IsNullOrWhiteSpace($InfisicalProjectId)) {
+    throw "InfisicalProjectId is required. Refusing to bootstrap FreeDeepseek auth without explicit LIQUIDATION project id."
 }
 
 $authJson = (Get-InfisicalSecret).TrimStart([char]0xFEFF)

@@ -92,4 +92,4 @@
 
 - Добавить `scripts/preflight.ps1`, чтобы эту инвентаризацию можно было повторять перед каждым infrastructure change.
 - Добавить guard, который падает, если compose file ссылается на container names, networks или volumes без префикса `liquidation-*`.
-- Добавить dashboard tile для RAG health статусов `ok`, `degraded-but-usable` и `failed`.
+- Добавить dashboard tile для RAG health статусов `ok` и `failed`, плюс diagnostic field `fallback_available`.

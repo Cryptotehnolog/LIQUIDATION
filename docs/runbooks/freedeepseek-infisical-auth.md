@@ -154,13 +154,17 @@ New-Item -ItemType Directory -Force -Path infra/lightrag/data/secrets | Out-Null
 
 4. Получить secret из Infisical и записать его в ignored файл.
 
-Если repository уже связан с LIQUIDATION project через `infisical init`:
+Bootstrap всегда требует explicit LIQUIDATION project id. Не полагаться на
+локальный `infisical init` context: он может указывать на второй проект.
+
+Если используется browser login:
 
 ```powershell
-.\scripts\bootstrap-freedeepseek-auth.ps1
+.\scripts\bootstrap-freedeepseek-auth.ps1 `
+  -InfisicalProjectId "<LIQUIDATION_PROJECT_ID>"
 ```
 
-Если используется explicit project id или machine identity token:
+Если используется machine identity или service token:
 
 ```powershell
 .\scripts\bootstrap-freedeepseek-auth.ps1 `
@@ -217,8 +221,11 @@ docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p l
 ## Health Semantics
 
 - `ok`: LightRAG доступен, Omniroute доступен, configured LLM model присутствует в `/v1/models`.
-- `degraded-but-usable`: LightRAG доступен, primary route не готов, FreeDeepseek fallback отвечает.
-- `failed`: LightRAG недоступен или нет usable LLM route.
+- `failed`: LightRAG недоступен, primary Omniroute route не готов, embedding route сломан, index stale или eval ниже threshold.
+
+Если FreeDeepseek отвечает напрямую, `liq-rag health` пишет это только как
+diagnostic field `fallback_available = true`. Это не делает LightRAG usable,
+пока не реализован и не проверен отдельный direct failover route.
 
 ## Что Улучшить Или Автоматизировать
 

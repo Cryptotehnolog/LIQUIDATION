@@ -61,10 +61,7 @@ if (-not (Test-Path "scripts/liq-rag.ps1")) {
 
 Invoke-Step "compose guard" {
     & .\scripts\guard-compose.ps1 -EnvFile $ExampleEnvFile
-}
-
-Invoke-Step "health" {
-    & .\scripts\liq-rag.ps1 health -EnvFile $EnvFile
+    & .\scripts\guard-compose.ps1 -EnvFile $EnvFile
 }
 
 Invoke-Step "status" {
@@ -73,6 +70,48 @@ Invoke-Step "status" {
 
 Invoke-Step "eval" {
     & .\scripts\liq-rag.ps1 eval -EnvFile $EnvFile
+}
+
+Invoke-Step "health" {
+    & .\scripts\liq-rag.ps1 health -EnvFile $EnvFile
+}
+
+Invoke-Step "report integrity" {
+    $envActive = Read-DotEnv $EnvFile
+    $reportDir = "docs/reports/rag"
+    if ($envActive.ContainsKey("LIGHTRAG_REPORT_PATH") -and -not [string]::IsNullOrWhiteSpace($envActive["LIGHTRAG_REPORT_PATH"])) {
+        $reportDir = $envActive["LIGHTRAG_REPORT_PATH"]
+    }
+
+    $metadataPath = Join-Path $reportDir "index-metadata.json"
+    $evalPath = Join-Path $reportDir "eval-report.json"
+    $healthPath = Join-Path $reportDir "health-report.json"
+
+    Assert-True (Test-Path $metadataPath) "metadata report is missing"
+    Assert-True (Test-Path $evalPath) "eval report is missing"
+    Assert-True (Test-Path $healthPath) "health report is missing"
+
+    $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+    $eval = Get-Content -Raw -LiteralPath $evalPath | ConvertFrom-Json
+    $health = Get-Content -Raw -LiteralPath $healthPath | ConvertFrom-Json
+
+    Assert-True ($metadata.status -eq "indexed") "metadata status must be indexed"
+    Assert-True ($metadata.ingestion_config_version -eq "lightrag-dev-memory-v2") "metadata must include current ingestion config version"
+    Assert-True ($metadata.sentinel_retrieval_ok -eq $true) "metadata must include passing sentinel retrieval"
+    Assert-True ([int]$metadata.indexed_counts.processed -gt 0) "metadata must record processed indexed documents"
+    Assert-True ([int]$metadata.indexed_counts.all -ge [int]$metadata.mirror.copied_files) "metadata indexed count must cover mirrored docs"
+
+    Assert-True ($eval.status -eq "passed") "eval report must pass"
+    Assert-True ($eval.real_lightrag_retrieval -eq $true) "eval must use real LightRAG retrieval"
+    Assert-True ($eval.docs_tree_hash -eq $metadata.docs_tree_hash) "eval docs hash must match metadata docs hash"
+
+    Assert-True ($health.status -eq "ok") "health report must be ok"
+    Assert-True ($health.freshness.docs_tree_hash_match -eq $true) "health freshness must confirm docs tree hash"
+    Assert-True ([int]$health.freshness.indexed_processed -gt 0) "health freshness must confirm nonempty index"
+    Assert-True ($health.embeddings.embedding_dimension_match -eq $true) "health must confirm embedding dimension"
+    Assert-True ($health.omniroute.chat_completion_ok -eq $true) "health must confirm Omniroute chat completion"
+
+    Write-Output "report integrity passed"
 }
 
 Invoke-Step "secret scan" {
@@ -103,19 +142,23 @@ Invoke-Step "secret scan" {
 
 Invoke-Step "docs/env consistency" {
     $envExample = Read-DotEnv $ExampleEnvFile
+    $envActive = Read-DotEnv $EnvFile
     $compose = Get-Content -Raw -LiteralPath "infra/lightrag/compose.yml"
     $ragOperations = Get-Content -Raw -LiteralPath "docs/runbooks/rag-operations.md"
     $lightRagMemory = Get-Content -Raw -LiteralPath "docs/runbooks/lightrag-dev-memory.md"
     $deployment = Get-Content -Raw -LiteralPath "docs/reports/rag/2026-06-19-deployment.md"
 
     Assert-True ($envExample["LIGHTRAG_EMBEDDING_BINDING"] -eq "ollama") ".env.example must use Ollama embeddings"
-    Assert-True ($envExample["LIGHTRAG_EMBEDDING_MODEL"] -eq "all-minilm") ".env.example must use all-minilm"
-    Assert-True ($envExample["LIGHTRAG_EMBEDDING_DIM"] -eq "384") ".env.example must set all-minilm dimension"
+    Assert-True ($envExample["LIGHTRAG_EMBEDDING_MODEL"] -eq "nomic-embed-text") ".env.example must use nomic-embed-text"
+    Assert-True ($envExample["LIGHTRAG_EMBEDDING_DIM"] -eq "768") ".env.example must set nomic-embed-text dimension"
     Assert-True ($envExample["LIGHTRAG_EMBEDDING_BINDING_HOST"] -eq "http://host.docker.internal:11434") ".env.example must point Docker LightRAG to host Ollama"
+    Assert-True ($envActive["LIGHTRAG_HOST"] -in @("127.0.0.1", "localhost")) "active .env must keep LIGHTRAG_HOST loopback-only"
+    Assert-True ($envActive["LIGHTRAG_INDEXED_PATHS"] -eq "docs/") "active .env must index docs/ by default"
+    Assert-True ($envActive["LIGHTRAG_REPORT_PATH"] -eq "docs/reports/rag") "active .env must write reports to documented path"
     Assert-True (-not $compose.Contains("liquidation-embeddings:")) "compose must not include old hash embedding service"
-    Assert-True ($ragOperations.Contains("all-minilm")) "rag-operations must document all-minilm"
+    Assert-True ($ragOperations.Contains("nomic-embed-text")) "rag-operations must document nomic-embed-text"
     Assert-True ($lightRagMemory.Contains("FreeDeepseek availability is diagnostic-only")) "lightrag-dev-memory must not overstate fallback usability"
-    Assert-True ($deployment.Contains("all-minilm")) "deployment report must document all-minilm"
+    Assert-True ($deployment.Contains("nomic-embed-text")) "deployment report must document nomic-embed-text"
     Assert-True (-not $ragOperations.Contains("liquidation-hash-embedding-1024")) "rag-operations must not document old hash model as active"
 
     Write-Output "docs/env consistency passed"

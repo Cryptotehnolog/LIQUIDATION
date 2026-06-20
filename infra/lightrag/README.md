@@ -25,7 +25,8 @@ docker compose --env-file infra/lightrag/.env -f infra/lightrag/compose.yml -p l
 - `ghcr.io/hkuds/lightrag:latest` проверен через `docker manifest inspect`.
 - `forgetmeai/freedeepseekapi:latest` не подтвержден: registry вернул `denied/unauthorized`, а GitHub repository не публикует container package. Поэтому `liquidation-free-deepseek` собирается локально из `ForgetMeAI/FreeDeepseekAPI` через `infra/lightrag/free-deepseek/Dockerfile`.
 
-Перед production-like запуском нужно заменить `FREE_DEEPSEEK_REF=main` на pinned commit или tag. `main` подходит только для первичного skeleton и ручной проверки.
+`FREE_DEEPSEEK_REF` должен быть закреплён на commit SHA или tag. Значение `main`
+запрещено для deployment, потому что rebuild может подтянуть несовместимые изменения.
 
 ## FreeDeepseek Fallback
 

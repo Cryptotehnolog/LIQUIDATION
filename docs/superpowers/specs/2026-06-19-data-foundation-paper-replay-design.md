@@ -745,12 +745,12 @@ Recommended path:
 - Run a daily LightRAG health check that verifies service availability,
   freshness, evaluation score, and storage health. Alert when LightRAG is stale,
   unavailable, or below the retrieval-quality threshold.
-- `liq-rag health` must distinguish `ok`, `degraded-but-usable`, and `failed`.
-  `ok` means `liquidation-omniroute` and the Kiro combo are working.
-  `degraded-but-usable` means `liquidation-omniroute` is unavailable but
-  `liquidation-free-deepseek` answers directly. `failed` means neither
-  `liquidation-omniroute` nor `liquidation-free-deepseek` works, or
-  LightRAG/index/eval is unusable.
+- `liq-rag health` MVP must distinguish `ok` and `failed`. `ok` means
+  `liquidation-omniroute`, the Kiro combo, LightRAG, embeddings, freshness, and
+  eval are usable. `failed` means any required route or quality gate is not
+  usable. If `liquidation-free-deepseek` answers directly, report
+  `fallback_available = true` as diagnostic-only until a real direct failover
+  route is implemented and evaluated.
 - Add automatic quality checks for retrieval using known question/answer pairs.
   A refresh fails or alerts when top-5 recall or simple answer accuracy drops
   below 80% on the tracked evaluation set. Mean reciprocal rank is reported as

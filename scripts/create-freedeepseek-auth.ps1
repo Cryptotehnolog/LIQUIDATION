@@ -63,6 +63,9 @@ function Assert-DataPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $root += [System.IO.Path]::DirectorySeparatorChar
+    }
     $candidate = Resolve-ProjectPath $Path
 
     if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -140,7 +143,7 @@ if ([string]::IsNullOrWhiteSpace($FreeDeepseekRepo)) {
     $FreeDeepseekRepo = Get-ConfigValue $config "FREE_DEEPSEEK_REPO" "https://github.com/ForgetMeAI/FreeDeepseekAPI.git"
 }
 if ([string]::IsNullOrWhiteSpace($FreeDeepseekRef)) {
-    $FreeDeepseekRef = Get-ConfigValue $config "FREE_DEEPSEEK_REF" "main"
+    $FreeDeepseekRef = Get-ConfigValue $config "FREE_DEEPSEEK_REF" "e54d324e1d6be1f4d074f5c7f078ae5d94deade8"
 }
 
 Assert-DataPath $AuthPath

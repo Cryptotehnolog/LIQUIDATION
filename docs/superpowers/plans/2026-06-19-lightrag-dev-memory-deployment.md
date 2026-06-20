@@ -4,7 +4,7 @@
 > `scripts/liq-rag.ps1`, `scripts/audit-rag.ps1`,
 > `docs/runbooks/rag-operations.md`, and
 > `docs/runbooks/lightrag-dev-memory.md`. Historical snippets in this plan may
-> show intermediate `metadata-only` behavior and must not be used as current
+> show intermediate prototype behavior and must not be used as current
 > operational guidance.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -456,7 +456,7 @@ switch ($Command) {
       indexed_path = $Path
       docs_tree_hash = ($treeHash | Get-FileHash -InputStream).Hash
       generated_at = (Get-Date).ToString("o")
-      status = "metadata-only"
+      status = "prototype-placeholder"
     }
     $report | ConvertTo-Json -Depth 5 | Set-Content "docs/reports/rag/index-metadata.json"
     Write-Output "ingest metadata written"
@@ -467,7 +467,7 @@ switch ($Command) {
   }
   "health" {
     if (Test-Path "docs/reports/rag/index-metadata.json") {
-      Write-Output "degraded-but-usable: metadata exists; LightRAG service check not implemented"
+      Write-Output "failed: LightRAG service check not implemented"
     } else {
       Write-Output "failed: missing docs/reports/rag/index-metadata.json"
       exit 1
@@ -497,7 +497,7 @@ Run:
 .\scripts\liq-rag.ps1 status
 ```
 
-Expected: ingest/eval/status pass. Health may report `degraded-but-usable` until real LightRAG service is running.
+Expected: ingest/eval/status pass. Health must report `failed` until real LightRAG service checks are implemented.
 
 - [ ] **Step 5: Commit shim**
 
@@ -627,8 +627,8 @@ Expected:
 
 - `ingest` writes metadata;
 - `eval` confirms eval questions;
-- `health` returns `ok` after real service checks are implemented, or
-  `degraded-but-usable` if only FreeDeepseek direct route is available;
+- `health` returns `ok` after real service checks pass. Direct FreeDeepseek
+  availability is diagnostic-only until real failover is implemented;
 - `status` confirms indexed commit matches current Git commit.
 
 - [ ] **Step 2: Verify Git cleanliness**
@@ -660,7 +660,7 @@ Do not start Rust foundation execution until:
 - second-project Docker containers are unchanged;
 - `liq-rag ingest docs/` passes;
 - `liq-rag eval` passes;
-- `liq-rag health` returns `ok` or `degraded-but-usable`;
+- `liq-rag health` returns `ok`;
 - `liq-rag status --check-commit` equivalent passes;
 - Git working tree is clean after reports are committed.
 

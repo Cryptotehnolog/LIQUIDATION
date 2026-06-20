@@ -22,8 +22,8 @@
 - FreeDeepseek `/health`: ожидается `200`, если fallback profile запущен
 - FreeDeepseek `/v1/models`: ожидается `200`, если fallback profile запущен
 - Ollama `/api/version`: `200`
-- Ollama `/api/tags`: содержит `all-minilm:latest`
-- Ollama `/api/embed`: возвращает 384-dimensional embeddings
+- Ollama `/api/tags`: содержит `nomic-embed-text:latest`
+- Ollama `/api/embed`: возвращает 768-dimensional embeddings
 
 ## Созданные Docker Объекты
 
@@ -54,12 +54,13 @@ Temporary local bootstrap скопировал FreeDeepseek auth file второ
 
 ## Блокеры
 
-- `all-minilm` является быстрым локальным default для ноутбука, но качество multilingual retrieval нужно контролировать через eval.
+- `all-minilm` был проверен и отклонен для LightRAG graph indexing: entity/relation embeddings превышали контекст модели.
+- `nomic-embed-text` является текущим локальным default: он тяжелее, но совместимее с LightRAG graph pipeline.
 - `bge-m3` не является default и требует отдельного approval/benchmark перед использованием.
-- `FREE_DEEPSEEK_REF` закреплён на commit `3c8494bd389020c0f2b2bd07094cfc7b44110015`, чтобы rebuild не подтягивал неожиданные изменения.
+- `FREE_DEEPSEEK_REF` закреплён на commit `e54d324e1d6be1f4d074f5c7f078ae5d94deade8`, чтобы rebuild не подтягивал неожиданные изменения.
 - FreeDeepseek fallback сейчас diagnostic-only для RAG health: LightRAG остаётся сконфигурированным на Omniroute, поэтому падение Omniroute считается `failed`, даже если FreeDeepseek отвечает.
 
 ## Что Улучшить Или Автоматизировать
 
-- Добавить regression eval, который сравнивает `all-minilm` с будущими кандидатами вроде `bge-m3:567m`.
+- Добавить regression eval, который сравнивает `nomic-embed-text` с будущими кандидатами вроде `bge-m3:567m`.
 - Добавить dashboard виджет: active LLM route, embedding model, indexed/current commit, eval status.

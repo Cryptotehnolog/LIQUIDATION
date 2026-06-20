@@ -1,8 +1,9 @@
 param(
-    [string]$Model = "all-minilm",
+    [string]$Model = "nomic-embed-text",
     [string]$OllamaBaseUrl = "http://127.0.0.1:11434",
     [string]$OutputPath = "docs/reports/rag/ollama-embedding-benchmark.json",
-    [int]$Runs = 5
+    [int]$Runs = 5,
+    [int]$ExpectedDimension = 768
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,10 +26,14 @@ function Invoke-OllamaEmbed {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $response = Invoke-RestMethod "$OllamaBaseUrl/api/embed" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 60
     $sw.Stop()
+    $dimensions = @($response.embeddings[0]).Count
+    if ($dimensions -ne $ExpectedDimension) {
+        throw "Ollama embedding dimension mismatch for $ModelName`: observed=$dimensions expected=$ExpectedDimension"
+    }
 
     return [ordered]@{
         elapsed_ms = $sw.ElapsedMilliseconds
-        dimensions = $response.embeddings[0].Count
+        dimensions = $dimensions
     }
 }
 
@@ -69,6 +74,7 @@ $report = [ordered]@{
     ollama_base_url = $OllamaBaseUrl
     ollama_version = $version.version
     model = $Model
+    expected_dimension = $ExpectedDimension
     runs = $Runs
     results = $results
 }

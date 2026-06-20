@@ -38,7 +38,7 @@
 ## Known Gaps
 
 - Для полностью non-interactive automation позже нужен LIQUIDATION-owned machine identity token или service token.
-- `FREE_DEEPSEEK_REF=main` всё ещё нужно pin to commit или tag перед production use.
+- `FREE_DEEPSEEK_REF` закреплён на commit SHA перед production-like rebuild.
 
 ## Что Улучшить Или Автоматизировать
 

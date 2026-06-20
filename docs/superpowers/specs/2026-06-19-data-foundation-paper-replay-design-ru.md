@@ -754,12 +754,12 @@ runbooks.
 - Запускать daily LightRAG health check, который проверяет service
   availability, freshness, evaluation score и storage health. Alert нужен, если
   LightRAG stale, unavailable или ниже retrieval-quality threshold.
-- `liq-rag health` должен различать `ok`, `degraded-but-usable` и `failed`.
-  `ok` означает, что `liquidation-omniroute` и Kiro combo работают.
-  `degraded-but-usable` означает, что `liquidation-omniroute` недоступен, но
-  `liquidation-free-deepseek` отвечает напрямую. `failed` означает, что не
-  работают ни `liquidation-omniroute`, ни `liquidation-free-deepseek`, или
-  LightRAG/index/eval непригодны.
+- `liq-rag health` в MVP должен различать `ok` и `failed`. `ok` означает, что
+  `liquidation-omniroute`, Kiro combo, LightRAG, embeddings, freshness и eval
+  пригодны. `failed` означает, что любой обязательный route или quality gate
+  непригоден. Если `liquidation-free-deepseek` отвечает напрямую, report должен
+  показывать `fallback_available = true` только как diagnostic-only, пока не
+  реализован и не проверен настоящий direct failover route.
 - Добавить automatic quality checks для retrieval через known question/answer
   pairs. Refresh fails или alerts, если top-5 recall или simple answer accuracy
   падает ниже 80% на tracked evaluation set. Mean reciprocal rank reported как
