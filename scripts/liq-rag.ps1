@@ -390,6 +390,30 @@ function Get-IndexableTrackedFiles {
     return @($files)
 }
 
+function Get-IndexableUntrackedFiles {
+    param([Parameter(Mandatory = $true)][string]$DocsPath)
+
+    $files = git ls-files --others --exclude-standard -- $DocsPath |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Where-Object { -not (Test-RagDenylistedPath $_) } |
+        Where-Object {
+            $extension = [System.IO.Path]::GetExtension($_).ToLowerInvariant()
+            $extension -in @(".md", ".txt", ".json", ".yaml", ".yml")
+        } |
+        Sort-Object
+
+    return @($files)
+}
+
+function Assert-NoIndexableUntrackedFiles {
+    param([Parameter(Mandatory = $true)][string]$DocsPath)
+
+    $untracked = Get-IndexableUntrackedFiles $DocsPath
+    if (@($untracked).Count -gt 0) {
+        throw "Refusing to ingest with untracked indexable docs under '$DocsPath'. Add or remove these files first: $($untracked -join ', ')"
+    }
+}
+
 function Get-DocsTreeHash {
     param([Parameter(Mandatory = $true)][string]$DocsPath)
 
@@ -971,6 +995,7 @@ switch ($Command) {
         Assert-EmbeddingConfigured $config
         $indexedPath = Get-ConfiguredIndexedPath -Config $config -RequestedPath $Path
         Assert-AllowedIndexedPath -IndexedPath $indexedPath -Config $config
+        Assert-NoIndexableUntrackedFiles $indexedPath
         $serviceConfig = Get-ServiceConfig
 
         $commit = Get-CurrentCommit

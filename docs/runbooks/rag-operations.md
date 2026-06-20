@@ -207,6 +207,7 @@ liq-rag ingest docs/
 Ingest должен:
 
 - читать только paths из `LIGHTRAG_INDEXED_PATHS`;
+- включать curated memory layer `docs/rag-index/`;
 - применять denylist для secrets, raw data и тяжёлых planning artifacts,
   включая `docs/research/raw/` и `docs/superpowers/`;
 - проверять, что runtime config LightRAG совпадает с `.env`;
@@ -218,6 +219,9 @@ Ingest должен:
 - сохранять indexed paths;
 - сохранять ingestion config version;
 - писать report в `LIGHTRAG_REPORT_PATH`.
+
+При добавлении нового большого source doc нужно добавить или обновить
+соответствующий summary/decision record в `docs/rag-index/`.
 
 После ingest обязательно запускать:
 

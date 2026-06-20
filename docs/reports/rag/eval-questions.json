@@ -13,5 +13,10 @@
     "id": "rag-source-of-truth",
     "question": "Is LightRAG the source of truth?",
     "expected_answer_contains": ["Git", "docs", "source of truth"]
+  },
+  {
+    "id": "rag-curated-memory-layer",
+    "question": "How should large specs and plans be represented in LightRAG Dev Memory?",
+    "expected_answer_contains": ["docs/rag-index", "summaries", "docs/superpowers"]
   }
 ]

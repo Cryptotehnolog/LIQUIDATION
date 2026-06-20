@@ -29,9 +29,9 @@ LightRAG для `LIQUIDATION` должен запускаться отдельн
 
 ## Что индексировать
 
-На первом этапе индексируются только repo-owned docs:
+Default graph index включает короткие repo-owned docs:
 
-- `docs/superpowers/specs/`;
+- `docs/rag-index/`;
 - `docs/runbooks/`;
 - `docs/research/`;
 - `docs/reports/`;
@@ -46,7 +46,12 @@ LightRAG для `LIQUIDATION` должен запускаться отдельн
 - API tokens;
 - raw market-data blobs;
 - database dumps;
-- Docker volumes второго проекта.
+- Docker volumes второго проекта;
+- `docs/superpowers/` напрямую.
+
+Большие specs/plans из `docs/superpowers/` должны попадать в LightRAG через
+короткие summaries в `docs/rag-index/summaries/`. Это снижает latency и риск
+failed graph extraction.
 
 ## Обязательная metadata индекса
 
