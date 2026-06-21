@@ -9,8 +9,8 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-liq-recorder = { path = "../liq-recorder" }
-liq-replay = { path = "../liq-replay" }
+liq-recorder = { path = "../liq-recorder", version = "0.1.0" }
+liq-replay = { path = "../liq-replay", version = "0.1.0" }
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true

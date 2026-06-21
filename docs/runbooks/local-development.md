@@ -20,6 +20,26 @@ cargo run -p liq-cli -- replay dry-run --source bybit --start-unix-ms 1 --end-un
 dry-run ok
 ```
 
+## Security Gates
+
+CI запускает:
+
+- `cargo audit`;
+- `cargo deny`;
+- `gitleaks`.
+
+Локальный запуск:
+
+```powershell
+cargo audit --deny warnings --ignore RUSTSEC-2023-0071
+cargo deny check advisories bans licenses sources
+docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.28.0 detect --source /repo --redact --verbose
+```
+
+`RUSTSEC-2023-0071` игнорируется только для `cargo audit`, потому что
+`cargo-audit` сканирует весь `Cargo.lock`, включая inactive optional dependency
+`rsa` из `sqlx`. Active graph дополнительно проверяет `cargo-deny advisories`.
+
 ## Recorder Persistence Checks
 
 Для проверки migrations и schema contract используется отдельный project-owned
@@ -82,6 +102,12 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 cargo test -p liq-recorder --test persistence
 ```
 
+GitHub Actions также запускает disposable TimescaleDB service job и проверяет:
+
+- migration idempotency;
+- schema-domain alignment;
+- recorder persistence roundtrip.
+
 ## Docker Safety
 
 Перед запуском инфраструктуры читать `docs/runbooks/docker-safety.md`.
@@ -97,9 +123,4 @@ docker compose down --remove-orphans
 ## Что Улучшить Или Автоматизировать
 
 - Добавить `cargo nextest`.
-- Добавить `cargo audit`.
-- Добавить `cargo deny` с узкими license/advisory правилами.
-- Добавить `gitleaks`.
-- Добавить CI service job для disposable TimescaleDB, когда registry pull будет
-  стабильным.
 - Добавить weekly long-running load test после появления collector runtime.

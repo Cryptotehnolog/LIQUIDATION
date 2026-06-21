@@ -4,12 +4,13 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -19,3 +20,58 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf -D clippy::complexity -D clippy::style
       - name: cargo test
         run: cargo test --workspace
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        # cargo-audit scans the full lockfile, including inactive optional deps.
+        # RUSTSEC-2023-0071 is from sqlx's inactive optional rsa dependency;
+        # cargo-deny advisories below checks the active dependency graph.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+      - name: gitleaks
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            zricethezav/gitleaks:v8.28.0 \
+            detect --source /repo --redact --verbose
+
+  timescaledb:
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.17.2-pg16
+        env:
+          POSTGRES_DB: liquidation
+          POSTGRES_USER: liquidation
+          POSTGRES_PASSWORD: liquidation
+        ports:
+          - 15433:5432
+        options: >-
+          --health-cmd "pg_isready -U liquidation -d liquidation"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://liquidation:liquidation@127.0.0.1:15433/liquidation
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: sqlx migrations are idempotent
+        run: |
+          cargo run -p liq-cli -- db migrate --database-url "$DATABASE_URL"
+          cargo run -p liq-cli -- db migrate --database-url "$DATABASE_URL"
+      - name: schema-domain alignment
+        run: cargo run -p liq-cli -- db check-schema --database-url "$DATABASE_URL"
+      - name: recorder persistence roundtrip
+        run: cargo test -p liq-recorder --test persistence
