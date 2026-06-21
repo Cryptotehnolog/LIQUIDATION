@@ -2,9 +2,11 @@
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use liq_collector::{CollectorSettings, CollectorSource, SourceProbe, run_live_probe};
 use liq_recorder::{migrations, schema};
 use liq_replay::{DryRunRequest, validate_dry_run};
 use sqlx::postgres::PgPoolOptions;
+use std::time::Duration;
 use tracing::info;
 
 #[derive(Debug, Parser)]
@@ -26,6 +28,11 @@ enum Command {
     Replay {
         #[command(subcommand)]
         command: ReplayCommand,
+    },
+    /// Live collector commands.
+    Collector {
+        #[command(subcommand)]
+        command: CollectorCommand,
     },
 }
 
@@ -58,6 +65,34 @@ enum ReplayCommand {
         /// Exclusive end timestamp in milliseconds.
         #[arg(long)]
         end_unix_ms: i64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CollectorCommand {
+    /// Run a bounded live WebSocket probe and persist observed liquidation events.
+    Probe {
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        /// Source id: bybit or binance.
+        #[arg(long)]
+        source: String,
+        /// Exchange symbol, e.g. BTCUSDT.
+        #[arg(long)]
+        symbol: String,
+        /// Stop after this many raw WebSocket messages.
+        #[arg(long, default_value_t = 1)]
+        max_messages: usize,
+        /// Require at least this many raw WebSocket messages before timeout can be treated as success.
+        #[arg(long, default_value_t = 0)]
+        min_messages: usize,
+        /// Bounded recorder channel capacity.
+        #[arg(long, default_value_t = 128)]
+        channel_capacity: usize,
+        /// Per-message read timeout in seconds.
+        #[arg(long, default_value_t = 30)]
+        read_timeout_seconds: u64,
     },
 }
 
@@ -118,6 +153,39 @@ async fn run() -> anyhow::Result<()> {
             info!("replay dry-run validation passed");
             println!("dry-run ok");
         }
+        Command::Collector { command } => match command {
+            CollectorCommand::Probe {
+                database_url,
+                source,
+                symbol,
+                max_messages,
+                min_messages,
+                channel_capacity,
+                read_timeout_seconds,
+            } => {
+                let source = CollectorSource::parse(&source)
+                    .with_context(|| format!("unsupported collector source: {source}"))?;
+                let pool = connect(&database_url).await?;
+                let settings = CollectorSettings {
+                    channel_capacity,
+                    max_messages,
+                    min_messages,
+                    read_timeout: Duration::from_secs(read_timeout_seconds),
+                    ..CollectorSettings::default()
+                };
+                let stats = run_live_probe(pool, SourceProbe::new(source, symbol), settings)
+                    .await
+                    .context("collector probe failed")?;
+                println!(
+                    "collector probe ok: received_messages={} normalized_events={} raw_inserted={} canonical_inserted={} reconnects={}",
+                    stats.received_messages,
+                    stats.normalized_events,
+                    stats.raw_inserted,
+                    stats.canonical_inserted,
+                    stats.reconnects
+                );
+            }
+        },
     }
 
     Ok(())

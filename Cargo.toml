@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/liq-cli",
     "crates/liq-config",
+    "crates/liq-collector",
     "crates/liq-connectors",
     "crates/liq-domain",
     "crates/liq-recorder",
@@ -19,9 +20,12 @@ repository = "https://github.com/Cryptotehnolog/LIQUIDATION"
 anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "time", "uuid", "rust_decimal", "json"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }

@@ -107,6 +107,21 @@ GitHub Actions также запускает disposable TimescaleDB service job 
 - schema-domain alignment;
 - recorder persistence roundtrip.
 
+## Collector Live Probe
+
+Перед постоянным collector runtime используйте только bounded probe:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector probe --source bybit --symbol BTCUSDT --max-messages 1 --read-timeout-seconds 30
+cargo run -p liq-cli -- collector probe --source binance --symbol BTCUSDT --max-messages 1 --min-messages 0 --read-timeout-seconds 10
+```
+
+`normalized_events=0` в коротком probe не означает сбой: Bybit сначала присылает
+subscription ack, а Binance `forceOrder` может молчать, если в окне проверки нет
+ликвидаций. Для проверки обязательного события задавайте `--min-messages 1`, но
+такая проверка может законно упасть по таймауту на спокойном рынке.
+
 ## Docker Safety
 
 Перед запуском инфраструктуры читать `docs/runbooks/docker-safety.md`.
