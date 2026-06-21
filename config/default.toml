@@ -1,0 +1,33 @@
+[database]
+url_env = "DATABASE_URL"
+connect_timeout_seconds = 10
+
+[sources.bybit]
+enabled = true
+quality = "all_events"
+symbols = ["BTCUSDT"]
+max_reconnects_per_5min = 5
+
+[sources.binance]
+enabled = true
+quality = "snapshot_only"
+symbols = ["btcusdt"]
+max_reconnects_per_5min = 5
+
+[backfill]
+binance_enabled = false
+bybit_enabled = false
+okx_rest_enabled = false
+
+[replay]
+default_primary_source = "bybit"
+default_fallback_sources = []
+default_aggregation_policy = "primary_only"
+fill_model = "trade_cross"
+order_cancel_window_seconds = 60
+hedge_timeout_seconds = 10
+
+[retention]
+hot_raw_retention_days = 14
+canonical_events_retention_days = 30
+collector_health_retention_days = 7
