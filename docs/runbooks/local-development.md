@@ -26,6 +26,11 @@ dry-run ok
 TimescaleDB stack. Он использует только `liquidation-*` имена и loopback port
 `127.0.0.1:15433`.
 
+Конфигурация TimescaleDB использует только project-scoped переменные
+`LIQUIDATION_POSTGRES_*`. Не использовать generic `POSTGRES_*`: они могут быть
+заданы другим проектом или глобальной сессией PowerShell и silently изменить
+пароль/имя БД.
+
 Проверка без запуска контейнера, если он уже работает:
 
 ```powershell
@@ -45,9 +50,24 @@ TimescaleDB stack. Он использует только `liquidation-*` име
 ```
 
 Если Docker Hub вернул `toomanyrequests` / pull-rate-limit, это не ошибка
-проекта. Нужно выполнить `docker login` в Docker Desktop/CLI или повторить
-после сброса лимита. Скрипт должен fail-fast и не ждать несуществующий
-контейнер.
+проекта. Нормальное решение - выполнить `docker login` в Docker Desktop/CLI,
+чтобы pull шёл как authenticated request. Не менять image на случайные mirror и
+не добавлять retries как основной способ обхода.
+
+Проверка Docker Hub auth и pull образа TimescaleDB:
+
+```powershell
+.\scripts\check-docker-hub.ps1 -Pull
+```
+
+Если проверка пишет, что Docker Hub не авторизован, выполнить:
+
+```powershell
+docker login
+```
+
+После успешного login повторить `.\scripts\check-docker-hub.ps1 -Pull`.
+Скрипт должен fail-fast и не ждать несуществующий контейнер.
 
 Команда выполняет:
 

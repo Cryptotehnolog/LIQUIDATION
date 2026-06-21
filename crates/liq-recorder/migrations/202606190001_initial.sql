@@ -1,7 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE IF NOT EXISTS raw_source_events (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL NOT NULL,
     source TEXT NOT NULL,
     source_event_id TEXT NOT NULL,
     source_quality TEXT NOT NULL,
@@ -11,13 +11,20 @@ CREATE TABLE IF NOT EXISTS raw_source_events (
     payload JSONB NOT NULL,
     payload_sha256 TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (source, source_event_id)
+    PRIMARY KEY (id, received_ts)
 );
 
 SELECT create_hypertable('raw_source_events', 'received_ts', if_not_exists => TRUE);
 
+CREATE TABLE IF NOT EXISTS raw_source_event_keys (
+    source TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, source_event_id)
+);
+
 CREATE TABLE IF NOT EXISTS liquidation_events (
-    event_id UUID PRIMARY KEY,
+    event_id UUID NOT NULL,
     source TEXT NOT NULL,
     source_event_id TEXT NOT NULL,
     source_quality TEXT NOT NULL,
@@ -29,10 +36,17 @@ CREATE TABLE IF NOT EXISTS liquidation_events (
     exchange_ts TIMESTAMPTZ NOT NULL,
     received_ts TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (source, source_event_id)
+    PRIMARY KEY (event_id, received_ts)
 );
 
 SELECT create_hypertable('liquidation_events', 'received_ts', if_not_exists => TRUE);
+
+CREATE TABLE IF NOT EXISTS liquidation_event_keys (
+    source TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, source_event_id)
+);
 
 CREATE TABLE IF NOT EXISTS archive_manifests (
     id UUID PRIMARY KEY,
@@ -52,13 +66,14 @@ CREATE TABLE IF NOT EXISTS archive_manifests (
 );
 
 CREATE TABLE IF NOT EXISTS collector_health (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL NOT NULL,
     source TEXT NOT NULL,
     symbol TEXT NOT NULL,
     status TEXT NOT NULL,
     reconnects_5m INTEGER NOT NULL DEFAULT 0,
     last_event_ts TIMESTAMPTZ,
-    checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (id, checked_at)
 );
 
 SELECT create_hypertable('collector_health', 'checked_at', if_not_exists => TRUE);

@@ -6,9 +6,9 @@ services:
     container_name: liquidation-timescaledb
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-liquidation}
-      POSTGRES_USER: ${POSTGRES_USER:-liquidation}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-liquidation}
+      POSTGRES_DB: ${LIQUIDATION_POSTGRES_DB:-liquidation}
+      POSTGRES_USER: ${LIQUIDATION_POSTGRES_USER:-liquidation}
+      POSTGRES_PASSWORD: ${LIQUIDATION_POSTGRES_PASSWORD:-liquidation}
     ports:
       - "${LIQUIDATION_TIMESCALE_HOST:-127.0.0.1}:${LIQUIDATION_TIMESCALE_PORT:-15433}:5432"
     volumes:

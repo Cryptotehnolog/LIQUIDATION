@@ -40,6 +40,28 @@ function Read-DotEnv {
     return $values
 }
 
+function Get-EnvValue {
+    param(
+        [Parameter(Mandatory = $true)]$Values,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if (-not $Values.ContainsKey($Name) -or [string]::IsNullOrWhiteSpace($Values[$Name])) {
+        throw "Missing required env value: $Name"
+    }
+
+    return $Values[$Name]
+}
+
+function Invoke-Checked {
+    param([Parameter(Mandatory = $true)][scriptblock]$Command)
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $Command"
+    }
+}
+
 function Assert-LiquidationOnlyCompose {
     param([Parameter(Mandatory = $true)]$Config)
 
@@ -67,14 +89,24 @@ function Assert-LiquidationOnlyCompose {
 function Wait-Healthy {
     param(
         [Parameter(Mandatory = $true)][string]$ContainerName,
-        [int]$TimeoutSeconds = 90
+        [int]$TimeoutSeconds = 120,
+        [int]$StableSeconds = 20
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $healthySince = $null
     while ((Get-Date) -lt $deadline) {
         $status = docker inspect --format "{{.State.Health.Status}}" $ContainerName 2>$null
         if ($LASTEXITCODE -eq 0 -and $status -eq "healthy") {
-            return
+            if ($null -eq $healthySince) {
+                $healthySince = Get-Date
+            }
+            if (((Get-Date) - $healthySince).TotalSeconds -ge $StableSeconds) {
+                return
+            }
+        }
+        else {
+            $healthySince = $null
         }
         Start-Sleep -Seconds 2
     }
@@ -96,6 +128,7 @@ if ($ConfigOnly) {
 }
 
 if ($Start) {
+    & (Join-Path $ScriptDir "check-docker-hub.ps1") -Image "timescale/timescaledb:2.17.2-pg16" -Pull
     docker compose --env-file $EnvFile -f $ComposeFile -p $ProjectName up -d
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to start liquidation-timescaledb compose stack"
@@ -103,15 +136,15 @@ if ($Start) {
     Wait-Healthy "liquidation-timescaledb"
 }
 
-$hostName = $envValues["LIQUIDATION_TIMESCALE_HOST"]
-$port = $envValues["LIQUIDATION_TIMESCALE_PORT"]
-$db = $envValues["POSTGRES_DB"]
-$user = $envValues["POSTGRES_USER"]
-$password = $envValues["POSTGRES_PASSWORD"]
+$hostName = Get-EnvValue $envValues "LIQUIDATION_TIMESCALE_HOST"
+$port = Get-EnvValue $envValues "LIQUIDATION_TIMESCALE_PORT"
+$db = Get-EnvValue $envValues "LIQUIDATION_POSTGRES_DB"
+$user = Get-EnvValue $envValues "LIQUIDATION_POSTGRES_USER"
+$password = Get-EnvValue $envValues "LIQUIDATION_POSTGRES_PASSWORD"
 $databaseUrl = "postgres://${user}:${password}@${hostName}:${port}/${db}"
 
-cargo run -p liq-cli -- db migrate --database-url $databaseUrl
-cargo run -p liq-cli -- db migrate --database-url $databaseUrl
-cargo run -p liq-cli -- db check-schema --database-url $databaseUrl
+Invoke-Checked { cargo run -p liq-cli -- db migrate --database-url $databaseUrl }
+Invoke-Checked { cargo run -p liq-cli -- db migrate --database-url $databaseUrl }
+Invoke-Checked { cargo run -p liq-cli -- db check-schema --database-url $databaseUrl }
 
 Write-Output "recorder persistence checks passed"

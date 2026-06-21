@@ -88,6 +88,12 @@ fn expected_contracts() -> &'static [ColumnContract] {
             nullable: false,
         },
         ColumnContract {
+            table: "raw_source_event_keys",
+            column: "source_event_id",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
             table: "liquidation_events",
             column: "event_id",
             data_type: "uuid",
@@ -109,6 +115,12 @@ fn expected_contracts() -> &'static [ColumnContract] {
             table: "liquidation_events",
             column: "notional_usd",
             data_type: "numeric",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "liquidation_event_keys",
+            column: "source_event_id",
+            data_type: "text",
             nullable: false,
         },
         ColumnContract {

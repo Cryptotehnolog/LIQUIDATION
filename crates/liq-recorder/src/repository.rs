@@ -16,6 +16,24 @@ pub async fn insert_raw_source_event(
     pool: &PgPool,
     event: &RawSourceEvent,
 ) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let key_result = sqlx::query(
+        r"
+        INSERT INTO raw_source_event_keys (source, source_event_id)
+        VALUES ($1, $2)
+        ON CONFLICT (source, source_event_id) DO NOTHING
+        ",
+    )
+    .bind(&event.source)
+    .bind(&event.source_event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if key_result.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
     let result = sqlx::query(
         r"
         INSERT INTO raw_source_events (
@@ -29,7 +47,6 @@ pub async fn insert_raw_source_event(
             payload_sha256
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (source, source_event_id) DO NOTHING
         ",
     )
     .bind(&event.source)
@@ -40,9 +57,10 @@ pub async fn insert_raw_source_event(
     .bind(event.received_ts)
     .bind(&event.payload)
     .bind(&event.payload_sha256)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(result.rows_affected())
 }
 
@@ -57,6 +75,24 @@ pub async fn insert_liquidation_event(
     pool: &PgPool,
     event: &LiquidationEvent,
 ) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let key_result = sqlx::query(
+        r"
+        INSERT INTO liquidation_event_keys (source, source_event_id)
+        VALUES ($1, $2)
+        ON CONFLICT (source, source_event_id) DO NOTHING
+        ",
+    )
+    .bind(source_as_str(event.source))
+    .bind(&event.source_event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if key_result.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
     let result = sqlx::query(
         r"
         INSERT INTO liquidation_events (
@@ -73,7 +109,6 @@ pub async fn insert_liquidation_event(
             received_ts
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (source, source_event_id) DO NOTHING
         ",
     )
     .bind(event.event_id)
@@ -87,9 +122,10 @@ pub async fn insert_liquidation_event(
     .bind(event.notional_usd)
     .bind(event.exchange_ts)
     .bind(event.received_ts)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(result.rows_affected())
 }
 
@@ -105,6 +141,31 @@ pub async fn insert_liquidation_events(
     events: &[LiquidationEvent],
 ) -> Result<u64, sqlx::Error> {
     if events.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+    let mut accepted = Vec::with_capacity(events.len());
+    for event in events {
+        let key_result = sqlx::query(
+            r"
+            INSERT INTO liquidation_event_keys (source, source_event_id)
+            VALUES ($1, $2)
+            ON CONFLICT (source, source_event_id) DO NOTHING
+            ",
+        )
+        .bind(source_as_str(event.source))
+        .bind(&event.source_event_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if key_result.rows_affected() == 1 {
+            accepted.push(event);
+        }
+    }
+
+    if accepted.is_empty() {
+        tx.commit().await?;
         return Ok(0);
     }
 
@@ -126,7 +187,7 @@ pub async fn insert_liquidation_events(
         ",
     );
 
-    query.push_values(events, |mut row, event| {
+    query.push_values(accepted, |mut row, event| {
         row.push_bind(event.event_id)
             .push_bind(source_as_str(event.source))
             .push_bind(&event.source_event_id)
@@ -139,9 +200,9 @@ pub async fn insert_liquidation_events(
             .push_bind(event.exchange_ts)
             .push_bind(event.received_ts);
     });
-    query.push(" ON CONFLICT (source, source_event_id) DO NOTHING");
 
-    let result = query.build().execute(pool).await?;
+    let result = query.build().execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(result.rows_affected())
 }
 
