@@ -5,6 +5,8 @@
 /infra/aperag/.env
 /infra/aperag/data/
 /infra/aperag/backups/
+/infra/timescaledb/.env
+/infra/timescaledb/data/
 /docs/reports/**/*.tmp
 /docs/reports/**/*.log
 /docs/reports/aperag/index-metadata.json

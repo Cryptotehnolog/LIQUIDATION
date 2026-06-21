@@ -1,0 +1,26 @@
+name: ${COMPOSE_PROJECT_NAME:-liquidation-timescaledb}
+
+services:
+  liquidation-timescaledb:
+    image: ${LIQUIDATION_TIMESCALE_IMAGE:-timescale/timescaledb:2.17.2-pg16}
+    container_name: liquidation-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-liquidation}
+      POSTGRES_USER: ${POSTGRES_USER:-liquidation}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-liquidation}
+    ports:
+      - "${LIQUIDATION_TIMESCALE_HOST:-127.0.0.1}:${LIQUIDATION_TIMESCALE_PORT:-15433}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - liquidation-timescaledb
+
+networks:
+  liquidation-timescaledb:
+    name: liquidation-timescaledb

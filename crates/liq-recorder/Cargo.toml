@@ -7,7 +7,15 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+liq-domain = { path = "../liq-domain" }
+rust_decimal.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
 
 [lints]
 workspace = true
