@@ -24,21 +24,20 @@ dry-run ok
 
 CI запускает:
 
-- `cargo audit`;
 - `cargo deny`;
 - `gitleaks`.
 
 Локальный запуск:
 
 ```powershell
-cargo audit --deny warnings --ignore RUSTSEC-2023-0071
 cargo deny check advisories bans licenses sources
 docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.28.0 detect --source /repo --redact --verbose
 ```
 
-`RUSTSEC-2023-0071` игнорируется только для `cargo audit`, потому что
-`cargo-audit` сканирует весь `Cargo.lock`, включая inactive optional dependency
-`rsa` из `sqlx`. Active graph дополнительно проверяет `cargo-deny advisories`.
+`cargo audit` не используется как blocking CI gate, пока проект зависит от
+`sqlx` 0.8: `cargo-audit` сканирует весь `Cargo.lock` и видит inactive optional
+dependency `rsa` из `sqlx`, хотя active graph не содержит этот crate.
+RustSec advisories для active graph проверяет `cargo deny`.
 
 ## Recorder Persistence Checks
 

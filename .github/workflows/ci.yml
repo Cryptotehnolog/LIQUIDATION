@@ -28,14 +28,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-      - name: cargo audit
-        # cargo-audit scans the full lockfile, including inactive optional deps.
-        # RUSTSEC-2023-0071 is from sqlx's inactive optional rsa dependency;
-        # cargo-deny advisories below checks the active dependency graph.
-        run: cargo audit --deny warnings --ignore RUSTSEC-2023-0071
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans licenses sources
