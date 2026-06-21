@@ -1,9 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/liq-cli",
     "crates/liq-config",
     "crates/liq-connectors",
     "crates/liq-domain",
+    "crates/liq-recorder",
+    "crates/liq-replay",
 ]
 
 [workspace.package]
