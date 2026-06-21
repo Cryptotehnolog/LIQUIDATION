@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/liq-config",
+    "crates/liq-connectors",
     "crates/liq-domain",
 ]
 

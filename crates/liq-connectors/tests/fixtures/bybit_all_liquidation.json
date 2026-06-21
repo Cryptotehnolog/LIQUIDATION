@@ -1,0 +1,14 @@
+{
+  "topic": "allLiquidation.BTCUSDT",
+  "type": "snapshot",
+  "ts": 1718750000500,
+  "data": [
+    {
+      "T": 1718750000000,
+      "s": "BTCUSDT",
+      "S": "Buy",
+      "v": "0.100",
+      "p": "65000.00"
+    }
+  ]
+}

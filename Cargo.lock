@@ -222,6 +222,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "liq-connectors"
+version = "0.1.0"
+dependencies = [
+ "liq-domain",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "liq-domain"
 version = "0.1.0"
 dependencies = [
