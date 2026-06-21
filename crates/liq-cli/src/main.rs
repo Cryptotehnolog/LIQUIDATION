@@ -4,12 +4,13 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use liq_collector::{
     CollectorRunSettings, CollectorSettings, CollectorSource, SourceProbe, run_live_collector,
-    run_live_probe,
+    run_live_collectors, run_live_probe,
 };
-use liq_recorder::{migrations, schema};
+use liq_recorder::{migrations, repository, schema};
 use liq_replay::{DryRunRequest, validate_dry_run};
 use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::info;
 
 #[derive(Debug, Parser)]
@@ -102,9 +103,9 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit or binance.
-        #[arg(long)]
-        source: String,
+        /// Source id: bybit or binance. Repeat for multi-source runs.
+        #[arg(long = "source", required = true)]
+        source: Vec<String>,
         /// Exchange symbol, e.g. BTCUSDT.
         #[arg(long)]
         symbol: String,
@@ -114,6 +115,9 @@ enum CollectorCommand {
         /// Per-message read timeout in seconds.
         #[arg(long, default_value_t = 30)]
         read_timeout_seconds: u64,
+        /// Maximum time to wait when recorder channel is full.
+        #[arg(long, default_value_t = 5)]
+        channel_send_timeout_seconds: u64,
         /// Raw/canonical insert batch size.
         #[arg(long, default_value_t = 256)]
         batch_size: usize,
@@ -129,6 +133,30 @@ enum CollectorCommand {
         /// Optional runtime limit in seconds for bounded validation runs.
         #[arg(long)]
         max_runtime_seconds: Option<u64>,
+    },
+    /// Print recent collector health rows.
+    Health {
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        /// Optional source id: bybit or binance.
+        #[arg(long)]
+        source: Option<String>,
+        /// Maximum rows to print.
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
+    /// Print compact collector status rows.
+    Status {
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        /// Optional source id: bybit or binance.
+        #[arg(long)]
+        source: Option<String>,
+        /// Maximum rows to print.
+        #[arg(long, default_value_t = 10)]
+        limit: i64,
     },
 }
 
@@ -232,6 +260,7 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             symbol,
             channel_capacity,
             read_timeout_seconds,
+            channel_send_timeout_seconds,
             batch_size,
             batch_flush_interval_seconds,
             health_interval_seconds,
@@ -244,6 +273,7 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
                 symbol,
                 channel_capacity,
                 read_timeout_seconds,
+                channel_send_timeout_seconds,
                 batch_size,
                 batch_flush_interval_seconds,
                 health_interval_seconds,
@@ -251,6 +281,18 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
                 max_runtime_seconds,
             })
             .await?;
+        }
+        CollectorCommand::Health {
+            database_url,
+            source,
+            limit,
+        }
+        | CollectorCommand::Status {
+            database_url,
+            source,
+            limit,
+        } => {
+            print_collector_health(database_url, source, limit).await?;
         }
     }
     Ok(())
@@ -290,10 +332,11 @@ async fn run_collector_probe(
 
 struct CollectorRunArgs {
     database_url: String,
-    source: String,
+    source: Vec<String>,
     symbol: String,
     channel_capacity: usize,
     read_timeout_seconds: u64,
+    channel_send_timeout_seconds: u64,
     batch_size: usize,
     batch_flush_interval_seconds: u64,
     health_interval_seconds: u64,
@@ -302,11 +345,12 @@ struct CollectorRunArgs {
 }
 
 async fn run_collector_service(args: CollectorRunArgs) -> anyhow::Result<()> {
-    let source = parse_collector_source(&args.source)?;
+    let sources = parse_collector_sources(&args.source)?;
     let pool = connect(&args.database_url).await?;
     let settings = CollectorRunSettings {
         channel_capacity: args.channel_capacity,
         read_timeout: Duration::from_secs(args.read_timeout_seconds),
+        channel_send_timeout: Duration::from_secs(args.channel_send_timeout_seconds),
         batch_size: args.batch_size,
         batch_flush_interval: Duration::from_secs(args.batch_flush_interval_seconds),
         health_interval: Duration::from_secs(args.health_interval_seconds),
@@ -321,28 +365,107 @@ async fn run_collector_service(args: CollectorRunArgs) -> anyhow::Result<()> {
         }
     });
 
-    let stats = run_live_collector(
-        pool,
-        SourceProbe::new(source, args.symbol),
-        settings,
-        shutdown_receiver,
-    )
-    .await
-    .context("collector run failed")?;
-    println!(
-        "collector run stopped: received_messages={} normalized_events={} raw_inserted={} canonical_inserted={} reconnects={}",
-        stats.received_messages,
-        stats.normalized_events,
-        stats.raw_inserted,
-        stats.canonical_inserted,
-        stats.reconnects
-    );
+    let probes = sources
+        .into_iter()
+        .map(|source| SourceProbe::new(source, args.symbol.clone()))
+        .collect::<Vec<_>>();
+    let reports = if probes.len() == 1 {
+        let probe = probes
+            .into_iter()
+            .next()
+            .context("collector source list unexpectedly empty")?;
+        let source = probe.source().domain_source().as_str().to_owned();
+        let symbol = probe.symbol().to_owned();
+        let stats = run_live_collector(pool, probe, settings, shutdown_receiver)
+            .await
+            .context("collector run failed")?;
+        vec![liq_collector::CollectorRunReport {
+            source,
+            symbol,
+            status: "ok".to_owned(),
+            stats,
+            error: None,
+        }]
+    } else {
+        run_live_collectors(pool, probes, settings, shutdown_receiver)
+            .await
+            .context("multi-source collector run failed")?
+    };
+
+    for report in &reports {
+        println!(
+            "collector run stopped: source={} symbol={} status={} received_messages={} normalized_events={} raw_inserted={} canonical_inserted={} reconnects={}{}",
+            report.source,
+            report.symbol,
+            report.status,
+            report.stats.received_messages,
+            report.stats.normalized_events,
+            report.stats.raw_inserted,
+            report.stats.canonical_inserted,
+            report.stats.reconnects,
+            report
+                .error
+                .as_ref()
+                .map_or_else(String::new, |error| format!(" error={error}"))
+        );
+    }
     Ok(())
 }
 
 fn parse_collector_source(source: &str) -> anyhow::Result<CollectorSource> {
     CollectorSource::parse(source)
         .with_context(|| format!("unsupported collector source: {source}"))
+}
+
+fn parse_collector_sources(sources: &[String]) -> anyhow::Result<Vec<CollectorSource>> {
+    if sources.is_empty() {
+        anyhow::bail!("at least one collector source is required");
+    }
+    sources
+        .iter()
+        .map(|source| parse_collector_source(source))
+        .collect()
+}
+
+async fn print_collector_health(
+    database_url: String,
+    source: Option<String>,
+    limit: i64,
+) -> anyhow::Result<()> {
+    if let Some(source) = source.as_deref() {
+        parse_collector_source(source)?;
+    }
+    let pool = connect(&database_url).await?;
+    let rows = repository::list_collector_health(&pool, source.as_deref(), limit)
+        .await
+        .context("failed to read collector health")?;
+    println!(
+        "checked_at\tsource\tsymbol\tstatus\tmessages\tevents\traw\tcanonical\treconnects_5m\tlast_latency_ms\tmax_latency_ms"
+    );
+    for row in rows {
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            format_timestamp(row.checked_at),
+            row.source,
+            row.symbol,
+            row.status,
+            row.messages_received,
+            row.normalized_events,
+            row.raw_inserted,
+            row.canonical_inserted,
+            row.reconnects_5m,
+            row.last_latency_ms
+                .map_or_else(|| "-".to_owned(), |value| value.to_string()),
+            row.max_latency_ms
+        );
+    }
+    Ok(())
+}
+
+fn format_timestamp(timestamp: OffsetDateTime) -> String {
+    timestamp
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| timestamp.unix_timestamp().to_string())
 }
 
 async fn connect(database_url: &str) -> anyhow::Result<sqlx::PgPool> {

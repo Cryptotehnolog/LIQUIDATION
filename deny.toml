@@ -23,6 +23,27 @@ allow = [
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
+skip = [
+    # sqlx 0.8, tokio/tungstenite and clap currently require different
+    # generations of these small transitive crates. Keep the allowlist explicit
+    # so new duplicate crates still surface during CI.
+    { name = "getrandom", version = "0.2.17" },
+    { name = "hashbrown", version = "0.15.5" },
+    { name = "rand", version = "0.8.6" },
+    { name = "rand_chacha", version = "0.3.1" },
+    { name = "rand_core", version = "0.6.4" },
+    { name = "redox_syscall", version = "0.5.18" },
+    { name = "windows-sys", version = "0.48.0" },
+    { name = "windows-sys", version = "0.52.0" },
+    { name = "windows-targets", version = "0.48.5" },
+    { name = "windows_aarch64_gnullvm", version = "0.48.5" },
+    { name = "windows_aarch64_msvc", version = "0.48.5" },
+    { name = "windows_i686_gnu", version = "0.48.5" },
+    { name = "windows_i686_msvc", version = "0.48.5" },
+    { name = "windows_x86_64_gnu", version = "0.48.5" },
+    { name = "windows_x86_64_gnullvm", version = "0.48.5" },
+    { name = "windows_x86_64_msvc", version = "0.48.5" },
+]
 
 [sources]
 unknown-registry = "deny"

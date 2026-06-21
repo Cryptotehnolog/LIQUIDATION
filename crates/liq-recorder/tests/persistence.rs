@@ -141,6 +141,15 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
         .await
         .expect("collector health row must be readable");
         assert_eq!(persisted, (2, 1, Some(250), 250));
+
+        let latest_health = repository::list_collector_health(&pool, Some("bybit"), 500)
+            .await
+            .expect("collector health rows must be listable");
+        assert!(
+            latest_health
+                .iter()
+                .any(|row| row.source == "bybit" && row.symbol == health.symbol)
+        );
     });
 }
 

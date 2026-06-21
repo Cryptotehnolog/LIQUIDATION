@@ -4,7 +4,7 @@ pub mod runtime;
 pub mod source;
 
 pub use runtime::{
-    CollectorRunSettings, CollectorSettings, CollectorStats, ReconnectPolicy, run_live_collector,
-    run_live_probe,
+    CollectorRunReport, CollectorRunSettings, CollectorSettings, CollectorStats, ReconnectPolicy,
+    run_live_collector, run_live_collectors, run_live_probe,
 };
 pub use source::{CollectorSource, SourceProbe};

@@ -323,6 +323,107 @@ pub async fn insert_collector_health(
     Ok(result.rows_affected())
 }
 
+/// List recent collector health rows, optionally filtered by source.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the query.
+pub async fn list_collector_health(
+    pool: &PgPool,
+    source: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CollectorHealthRecord>, sqlx::Error> {
+    let limit = limit.clamp(1, 500);
+    let rows = if let Some(source) = source {
+        sqlx::query_as::<_, CollectorHealthRow>(
+            r"
+            SELECT
+                source,
+                symbol,
+                status,
+                reconnects_5m,
+                last_event_ts,
+                checked_at,
+                messages_received,
+                normalized_events,
+                raw_inserted,
+                canonical_inserted,
+                last_latency_ms,
+                max_latency_ms
+            FROM collector_health
+            WHERE source = $1
+            ORDER BY checked_at DESC
+            LIMIT $2
+            ",
+        )
+        .bind(source)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, CollectorHealthRow>(
+            r"
+            SELECT
+                source,
+                symbol,
+                status,
+                reconnects_5m,
+                last_event_ts,
+                checked_at,
+                messages_received,
+                normalized_events,
+                raw_inserted,
+                canonical_inserted,
+                last_latency_ms,
+                max_latency_ms
+            FROM collector_health
+            ORDER BY checked_at DESC
+            LIMIT $1
+            ",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows.into_iter().map(CollectorHealthRecord::from).collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct CollectorHealthRow {
+    source: String,
+    symbol: String,
+    status: String,
+    reconnects_5m: i32,
+    last_event_ts: Option<time::OffsetDateTime>,
+    checked_at: time::OffsetDateTime,
+    messages_received: i64,
+    normalized_events: i64,
+    raw_inserted: i64,
+    canonical_inserted: i64,
+    last_latency_ms: Option<i64>,
+    max_latency_ms: i64,
+}
+
+impl From<CollectorHealthRow> for CollectorHealthRecord {
+    fn from(row: CollectorHealthRow) -> Self {
+        Self {
+            source: row.source,
+            symbol: row.symbol,
+            status: row.status,
+            reconnects_5m: row.reconnects_5m,
+            last_event_ts: row.last_event_ts,
+            checked_at: row.checked_at,
+            messages_received: row.messages_received,
+            normalized_events: row.normalized_events,
+            raw_inserted: row.raw_inserted,
+            canonical_inserted: row.canonical_inserted,
+            last_latency_ms: row.last_latency_ms,
+            max_latency_ms: row.max_latency_ms,
+        }
+    }
+}
+
 fn source_as_str(source: Source) -> &'static str {
     source.as_str()
 }

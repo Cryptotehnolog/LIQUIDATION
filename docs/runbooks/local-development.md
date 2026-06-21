@@ -40,6 +40,9 @@ docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.28.0 detect --source /
 `RUSTSEC-2023-0071`: `cargo-audit` сканирует весь `Cargo.lock` и видит inactive
 optional dependency `rsa` из `sqlx`, хотя active graph не содержит этот crate.
 RustSec advisories для active graph дополнительно проверяет `cargo deny`.
+Known duplicate transitive crates от `sqlx`, `tokio`, `tungstenite` и `clap`
+зафиксированы точечным allowlist в `deny.toml`; новые duplicate crates всё ещё
+будут видны в CI.
 
 ## Recorder Persistence Checks
 
@@ -132,6 +135,25 @@ cargo run -p liq-cli -- collector run --source bybit --symbol BTCUSDT --max-runt
 ```
 
 Команда должна завершиться сама и записать строки `collector_health`.
+
+Для bounded проверки multi-source collector mode:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector run --source bybit --source binance --symbol BTCUSDT --max-runtime-seconds 5 --read-timeout-seconds 2 --health-interval-seconds 1 --batch-flush-interval-seconds 1 --batch-size 4
+```
+
+Для просмотра последних health rows без ручного `psql`:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector status --limit 10
+cargo run -p liq-cli -- collector health --source bybit --limit 20
+```
+
+`status=backpressure` означает, что bounded recorder channel оставался полным
+дольше `--channel-send-timeout-seconds`. `status=circuit_open` означает, что
+источник превысил reconnect budget за rolling 5 минут.
 
 ## Heavy Tests
 

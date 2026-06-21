@@ -13,6 +13,7 @@ liq-collector = { path = "../liq-collector", version = "0.1.0" }
 liq-recorder = { path = "../liq-recorder", version = "0.1.0" }
 liq-replay = { path = "../liq-replay", version = "0.1.0" }
 sqlx.workspace = true
+time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

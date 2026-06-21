@@ -18,6 +18,7 @@ use sqlx::PgPool;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
@@ -57,6 +58,8 @@ pub struct CollectorSettings {
     pub min_messages: usize,
     /// Per-message read timeout.
     pub read_timeout: Duration,
+    /// Maximum time to wait when the recorder channel is full.
+    pub channel_send_timeout: Duration,
     /// Source reconnect policy.
     pub reconnect: ReconnectPolicy,
 }
@@ -68,6 +71,7 @@ impl Default for CollectorSettings {
             max_messages: 1,
             min_messages: 0,
             read_timeout: Duration::from_secs(30),
+            channel_send_timeout: Duration::from_secs(5),
             reconnect: ReconnectPolicy::default(),
         }
     }
@@ -80,6 +84,8 @@ pub struct CollectorRunSettings {
     pub channel_capacity: usize,
     /// Per-message read timeout.
     pub read_timeout: Duration,
+    /// Maximum time to wait when the recorder channel is full.
+    pub channel_send_timeout: Duration,
     /// Source reconnect policy.
     pub reconnect: ReconnectPolicy,
     /// Raw and canonical insert batch size.
@@ -99,6 +105,7 @@ impl Default for CollectorRunSettings {
         Self {
             channel_capacity: 1024,
             read_timeout: Duration::from_secs(30),
+            channel_send_timeout: Duration::from_secs(5),
             reconnect: ReconnectPolicy::default(),
             batch_size: 256,
             batch_flush_interval: Duration::from_secs(2),
@@ -124,6 +131,11 @@ impl CollectorRunSettings {
         if self.read_timeout.is_zero() {
             return Err(CollectorError::InvalidSetting(
                 "read_timeout must be greater than zero",
+            ));
+        }
+        if self.channel_send_timeout.is_zero() {
+            return Err(CollectorError::InvalidSetting(
+                "channel_send_timeout must be greater than zero",
             ));
         }
         if self.batch_size == 0 {
@@ -182,6 +194,11 @@ impl CollectorSettings {
                 "read_timeout must be greater than zero",
             ));
         }
+        if self.channel_send_timeout.is_zero() {
+            return Err(CollectorError::InvalidSetting(
+                "channel_send_timeout must be greater than zero",
+            ));
+        }
         if self.reconnect.initial_backoff.is_zero() {
             return Err(CollectorError::InvalidSetting(
                 "initial_backoff must be greater than zero",
@@ -215,6 +232,21 @@ pub struct CollectorStats {
     pub last_latency_ms: Option<i64>,
     /// Maximum observed exchange-to-receive latency in milliseconds.
     pub max_latency_ms: i64,
+}
+
+/// Per-source result returned by a multi-source collector run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectorRunReport {
+    /// Source venue or provider id.
+    pub source: String,
+    /// Exchange symbol.
+    pub symbol: String,
+    /// Final source status, e.g. `ok`, `failed`, `circuit_open`.
+    pub status: String,
+    /// Source counters captured by the run.
+    pub stats: CollectorStats,
+    /// Error message when the source failed.
+    pub error: Option<String>,
 }
 
 impl CollectorStats {
@@ -281,6 +313,9 @@ pub enum CollectorError {
     /// The producer could not send a payload to the recorder.
     #[error("collector channel closed")]
     ChannelClosed,
+    /// The recorder channel stayed full past the configured timeout.
+    #[error("collector channel send timed out after {0:?}")]
+    BackpressureTimeout(Duration),
     /// Connector normalization failed.
     #[error("connector normalization failed")]
     Connector(#[from] liq_connectors::ConnectorError),
@@ -377,28 +412,82 @@ pub async fn run_live_collector(
         Ok(producer_stats) => {
             stats.received_messages = producer_stats.received_messages;
             stats.reconnects = producer_stats.reconnects;
-            write_health(
-                &pool,
-                &probe,
-                &stats,
-                "ok",
-                reconnect_receiver.borrow().reconnects_5m,
-            )
-            .await?;
+            let reconnects_5m = reconnect_receiver.borrow().reconnects_5m;
+            write_health(&pool, &probe, &stats, "ok", reconnects_5m).await?;
             Ok(stats)
         }
         Err(error) => {
+            let reconnects_5m = reconnect_receiver.borrow().reconnects_5m;
             write_health(
                 &pool,
                 &probe,
                 &stats,
-                "failed",
-                reconnect_receiver.borrow().reconnects_5m,
+                health_status_for_error(&error),
+                reconnects_5m,
             )
             .await?;
             Err(error)
         }
     }
+}
+
+/// Run multiple live collectors in parallel with source-specific health rows.
+///
+/// # Errors
+///
+/// Returns an error when settings are invalid, no source is configured, or a
+/// collector task cannot be joined.
+pub async fn run_live_collectors(
+    pool: PgPool,
+    probes: Vec<SourceProbe>,
+    settings: CollectorRunSettings,
+    shutdown: watch::Receiver<bool>,
+) -> Result<Vec<CollectorRunReport>, CollectorError> {
+    settings.validate()?;
+    if probes.is_empty() {
+        return Err(CollectorError::InvalidSetting(
+            "at least one source must be configured",
+        ));
+    }
+
+    let mut tasks = JoinSet::new();
+    for probe in probes {
+        let source = probe.source().domain_source().as_str().to_owned();
+        let symbol = probe.symbol().to_owned();
+        let pool = pool.clone();
+        let settings = settings.clone();
+        let shutdown = shutdown.clone();
+        tasks.spawn(async move {
+            match run_live_collector(pool, probe, settings, shutdown).await {
+                Ok(stats) => CollectorRunReport {
+                    source,
+                    symbol,
+                    status: "ok".to_owned(),
+                    stats,
+                    error: None,
+                },
+                Err(error) => CollectorRunReport {
+                    source,
+                    symbol,
+                    status: health_status_for_error(&error).to_owned(),
+                    stats: CollectorStats::default(),
+                    error: Some(error.to_string()),
+                },
+            }
+        });
+    }
+
+    let mut reports = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        reports.push(result?);
+    }
+    reports.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+
+    Ok(reports)
 }
 
 async fn read_service_with_reconnects(
@@ -509,12 +598,12 @@ async fn read_service_once(
 
         match message.map_err(websocket_error)? {
             Message::Text(text) => {
-                send_payload(sender, text.to_string()).await?;
+                send_payload(sender, text.to_string(), settings.channel_send_timeout).await?;
                 stats.received_messages += 1;
             }
             Message::Binary(bytes) => {
                 if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                    send_payload(sender, text).await?;
+                    send_payload(sender, text, settings.channel_send_timeout).await?;
                     stats.received_messages += 1;
                 }
             }
@@ -583,12 +672,12 @@ async fn read_once(
 
         match message.map_err(websocket_error)? {
             Message::Text(text) => {
-                send_payload(sender, text.to_string()).await?;
+                send_payload(sender, text.to_string(), settings.channel_send_timeout).await?;
                 stats.received_messages += 1;
             }
             Message::Binary(bytes) => {
                 if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                    send_payload(sender, text).await?;
+                    send_payload(sender, text, settings.channel_send_timeout).await?;
                     stats.received_messages += 1;
                 }
             }
@@ -613,14 +702,25 @@ fn install_rustls_provider() {
 async fn send_payload(
     sender: &mpsc::Sender<ReceivedPayload>,
     payload: String,
+    channel_send_timeout: Duration,
 ) -> Result<(), CollectorError> {
-    sender
-        .send(ReceivedPayload {
-            payload,
-            received_ts: OffsetDateTime::now_utc(),
-        })
-        .await
-        .map_err(|_| CollectorError::ChannelClosed)
+    let item = ReceivedPayload {
+        payload,
+        received_ts: OffsetDateTime::now_utc(),
+    };
+    match tokio::time::timeout(channel_send_timeout, sender.send(item)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(CollectorError::ChannelClosed),
+        Err(_) => Err(CollectorError::BackpressureTimeout(channel_send_timeout)),
+    }
+}
+
+fn health_status_for_error(error: &CollectorError) -> &'static str {
+    match error {
+        CollectorError::ReconnectCircuitOpen { .. } => "circuit_open",
+        CollectorError::BackpressureTimeout(_) => "backpressure",
+        _ => "failed",
+    }
 }
 
 async fn record_payloads(
@@ -672,14 +772,8 @@ async fn record_payloads_batched(
             }
             Ok(None) => {
                 flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
-                write_health(
-                    pool,
-                    probe,
-                    &stats,
-                    "ok",
-                    reconnect_receiver.borrow().reconnects_5m,
-                )
-                .await?;
+                let reconnects_5m = reconnect_receiver.borrow().reconnects_5m;
+                write_health(pool, probe, &stats, "ok", reconnects_5m).await?;
                 return Ok(stats);
             }
             Err(_) => {
@@ -689,14 +783,8 @@ async fn record_payloads_batched(
 
         if last_health.elapsed() >= health_interval {
             flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
-            write_health(
-                pool,
-                probe,
-                &stats,
-                "ok",
-                reconnect_receiver.borrow().reconnects_5m,
-            )
-            .await?;
+            let reconnects_5m = reconnect_receiver.borrow().reconnects_5m;
+            write_health(pool, probe, &stats, "ok", reconnects_5m).await?;
             last_health = Instant::now();
         }
     }
@@ -829,6 +917,53 @@ mod tests {
 
         let err = settings.validate().expect_err("zero batch size must fail");
         assert!(err.to_string().contains("batch_size"));
+    }
+
+    #[test]
+    fn run_settings_rejects_zero_channel_send_timeout() {
+        let settings = CollectorRunSettings {
+            channel_send_timeout: Duration::ZERO,
+            ..CollectorRunSettings::default()
+        };
+
+        let err = settings
+            .validate()
+            .expect_err("zero channel_send_timeout must fail");
+        assert!(err.to_string().contains("channel_send_timeout"));
+    }
+
+    #[test]
+    fn multi_source_runner_rejects_empty_probe_list() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime must build");
+
+        runtime.block_on(async {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://liquidation:liquidation@127.0.0.1:15433/liquidation")
+                .expect("lazy pool must build");
+            let (_, shutdown) = watch::channel(false);
+
+            let err =
+                run_live_collectors(pool, Vec::new(), CollectorRunSettings::default(), shutdown)
+                    .await
+                    .expect_err("empty multi-source run must fail");
+
+            assert!(err.to_string().contains("at least one source"));
+        });
+    }
+
+    #[test]
+    fn maps_collector_errors_to_health_statuses() {
+        assert_eq!(
+            health_status_for_error(&CollectorError::ReconnectCircuitOpen { attempts: 6 }),
+            "circuit_open"
+        );
+        assert_eq!(
+            health_status_for_error(&CollectorError::BackpressureTimeout(Duration::from_secs(1))),
+            "backpressure"
+        );
     }
 
     #[test]
