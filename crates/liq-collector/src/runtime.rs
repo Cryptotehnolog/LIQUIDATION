@@ -1,16 +1,23 @@
 //! Bounded live collector runtime and persistence path.
 
-use std::{sync::Once, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::Once,
+    time::{Duration, Instant},
+};
 
 use futures_util::{SinkExt, StreamExt};
 use liq_domain::{LiquidationEvent, SourceQuality};
-use liq_recorder::{records::RawSourceEvent, repository};
+use liq_recorder::{
+    records::{CollectorHealthRecord, RawSourceEvent},
+    repository,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use thiserror::Error;
 use time::OffsetDateTime;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
@@ -63,6 +70,88 @@ impl Default for CollectorSettings {
             read_timeout: Duration::from_secs(30),
             reconnect: ReconnectPolicy::default(),
         }
+    }
+}
+
+/// Long-running collector service settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectorRunSettings {
+    /// Bounded channel capacity between WebSocket reader and recorder.
+    pub channel_capacity: usize,
+    /// Per-message read timeout.
+    pub read_timeout: Duration,
+    /// Source reconnect policy.
+    pub reconnect: ReconnectPolicy,
+    /// Raw and canonical insert batch size.
+    pub batch_size: usize,
+    /// Maximum time to wait before flushing a partial batch.
+    pub batch_flush_interval: Duration,
+    /// Interval for writing collector health rows.
+    pub health_interval: Duration,
+    /// Optional raw message limit for test and bounded runs.
+    pub max_messages: Option<usize>,
+    /// Optional runtime limit for test and bounded runs.
+    pub max_runtime: Option<Duration>,
+}
+
+impl Default for CollectorRunSettings {
+    fn default() -> Self {
+        Self {
+            channel_capacity: 1024,
+            read_timeout: Duration::from_secs(30),
+            reconnect: ReconnectPolicy::default(),
+            batch_size: 256,
+            batch_flush_interval: Duration::from_secs(2),
+            health_interval: Duration::from_secs(30),
+            max_messages: None,
+            max_runtime: None,
+        }
+    }
+}
+
+impl CollectorRunSettings {
+    /// Validate settings before opening a long-running live connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when limits would make the runtime unsafe or useless.
+    pub fn validate(&self) -> Result<(), CollectorError> {
+        if self.channel_capacity == 0 {
+            return Err(CollectorError::InvalidSetting(
+                "channel_capacity must be greater than zero",
+            ));
+        }
+        if self.read_timeout.is_zero() {
+            return Err(CollectorError::InvalidSetting(
+                "read_timeout must be greater than zero",
+            ));
+        }
+        if self.batch_size == 0 {
+            return Err(CollectorError::InvalidSetting(
+                "batch_size must be greater than zero",
+            ));
+        }
+        if self.batch_flush_interval.is_zero() {
+            return Err(CollectorError::InvalidSetting(
+                "batch_flush_interval must be greater than zero",
+            ));
+        }
+        if self.health_interval.is_zero() {
+            return Err(CollectorError::InvalidSetting(
+                "health_interval must be greater than zero",
+            ));
+        }
+        if self.reconnect.initial_backoff.is_zero() {
+            return Err(CollectorError::InvalidSetting(
+                "initial_backoff must be greater than zero",
+            ));
+        }
+        if self.reconnect.max_backoff < self.reconnect.initial_backoff {
+            return Err(CollectorError::InvalidSetting(
+                "max_backoff must be greater than or equal to initial_backoff",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -120,6 +209,55 @@ pub struct CollectorStats {
     pub canonical_inserted: u64,
     /// Reconnect attempts made.
     pub reconnects: u64,
+    /// Last canonical event timestamp observed by the collector.
+    pub last_event_ts: Option<OffsetDateTime>,
+    /// Last observed exchange-to-receive latency in milliseconds.
+    pub last_latency_ms: Option<i64>,
+    /// Maximum observed exchange-to-receive latency in milliseconds.
+    pub max_latency_ms: i64,
+}
+
+impl CollectorStats {
+    /// Observe canonical events and update event/latency counters.
+    pub fn observe_events(&mut self, events: &[LiquidationEvent]) {
+        self.normalized_events += events.len() as u64;
+        for event in events {
+            self.last_event_ts = Some(event.exchange_ts);
+            let latency_ms = saturating_i128_to_i64(event.latency_ms());
+            self.last_latency_ms = Some(latency_ms);
+            self.max_latency_ms = self.max_latency_ms.max(latency_ms);
+        }
+    }
+
+    /// Build a durable health row from current stats.
+    #[must_use]
+    pub fn to_health_record(
+        &self,
+        probe: &SourceProbe,
+        status: impl Into<String>,
+        reconnects_5m: i32,
+        checked_at: OffsetDateTime,
+    ) -> CollectorHealthRecord {
+        CollectorHealthRecord {
+            source: probe.source().domain_source().as_str().to_owned(),
+            symbol: probe.symbol().to_owned(),
+            status: status.into(),
+            reconnects_5m,
+            last_event_ts: self.last_event_ts,
+            checked_at,
+            messages_received: saturating_u64_to_i64(self.received_messages),
+            normalized_events: saturating_u64_to_i64(self.normalized_events),
+            raw_inserted: saturating_u64_to_i64(self.raw_inserted),
+            canonical_inserted: saturating_u64_to_i64(self.canonical_inserted),
+            last_latency_ms: self.last_latency_ms,
+            max_latency_ms: self.max_latency_ms,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ReconnectSnapshot {
+    reconnects_5m: i32,
 }
 
 #[derive(Debug)]
@@ -155,6 +293,12 @@ pub enum CollectorError {
     /// A task failed to join.
     #[error("collector task join failed")]
     Join(#[from] tokio::task::JoinError),
+    /// Reconnect circuit breaker opened.
+    #[error("reconnect circuit breaker opened after {attempts} reconnects in 5 minutes")]
+    ReconnectCircuitOpen {
+        /// Reconnect attempts inside the rolling window.
+        attempts: usize,
+    },
 }
 
 /// Run a bounded live WebSocket probe and persist raw plus canonical events.
@@ -184,6 +328,200 @@ pub async fn run_live_probe(
     stats.reconnects = producer_stats.reconnects;
 
     Ok(stats)
+}
+
+/// Run a long-running live collector until shutdown or configured run limits.
+///
+/// # Errors
+///
+/// Returns an error when settings are invalid, the source fails past reconnect
+/// policy, or recorder persistence fails.
+pub async fn run_live_collector(
+    pool: PgPool,
+    probe: SourceProbe,
+    settings: CollectorRunSettings,
+    shutdown: watch::Receiver<bool>,
+) -> Result<CollectorStats, CollectorError> {
+    settings.validate()?;
+    install_rustls_provider();
+
+    let (sender, receiver) = mpsc::channel(settings.channel_capacity);
+    let (reconnect_sender, reconnect_receiver) = watch::channel(ReconnectSnapshot::default());
+    let producer_probe = probe.clone();
+    let producer_settings = settings.clone();
+    let producer_shutdown = shutdown.clone();
+
+    let producer = tokio::spawn(async move {
+        read_service_with_reconnects(
+            producer_probe,
+            producer_settings,
+            sender,
+            reconnect_sender,
+            producer_shutdown,
+        )
+        .await
+    });
+
+    let mut stats = record_payloads_batched(
+        &pool,
+        &probe,
+        receiver,
+        settings.batch_size,
+        settings.batch_flush_interval,
+        settings.health_interval,
+        reconnect_receiver.clone(),
+    )
+    .await?;
+
+    match producer.await? {
+        Ok(producer_stats) => {
+            stats.received_messages = producer_stats.received_messages;
+            stats.reconnects = producer_stats.reconnects;
+            write_health(
+                &pool,
+                &probe,
+                &stats,
+                "ok",
+                reconnect_receiver.borrow().reconnects_5m,
+            )
+            .await?;
+            Ok(stats)
+        }
+        Err(error) => {
+            write_health(
+                &pool,
+                &probe,
+                &stats,
+                "failed",
+                reconnect_receiver.borrow().reconnects_5m,
+            )
+            .await?;
+            Err(error)
+        }
+    }
+}
+
+async fn read_service_with_reconnects(
+    probe: SourceProbe,
+    settings: CollectorRunSettings,
+    sender: mpsc::Sender<ReceivedPayload>,
+    reconnect_sender: watch::Sender<ReconnectSnapshot>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<CollectorStats, CollectorError> {
+    let mut stats = CollectorStats::default();
+    let mut reconnects = VecDeque::new();
+    let mut backoff = settings.reconnect.initial_backoff;
+    let started_at = Instant::now();
+
+    loop {
+        match read_service_once(
+            &probe,
+            &settings,
+            &sender,
+            &mut stats,
+            shutdown.clone(),
+            started_at,
+        )
+        .await
+        {
+            Ok(()) => return Ok(stats),
+            Err(error) => {
+                let now = Instant::now();
+                reconnects.push_back(now);
+                while reconnects
+                    .front()
+                    .is_some_and(|attempt| now.duration_since(*attempt) > Duration::from_secs(300))
+                {
+                    reconnects.pop_front();
+                }
+                stats.reconnects += 1;
+                let reconnects_5m = reconnects.len();
+                let _ = reconnect_sender.send(ReconnectSnapshot {
+                    reconnects_5m: saturating_usize_to_i32(reconnects_5m),
+                });
+                if reconnects_5m > usize::from(settings.reconnect.max_reconnects) {
+                    return Err(CollectorError::ReconnectCircuitOpen {
+                        attempts: reconnects_5m,
+                    });
+                }
+
+                warn!(
+                    source = ?probe.source(),
+                    symbol = probe.symbol(),
+                    reconnects_5m,
+                    error = %error,
+                    "live collector reconnecting"
+                );
+
+                tokio::time::sleep(backoff).await;
+                if *shutdown.borrow() {
+                    return Ok(stats);
+                }
+                backoff = (backoff * 2).min(settings.reconnect.max_backoff);
+            }
+        }
+    }
+}
+
+async fn read_service_once(
+    probe: &SourceProbe,
+    settings: &CollectorRunSettings,
+    sender: &mpsc::Sender<ReceivedPayload>,
+    stats: &mut CollectorStats,
+    shutdown: watch::Receiver<bool>,
+    started_at: Instant,
+) -> Result<(), CollectorError> {
+    let url = probe.websocket_url();
+    let (mut socket, _) = connect_async(&url).await.map_err(websocket_error)?;
+    info!(url, "websocket connected");
+
+    if let Some(message) = probe.subscribe_message() {
+        socket
+            .send(Message::Text(message.into()))
+            .await
+            .map_err(websocket_error)?;
+    }
+
+    loop {
+        if *shutdown.borrow() {
+            return Ok(());
+        }
+        if settings
+            .max_runtime
+            .is_some_and(|limit| started_at.elapsed() >= limit)
+        {
+            return Ok(());
+        }
+        if settings
+            .max_messages
+            .is_some_and(|limit| stats.received_messages >= limit as u64)
+        {
+            return Ok(());
+        }
+
+        let Some(message) = (match tokio::time::timeout(settings.read_timeout, socket.next()).await
+        {
+            Ok(message) => message,
+            Err(_) => continue,
+        }) else {
+            return Ok(());
+        };
+
+        match message.map_err(websocket_error)? {
+            Message::Text(text) => {
+                send_payload(sender, text.to_string()).await?;
+                stats.received_messages += 1;
+            }
+            Message::Binary(bytes) => {
+                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                    send_payload(sender, text).await?;
+                    stats.received_messages += 1;
+                }
+            }
+            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            Message::Close(_) => return Ok(()),
+        }
+    }
 }
 
 async fn read_with_reconnects(
@@ -293,7 +631,7 @@ async fn record_payloads(
     let mut stats = CollectorStats::default();
     while let Some(received) = receiver.recv().await {
         let events = probe.normalize_payload(&received.payload, received.received_ts)?;
-        stats.normalized_events += events.len() as u64;
+        stats.observe_events(&events);
         for event in events {
             let raw = raw_event_from_payload(&event, &received.payload)?;
             stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
@@ -302,6 +640,101 @@ async fn record_payloads(
     }
 
     Ok(stats)
+}
+
+async fn record_payloads_batched(
+    pool: &PgPool,
+    probe: &SourceProbe,
+    mut receiver: mpsc::Receiver<ReceivedPayload>,
+    batch_size: usize,
+    batch_flush_interval: Duration,
+    health_interval: Duration,
+    reconnect_receiver: watch::Receiver<ReconnectSnapshot>,
+) -> Result<CollectorStats, CollectorError> {
+    let mut stats = CollectorStats::default();
+    let mut raw_batch = Vec::with_capacity(batch_size);
+    let mut canonical_batch = Vec::with_capacity(batch_size);
+    let mut last_health = Instant::now();
+
+    loop {
+        match tokio::time::timeout(batch_flush_interval, receiver.recv()).await {
+            Ok(Some(payload_item)) => {
+                let events =
+                    probe.normalize_payload(&payload_item.payload, payload_item.received_ts)?;
+                stats.observe_events(&events);
+                for event in events {
+                    raw_batch.push(raw_event_from_payload(&event, &payload_item.payload)?);
+                    canonical_batch.push(event);
+                }
+                if raw_batch.len() >= batch_size || canonical_batch.len() >= batch_size {
+                    flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+                }
+            }
+            Ok(None) => {
+                flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+                write_health(
+                    pool,
+                    probe,
+                    &stats,
+                    "ok",
+                    reconnect_receiver.borrow().reconnects_5m,
+                )
+                .await?;
+                return Ok(stats);
+            }
+            Err(_) => {
+                flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+            }
+        }
+
+        if last_health.elapsed() >= health_interval {
+            flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+            write_health(
+                pool,
+                probe,
+                &stats,
+                "ok",
+                reconnect_receiver.borrow().reconnects_5m,
+            )
+            .await?;
+            last_health = Instant::now();
+        }
+    }
+}
+
+async fn flush_batches(
+    pool: &PgPool,
+    raw_batch: &mut Vec<RawSourceEvent>,
+    canonical_batch: &mut Vec<LiquidationEvent>,
+    stats: &mut CollectorStats,
+) -> Result<(), CollectorError> {
+    if !raw_batch.is_empty() {
+        stats.raw_inserted += repository::insert_raw_source_events(pool, raw_batch).await?;
+        raw_batch.clear();
+    }
+    if !canonical_batch.is_empty() {
+        stats.canonical_inserted +=
+            repository::insert_liquidation_events(pool, canonical_batch).await?;
+        canonical_batch.clear();
+    }
+    Ok(())
+}
+
+async fn write_health(
+    pool: &PgPool,
+    probe: &SourceProbe,
+    stats: &CollectorStats,
+    health_status: &str,
+    reconnects_5m: i32,
+) -> Result<(), CollectorError> {
+    let health = stats.to_health_record(
+        probe,
+        health_status,
+        reconnects_5m,
+        OffsetDateTime::now_utc(),
+    );
+    repository::insert_collector_health(pool, &health).await?;
+    Ok(())
 }
 
 fn raw_event_from_payload(
@@ -327,6 +760,24 @@ fn source_quality_as_str(source_quality: SourceQuality) -> &'static str {
         SourceQuality::SnapshotOnly => "snapshot_only",
         SourceQuality::Derived => "derived",
     }
+}
+
+fn saturating_u64_to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn saturating_usize_to_i32(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+fn saturating_i128_to_i64(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or_else(|_| {
+        if value.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
 }
 
 fn sha256_hex(input: &[u8]) -> String {
@@ -370,6 +821,17 @@ mod tests {
     }
 
     #[test]
+    fn run_settings_rejects_zero_batch_size() {
+        let settings = CollectorRunSettings {
+            batch_size: 0,
+            ..CollectorRunSettings::default()
+        };
+
+        let err = settings.validate().expect_err("zero batch size must fail");
+        assert!(err.to_string().contains("batch_size"));
+    }
+
+    #[test]
     fn builds_raw_event_with_payload_checksum() {
         let event = LiquidationEvent {
             event_id: Uuid::nil(),
@@ -395,8 +857,114 @@ mod tests {
     }
 
     #[test]
+    fn stats_project_to_health_record_with_latency_metrics() {
+        let probe = SourceProbe::bybit("BTCUSDT");
+        let exchange_ts = OffsetDateTime::UNIX_EPOCH;
+        let received_ts = exchange_ts + time::Duration::milliseconds(350);
+        let event = LiquidationEvent {
+            event_id: Uuid::nil(),
+            source: Source::Bybit,
+            source_event_id: "bybit:test".to_owned(),
+            source_quality: SourceQuality::AllEvents,
+            symbol: "BTCUSDT".to_owned(),
+            side: LiquidationSide::Long,
+            price: Decimal::new(6_500_000, 2),
+            quantity: Decimal::new(100, 3),
+            notional_usd: Decimal::new(650_000, 2),
+            exchange_ts,
+            received_ts,
+        };
+        let mut stats = CollectorStats {
+            received_messages: 2,
+            raw_inserted: 1,
+            canonical_inserted: 1,
+            ..CollectorStats::default()
+        };
+        stats.observe_events(&[event]);
+
+        let health = stats.to_health_record(&probe, "ok", 2, received_ts);
+
+        assert_eq!(health.source, "bybit");
+        assert_eq!(health.symbol, "BTCUSDT");
+        assert_eq!(health.messages_received, 2);
+        assert_eq!(health.normalized_events, 1);
+        assert_eq!(health.last_latency_ms, Some(350));
+        assert_eq!(health.max_latency_ms, 350);
+        assert_eq!(health.reconnects_5m, 2);
+    }
+
+    #[test]
     fn rustls_provider_install_is_idempotent() {
         install_rustls_provider();
         install_rustls_provider();
+    }
+
+    #[test]
+    #[ignore = "scheduled heavy test; requires DATABASE_URL"]
+    fn mock_collector_stability_records_every_synthetic_event() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            eprintln!("skipping collector stability test: DATABASE_URL is not set");
+            return;
+        };
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime must build");
+
+        runtime.block_on(async {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&database_url)
+                .await
+                .expect("database must be reachable");
+            liq_recorder::migrations::run(&pool)
+                .await
+                .expect("migrations must run");
+
+            let probe = SourceProbe::bybit("BTCUSDT");
+            let (sender, receiver) = mpsc::channel(512);
+            let base_ts = unique_timestamp_ms();
+            for index in 0..250_i64 {
+                let payload = format!(
+                    r#"{{"topic":"allLiquidation.BTCUSDT","data":[{{"T":{},"s":"BTCUSDT","S":"Buy","v":"0.001","p":"65000"}}]}}"#,
+                    base_ts + index
+                );
+                sender
+                    .send(ReceivedPayload {
+                        payload,
+                        received_ts: OffsetDateTime::now_utc(),
+                    })
+                    .await
+                    .expect("receiver must be open");
+            }
+            drop(sender);
+
+            let (_, reconnect_receiver) = watch::channel(ReconnectSnapshot::default());
+            let stats = record_payloads_batched(
+                &pool,
+                &probe,
+                receiver,
+                64,
+                Duration::from_millis(50),
+                Duration::from_secs(60),
+                reconnect_receiver,
+            )
+            .await
+            .expect("mock collector stability run must succeed");
+
+            assert_eq!(stats.normalized_events, 250);
+            assert_eq!(stats.raw_inserted, 250);
+            assert_eq!(stats.canonical_inserted, 250);
+            assert!(stats.max_latency_ms >= 0);
+        });
+    }
+
+    fn unique_timestamp_ms() -> i64 {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time must be after unix epoch")
+            .as_millis();
+        i64::try_from(millis).unwrap_or(i64::MAX - 10_000)
     }
 }

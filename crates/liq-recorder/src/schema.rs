@@ -141,5 +141,29 @@ fn expected_contracts() -> &'static [ColumnContract] {
             data_type: "text",
             nullable: false,
         },
+        ColumnContract {
+            table: "collector_health",
+            column: "messages_received",
+            data_type: "bigint",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "collector_health",
+            column: "normalized_events",
+            data_type: "bigint",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "collector_health",
+            column: "last_latency_ms",
+            data_type: "bigint",
+            nullable: true,
+        },
+        ColumnContract {
+            table: "collector_health",
+            column: "max_latency_ms",
+            data_type: "bigint",
+            nullable: false,
+        },
     ]
 }

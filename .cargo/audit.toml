@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+    # `rsa` is pulled into Cargo.lock by an inactive optional sqlx dependency.
+    # `cargo deny check advisories` verifies the active dependency graph.
+    "RUSTSEC-2023-0071",
+]

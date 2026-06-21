@@ -1,0 +1,37 @@
+name: Heavy CI
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+jobs:
+  recorder-and-collector-heavy:
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.17.2-pg16
+        env:
+          POSTGRES_DB: liquidation
+          POSTGRES_USER: liquidation
+          POSTGRES_PASSWORD: liquidation
+        ports:
+          - 15433:5432
+        options: >-
+          --health-cmd "pg_isready -U liquidation -d liquidation"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://liquidation:liquidation@127.0.0.1:15433/liquidation
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: sqlx migrations are idempotent
+        run: |
+          cargo run -p liq-cli -- db migrate --database-url "$DATABASE_URL"
+          cargo run -p liq-cli -- db migrate --database-url "$DATABASE_URL"
+      - name: recorder burst load test
+        run: cargo test -p liq-recorder --test load -- --ignored --nocapture
+      - name: collector mock stability test
+        run: cargo test -p liq-collector -- --ignored --nocapture

@@ -10,7 +10,8 @@
 ```powershell
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf -D clippy::complexity -D clippy::style
-cargo test --workspace
+cargo nextest run --workspace
+cargo test --workspace --doc
 cargo run -p liq-cli -- replay dry-run --source bybit --start-unix-ms 1 --end-unix-ms 2
 ```
 
@@ -31,13 +32,14 @@ CI запускает:
 
 ```powershell
 cargo deny check advisories bans licenses sources
+cargo audit
 docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:v8.28.0 detect --source /repo --redact --verbose
 ```
 
-`cargo audit` не используется как blocking CI gate, пока проект зависит от
-`sqlx` 0.8: `cargo-audit` сканирует весь `Cargo.lock` и видит inactive optional
-dependency `rsa` из `sqlx`, хотя active graph не содержит этот crate.
-RustSec advisories для active graph проверяет `cargo deny`.
+`cargo audit` использует `.cargo/audit.toml` и игнорирует только
+`RUSTSEC-2023-0071`: `cargo-audit` сканирует весь `Cargo.lock` и видит inactive
+optional dependency `rsa` из `sqlx`, хотя active graph не содержит этот crate.
+RustSec advisories для active graph дополнительно проверяет `cargo deny`.
 
 ## Recorder Persistence Checks
 
@@ -122,6 +124,28 @@ subscription ack, а Binance `forceOrder` может молчать, если в
 ликвидаций. Для проверки обязательного события задавайте `--min-messages 1`, но
 такая проверка может законно упасть по таймауту на спокойном рынке.
 
+Для bounded проверки long-running collector mode:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector run --source bybit --symbol BTCUSDT --max-runtime-seconds 5 --read-timeout-seconds 2 --health-interval-seconds 1 --batch-flush-interval-seconds 1 --batch-size 4
+```
+
+Команда должна завершиться сама и записать строки `collector_health`.
+
+## Heavy Tests
+
+Heavy tests не запускаются на каждом push. Локально:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo test -p liq-recorder --test load -- --ignored --nocapture
+cargo test -p liq-collector -- --ignored --nocapture
+```
+
+GitHub Actions запускает эти проверки в `Heavy CI` по расписанию и вручную через
+`workflow_dispatch`.
+
 ## Docker Safety
 
 Перед запуском инфраструктуры читать `docs/runbooks/docker-safety.md`.
@@ -136,5 +160,5 @@ docker compose down --remove-orphans
 
 ## Что Улучшить Или Автоматизировать
 
-- Добавить `cargo nextest`.
-- Добавить weekly long-running load test после появления collector runtime.
+- Расширить scheduled heavy CI до multi-hour stability test, когда появится
+  отдельный long-running fixture runner.
