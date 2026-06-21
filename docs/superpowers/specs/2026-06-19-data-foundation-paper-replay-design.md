@@ -718,13 +718,13 @@ or fixtures; it only informs what to verify.
 ## RAG And Agents
 
 RAG is useful but not blocking for the first collector/replay increment.
-Repository documentation is the source of truth. LightRAG is a development
+Repository documentation is the source of truth. ApeRAG is a development
 memory and semantic index over that source of truth; it must never become the
 only place where design decisions, incidents, or runbooks live.
 
 Recommended path:
 
-- Run a separate LightRAG Dev Memory stack for this project. Do not reuse or
+- Run a separate ApeRAG Dev Memory stack for this project. Do not reuse or
   mutate the existing ApeRAG/Omniroute containers that support another project.
   Docker names, networks, volumes, ports, and compose project names must use a
   `liquidation` prefix.
@@ -732,25 +732,25 @@ Recommended path:
   notes, incident reports, replay reports, and strategy notes. Official
   exchange documentation snapshots may be indexed after they are normalized and
   committed under `docs/snapshots/`.
-- Store LightRAG index metadata: indexed Git commit hash, branch, ingestion
+- Store ApeRAG index metadata: indexed Git commit hash, branch, ingestion
   timestamp, indexed paths, ingestion config version, and evaluation result.
 - Provide project commands:
-  - `liq-rag ingest docs/`;
-  - `liq-rag eval`;
-  - `liq-rag health`;
-  - `liq-rag status --check-commit`.
+  - `liq-aperag ingest docs/`;
+  - `liq-aperag eval`;
+  - `liq-aperag health`;
+  - `liq-aperag status --check-commit`.
 - A stale index is not trusted. If the indexed commit hash does not match the
   current Git commit for tracked docs, tooling must warn or fail closed and use
   repository docs directly.
-- Run a daily LightRAG health check that verifies service availability,
-  freshness, evaluation score, and storage health. Alert when LightRAG is stale,
+- Run a daily ApeRAG health check that verifies service availability,
+  freshness, evaluation score, and storage health. Alert when ApeRAG is stale,
   unavailable, or below the retrieval-quality threshold.
-- `liq-rag health` MVP must distinguish `ok` and `failed`. `ok` means
-  `liquidation-omniroute`, the Kiro combo, LightRAG, embeddings, freshness, and
-  eval are usable. `failed` means any required route or quality gate is not
-  usable. If `liquidation-free-deepseek` answers directly, report
-  `fallback_available = true` as diagnostic-only until a real direct failover
-  route is implemented and evaluated.
+- `liq-aperag health` MVP must distinguish `ok`, `degraded-but-usable`, and
+  `failed`. `ok` means ApeRAG, `liquidation-free-deepseek` completion,
+  `liquidation-embedding`, freshness, and eval are usable.
+  `degraded-but-usable` means completion is usable but embeddings or another
+  memory gate is not ready, so ingest/index is forbidden. `failed` means any
+  required route or quality gate is not usable.
 - Add automatic quality checks for retrieval using known question/answer pairs.
   A refresh fails or alerts when top-5 recall or simple answer accuracy drops
   below 80% on the tracked evaluation set. Mean reciprocal rank is reported as
@@ -763,7 +763,7 @@ Recommended path:
   urgent API announcements.
 - Exclude secrets, `.env` files, Infisical exports, private keys, exchange
   credentials, and large raw market-data blobs from ingestion.
-- If LightRAG or its LLM provider is unavailable, development continues from
+- If ApeRAG or its LLM provider is unavailable, development continues from
   repository docs. RAG downtime must not block collector, replay, CI, or paper
   trading work.
 - Add an API documentation change detector that snapshots official source docs,

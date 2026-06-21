@@ -1,0 +1,27 @@
+# Keep text files stable across Windows, Linux, Docker and CI.
+* text=auto eol=lf
+
+# Native Windows command files are safest with CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary artifacts must never be line-ending normalized.
+*.7z binary
+*.avif binary
+*.bin binary
+*.br binary
+*.db binary
+*.gif binary
+*.gz binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.onnx binary
+*.parquet binary
+*.pdf binary
+*.png binary
+*.sqlite binary
+*.tar binary
+*.webp binary
+*.zip binary
+*.zst binary

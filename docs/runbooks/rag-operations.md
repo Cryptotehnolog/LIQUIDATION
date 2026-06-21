@@ -1,383 +1,285 @@
-# RAG Operations Runbook
+# ApeRAG Operations Runbook
 
 ## Цель
 
-Этот runbook описывает operational model для LightRAG Dev Memory в проекте
-`LIQUIDATION`: запуск, provider routing, backup, restore, health check и правила
-обновления индекса.
+Этот runbook описывает operational model для ApeRAG Dev Memory в проекте
+`LIQUIDATION`: запуск, provider routing, health check, backup, restore и
+правила обновления индекса.
 
-RAG не является source of truth. Source of truth остается в Git: `docs/`,
-specs, runbooks, research notes и reports. LightRAG является производным
-semantic index и должен доказывать свежесть через Git commit hash.
+Repository docs остаются source of truth. ApeRAG является производным
+retrieval/index слоем и должен доказывать свежесть через metadata и eval.
 
-## Финальная схема
+## Финальная Схема
 
 Основной путь:
 
 ```text
-LightRAG -> liquidation-omniroute -> Kiro combo
+ApeRAG completion -> liquidation-free-deepseek
+ApeRAG embeddings -> liquidation-embedding
 ```
 
-Аварийный LLM route:
+`liquidation-free-deepseek` является project-owned completion route. Он не должен
+переиспользовать auth, containers, networks, volumes или browser profile второго
+проекта.
+
+## Docker Isolation
+
+Разрешённый prefix для этого проекта:
 
 ```text
-operator/liq-rag direct check -> liquidation-free-deepseek
+liquidation-
 ```
-
-`liquidation-free-deepseek` является обязательным резервом для LLM-доступа, но
-не является автоматическим fallback для LightRAG, пока LightRAG
-сконфигурирован на `liquidation-omniroute`. Если `liquidation-omniroute`
-недоступен, RAG считается `failed`, а доступность FreeDeepseek записывается как
-diagnostic `fallback_available`.
-
-## Docker isolation
-
-Использовать отдельный Docker stack с prefix `liquidation`.
 
 Не трогать контейнеры второго проекта:
 
 - `omniroute`;
-- `stat-arb-free-qwen`;
-- `stat-arb-free-deepseek`;
-- все `aperag-*`;
-- все `stat-arb-infisical-*`.
-
-Перед любыми Docker-действиями:
-
-```powershell
-docker ps --format "{{.Names}} {{.Image}} {{.Status}} {{.Ports}}"
-docker network ls
-docker volume ls
-```
+- `free_qwen`;
+- `free_deepseek`;
+- `aperag`;
+- все `stat-arb-*`.
 
 Запрещены unscoped destructive commands:
 
 ```powershell
-docker compose down --remove-orphans
 docker system prune
 docker volume prune
 docker network prune
+docker compose down --remove-orphans
 ```
 
-Если нужен `down`, он должен быть scoped:
+Если нужен `down`, он должен быть scoped на compose файл проекта:
 
 ```powershell
-docker compose -p liquidation down
+docker compose --env-file infra/aperag/.env -f infra/aperag/compose.yml -p liquidation down
 ```
 
-## Environment variables
+## Environment Variables
 
-Пути и порты не должны быть жестко привязаны к диску `D:`.
+В repository хранить только `infra/aperag/.env.example`. Реальный
+`infra/aperag/.env`, secrets, Infisical exports и auth files не коммитить.
 
-Минимальный набор переменных:
+Ключевые переменные:
 
 ```dotenv
-LIGHTRAG_DATA_PATH=
-LIGHTRAG_BACKUP_PATH=
-LIGHTRAG_REPORT_PATH=docs/reports/rag
-LIGHTRAG_INDEXED_PATHS=docs/
-LIGHTRAG_API_PORT=
-LIQUIDATION_OMNIROUTE_PORT=
-LIQUIDATION_FREE_DEEPSEEK_PORT=
-LIQUIDATION_OMNIROUTE_BASE_URL=
-LIQUIDATION_FREE_DEEPSEEK_BASE_URL=
-LIQUIDATION_EMBEDDINGS_BASE_URL=
-LIGHTRAG_EMBEDDING_BINDING=
-LIGHTRAG_EMBEDDING_BINDING_HOST=
-LIGHTRAG_EMBEDDING_MODEL=
-LIGHTRAG_EMBEDDING_DIM=
-LIGHTRAG_INGEST_TIMEOUT_SECONDS=
+APERAG_HOST=127.0.0.1
+APERAG_WEB_PORT=23000
+APERAG_API_PORT=28000
+APERAG_DATA_PATH=./data
+APERAG_REPORT_PATH=docs/reports/aperag
+APERAG_INDEXED_PATHS=docs/
+LIQUIDATION_FREE_DEEPSEEK_PORT=19655
+LIQUIDATION_EMBEDDING_PORT=28001
+APERAG_PRIMARY_MODEL=deepseek-chat
+APERAG_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-В repository хранить только `.env.example`. Реальные secrets должны храниться в
-Infisical. `.env`, Infisical exports, API tokens и exchange credentials нельзя
-индексировать в LightRAG.
+## Provider Routing
 
-## Infisical
+OmniRoute больше не является частью ApeRAG route. Текущая рабочая схема:
 
-На MVP не поднимать второй Infisical без необходимости. Использовать
-существующий Infisical как external secret backend, но создать отдельный
-project/environment для `LIQUIDATION`.
+- completion: `liquidation-free-deepseek`, model `deepseek-chat`;
+- embeddings: `liquidation-embedding`, model
+  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`.
 
-Правила:
+Текущая проверенная модель для ApeRAG completion:
 
-- не менять containers `stat-arb-infisical-*`;
-- не подключаться к internal Docker network второго проекта без отдельного
-  решения;
-- получать secrets через опубликованный URL, Infisical CLI или API;
-- `liq-rag health` проверяет наличие нужных secret names, но никогда не выводит
-  secret values.
+```dotenv
+APERAG_PRIMARY_MODEL=deepseek-chat
+APERAG_FALLBACK_MODEL=deepseek-chat
+```
 
-Если существующий Infisical становится unstable dependency, отдельный Infisical
-для `LIQUIDATION` рассматривается как follow-up.
-
-## Provider routing
-
-`liquidation-omniroute` должен использовать Kiro combo как primary route.
-
-Ожидаемый combo:
-
-- Kiro DeepSeek 3.2;
-- Kiro GLM-5;
-- Kiro Claude Sonnet 4.5;
-- Kiro MiniMax M2.5;
-- Kiro Qwen3 Coder Next.
-
-`liquidation-free-deepseek` подключается как emergency LLM route. Если возможно
-подключить его в `liquidation-omniroute` как OpenAI-compatible provider, он
-может быть last fallback в combo. Direct fallback из `liq-rag` можно считать
-usable только после отдельной команды, которая действительно выполняет RAG query
-или LLM task через FreeDeepseek. Один только `/health` FreeDeepseek не делает
-LightRAG usable.
-
-Минимальные provider checks:
+После `docker compose up -d` выполнить:
 
 ```powershell
-Invoke-WebRequest "$env:LIQUIDATION_OMNIROUTE_BASE_URL/v1/models" -UseBasicParsing
-Invoke-WebRequest "$env:LIQUIDATION_FREE_DEEPSEEK_BASE_URL/v1/models" -UseBasicParsing
+.\scripts\setup-aperag-routing.ps1 -EnvFile infra/aperag/.env
 ```
 
-Для completion check использовать короткий non-streaming request. Streaming не
-является обязательным для MVP RAG.
+Скрипт создаёт локального ApeRAG admin-пользователя, сохраняет credentials в
+ignored `infra/aperag/data/secrets/aperag-admin.env`, публикует provider'ы
+`liquidation-free-deepseek` и `liquidation-embedding`, затем выставляет default
+completion и embedding models.
 
 ## Embeddings
 
-MVP использует Ollama, установленную на Windows host, как embedding backend.
-LightRAG работает в Docker и обращается к host Ollama через:
+Embeddings закрывает отдельный локальный OpenAI-compatible сервис:
 
 ```text
-http://host.docker.internal:11434
+http://127.0.0.1:28001/v1/embeddings
 ```
 
-Host-side scripts проверяют Ollama через:
+Модель:
 
 ```text
-http://127.0.0.1:11434
+sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-Default model: `nomic-embed-text`.
+Ожидаемый размер вектора: `384`.
 
-Причина выбора: `all-minilm` был быстрым, но оказался несовместим с текущим
-LightRAG graph indexing: entity/relation embeddings превышали контекст модели.
-`nomic-embed-text` возвращает 768-dimensional embeddings и лучше подходит для
-локального LightRAG Dev Memory. `bge-m3` не является default, потому что он
-тяжелее и может создавать лишнюю нагрузку на ноутбук и Docker Desktop.
+## Health Statuses
 
-Default chunking для `nomic-embed-text`: `LIGHTRAG_CHUNK_TOKEN_SIZE=900` и
-`LIGHTRAG_CHUNK_OVERLAP_TOKEN_SIZE=100`. Меньшие значения вроде `256/32`
-создают слишком много chunks и резко замедляют graph extraction через LLM.
+`scripts/liq-aperag.ps1 health` должен проверять:
 
-Если embedding model меняется, старый LightRAG index нельзя использовать как
-совместимый. Нужно остановить `liquidation-lightrag`, перенести старый
-`rag_storage` в `infra/lightrag/backups/`, поднять LightRAG заново и выполнить
-полный `liq-rag ingest docs/`.
+- ApeRAG API docs;
+- ApeRAG Web UI;
+- FreeDeepseek `/v1/models`;
+- FreeDeepseek `/v1/chat/completions`;
+- embedding service `/v1/models`;
+- embedding service `/v1/embeddings`.
 
-Минимальные embedding checks:
+- `ok`: ApeRAG API/Web, FreeDeepseek completion и embeddings отвечают.
+- `degraded-but-usable`: ApeRAG API/Web и FreeDeepseek отвечают, но embeddings
+  недоступны; ingest/index запрещён.
+- `failed`: ApeRAG API/Web или FreeDeepseek completion недоступны.
 
-```powershell
-Invoke-WebRequest "http://127.0.0.1:11434/api/version" -UseBasicParsing
-Invoke-WebRequest "http://127.0.0.1:11434/api/tags" -UseBasicParsing
-.\scripts\benchmark-ollama-embeddings.ps1
-```
+Дополнительный `memory_status`:
 
-## Health statuses
-
-`liq-rag health` должен возвращать один из статусов:
-
-- `ok`: `liquidation-omniroute` доступен, Kiro combo отвечает, LightRAG
-  доступен, embedding route отвечает, index fresh, последний `liq-rag eval`
-  выше threshold.
-- `failed`: primary route, LightRAG, embedding route, index freshness или eval
-  непригодны. Если FreeDeepseek отвечает, report должен показывать
-  `fallback_available = true`, но это diagnostic-only, пока LightRAG не умеет
-  переключаться на него.
-
-Если indexed Git commit hash не совпадает с текущим Git commit для tracked docs,
-status должен включать `stale`. Stale RAG output нельзя использовать как
-основание для изменения strategy, risk limits или runbooks.
+- `ready-for-ingest`: completion и embeddings готовы;
+- `completion-only-no-embedding`: chat route работает, но индексировать docs ещё
+  нельзя.
 
 ## Ingest
 
-Базовая команда:
+Ingest выполняется только через project-owned CLI:
 
 ```powershell
-liq-rag ingest docs/
+.\scripts\liq-aperag.ps1 ingest docs/ -EnvFile infra/aperag/.env
 ```
 
-Ingest должен:
+Команда:
 
-- читать только paths из `LIGHTRAG_INDEXED_PATHS`;
-- включать curated memory layer `docs/rag-index/`;
-- применять denylist для secrets, raw data и тяжёлых planning artifacts,
-  включая `docs/research/raw/` и `docs/superpowers/`;
-- проверять, что runtime config LightRAG совпадает с `.env`;
-- падать, если LightRAG возвращает failed documents после pipeline;
-- использовать `LIGHTRAG_INGEST_TIMEOUT_SECONDS` для длинных graph-indexing
-  runs, вместо hardcoded бесконечного ожидания;
-- сохранять indexed Git commit hash;
-- сохранять ingestion timestamp;
-- сохранять indexed paths;
-- сохранять ingestion config version;
-- писать report в `LIGHTRAG_REPORT_PATH`.
+- проверяет `health`;
+- создаёт или обновляет collection `LIQUIDATION Dev Memory`;
+- делает full refresh документов внутри этой collection;
+- загружает tracked и untracked non-ignored `.md` и `.txt` из `docs/`;
+- ждёт `COMPLETE` document status и `ACTIVE` vector/fulltext indexes;
+- пишет ignored metadata в `docs/reports/aperag/index-metadata.json`.
 
-При добавлении нового большого source doc нужно добавить или обновить
-соответствующий summary/decision record в `docs/rag-index/`.
+JSON-файлы, включая `docs/research/status.json`, `docs/research/plans/**` и
+generated `docs/reports/aperag/*.json`, не индексируются в default Dev Memory
+collection. Raw research notes и query plans могут жить в repository как audit
+trail, но default retrieval должен опираться на curated `.md`/`.txt` docs.
 
-После ingest обязательно запускать:
-
-```powershell
-liq-rag eval
-liq-rag status --check-commit
-```
+Markdown audit reports в `docs/reports/aperag/` индексируются, потому что это
+человеческие operational notes, а не generated runtime metadata.
 
 ## Eval
 
-Базовая команда:
+Retrieval quality проверяется командой:
 
 ```powershell
-liq-rag eval
+.\scripts\liq-aperag.ps1 eval -EnvFile infra/aperag/.env
 ```
 
-Eval dataset хранится в Git, а не в LightRAG index. Минимальный threshold:
-top-5 recall или simple answer accuracy не ниже 80%. Mean reciprocal rank
-сохраняется как trend metric.
-
-Если eval ниже threshold, index считается непригодным для development decisions.
-
-## Commit freshness
-
-Базовая команда:
-
-```powershell
-liq-rag status --check-commit
-```
-
-Команда сравнивает indexed Git commit hash с текущим Git commit. Если docs
-changed после последнего ingest, команда должна вернуть warning или non-zero
-exit code.
-
-## Backup
-
-Индекс можно пересобрать, поэтому backup RAG менее критичен, чем backup
-repository docs. Но metadata, eval dataset и ingestion reports должны
-сохраняться надежно.
-
-Рекомендуемая политика:
-
-- daily metadata backup;
-- weekly full backup;
-- backup verification после создания;
-- хранить backups в `LIGHTRAG_BACKUP_PATH`;
-- не хранить backup archives в Git.
-
-Планируемые команды:
-
-```powershell
-liq-rag backup create
-liq-rag backup verify
-liq-rag backup list
-```
-
-Daily metadata backup должен включать:
-
-- indexed Git commit hash;
-- ingestion timestamp;
-- indexed paths;
-- eval result;
-- provider health snapshot;
-- LightRAG image/container version.
-
-Weekly full backup должен включать LightRAG data volume или directory из
-`LIGHTRAG_DATA_PATH`.
-
-## Restore
-
-Restore должен начинаться с dry-run:
-
-```powershell
-liq-rag restore --dry-run <backup-id>
-```
-
-Dry-run проверяет:
-
-- backup exists;
-- checksum valid;
-- schema/config version compatible;
-- target `LIGHTRAG_DATA_PATH` writable;
-- restore не затронет чужие Docker volumes.
-
-Фактический restore:
-
-```powershell
-liq-rag restore <backup-id>
-liq-rag health
-liq-rag eval
-liq-rag status --check-commit
-```
-
-Если restore прошел, но commit hash stale, индекс можно использовать только как
-поисковую подсказку; authoritative source остается в repository docs.
-
-## Daily health check
-
-Ежедневная проверка:
-
-```powershell
-liq-rag health
-liq-rag status --check-commit
-liq-rag eval
-```
-
-Report писать в:
+Eval dataset:
 
 ```text
-docs/reports/rag/YYYY-MM-DD.md
+docs/reports/aperag/eval-questions.json
 ```
 
-Минимальное содержимое report:
+Обязательные проверки включают:
 
-- status: `ok` или `failed`;
-- active provider path;
-- fallback availability как diagnostic field;
-- indexed commit;
-- current commit;
-- index age;
-- eval score;
-- backup status;
-- warnings.
+- текущую provider route;
+- Docker isolation;
+- русский UTF-8 retrieval;
+- paper-only trading;
+- комиссии Polymarket/Hyperliquid;
+- archive verification.
 
-## Правила обновления индекса
+Eval является top-5 retrieval gate. Каждый case может указывать
+`expected_source`, а обязательные terms должны находиться в одном найденном
+result/chunk. Eval не передаёт expected terms как search keywords, чтобы не
+подсказывать поиску правильный ответ.
 
-Запускать ingest:
+PowerShell 5.1 нельзя использовать для чтения ApeRAG JSON через
+`Invoke-RestMethod`: он может неверно декодировать UTF-8 response без charset.
+`liq-aperag.ps1` читает `RawContentStream` и декодирует bytes через
+`UTF8.GetString`.
 
-- после изменения `docs/`;
-- после изменения specs/runbooks;
-- после добавления research notes или reports;
-- после обновления documentation snapshots;
-- вручную после urgent API announcements.
+## Known ApeRAG Status Drift
 
-Weekly scheduled rebuild остается fallback, но не заменяет commit-based refresh.
+В ApeRAG возможен рассинхрон между persisted `document.status` и фактическим
+состоянием индексов:
 
-## Acceptance checks
+- `document.status` может оставаться `RUNNING`;
+- при этом `VECTOR` и `FULLTEXT` уже находятся в `ACTIVE`;
+- runtime method `Document.get_overall_index_status()` для такого документа
+  может вычислять `COMPLETE`.
 
-RAG deployment считается пригодным, когда локально проходят:
+Для `LIQUIDATION` это означает:
+
+- использовать project-owned patched ApeRAG image `liquidation-aperag:local`;
+- patch применяется на build-time к `aperag/tasks/reconciler.py`;
+- patch сериализует callback updates для одного `document_id` через PostgreSQL
+  advisory transaction lock;
+- `ingest` должен ждать настоящий `document.status = COMPLETE`;
+- `status -CheckDrift` остаётся guard-проверкой и должен возвращать `ok`;
+- не исправлять drift post-factum через ручные DB updates.
+
+Подробный аудит: `docs/reports/aperag/implementation-audit.md`.
+
+## Archive Verification Anchor
+
+Для Parquet archive verification обязательны checksum validation, readback
+проверка, row count, timestamp bounds, column statistics и
+`parquet_schema_version`. Canonical deletion разрешён только после verified
+archive и установленного `canonical_deletion_watermark`.
+
+## Freshness
+
+Проверка свежести:
 
 ```powershell
-liq-rag ingest docs/
-liq-rag eval
-liq-rag health
-liq-rag status --check-commit
+.\scripts\liq-aperag.ps1 status docs/ -EnvFile infra/aperag/.env -CheckCommit
 ```
 
-`failed` блокирует использование RAG и требует fallback на repository docs.
-FreeDeepseek availability может помочь оператору, но не заменяет LightRAG
-fallback без отдельной реализации direct route.
+`-CheckCommit` должен падать, если:
 
-## Что улучшить или автоматизировать
+- metadata отсутствует;
+- Git commit в metadata не совпадает с текущим `HEAD`;
+- hash индексируемых docs не совпадает с metadata.
 
-- Добавить `liq-rag` как Rust CLI subcommand.
-- Добавить port preflight: занятые ports, container names, networks, volumes.
-- Добавить dashboard panel: RAG status, active provider, indexed/current commit,
-  eval score, backup freshness.
-- Добавить CI warning: docs changed, но RAG metadata stale.
-- Добавить provider failover test: Omniroute недоступен, FreeDeepseek отвечает.
+Проверка drift-статусов ApeRAG:
+
+```powershell
+.\scripts\liq-aperag.ps1 status docs/ -EnvFile infra/aperag/.env -CheckCommit -CheckDrift
+```
+
+`document_status_drift.status`:
+
+- `ok`: persisted document statuses и обязательные индексы согласованы;
+- `warning`: status drift обнаружен. Это не считается нормальным состоянием и
+  требует root-cause audit;
+- `failed`: есть terminal status (`FAILED`, `DELETED`, `EXPIRED`) или
+  обязательный индекс не готов.
+
+`warning` и `failed` блокируют acceptance текущего RAG-контура.
+
+## Acceptance Checks
+
+Минимальные локальные проверки:
+
+```powershell
+.\scripts\guard-compose.ps1 -EnvFile infra/aperag/.env.example
+.\scripts\check-images.ps1 -EnvFile infra/aperag/.env.example
+.\scripts\test-aperag-dev-memory.ps1
+.\scripts\audit-aperag.ps1
+.\scripts\liq-aperag.ps1 health -EnvFile infra/aperag/.env
+.\scripts\setup-aperag-routing.ps1 -EnvFile infra/aperag/.env
+.\scripts\liq-aperag.ps1 ingest docs/ -EnvFile infra/aperag/.env
+.\scripts\liq-aperag.ps1 eval -EnvFile infra/aperag/.env
+.\scripts\liq-aperag.ps1 status docs/ -EnvFile infra/aperag/.env -CheckCommit -CheckDrift
+```
+
+`check-images.ps1` по умолчанию не блокирует локальный аудит, если Docker Hub
+вернул pull-rate-limit; в этом случае он пишет warning и продолжает проверку
+остальных источников. Для строгой проверки перед deployment использовать:
+
+```powershell
+.\scripts\check-images.ps1 -EnvFile infra/aperag/.env.example -StrictRemoteManifests
+```
+
+## Что Улучшить Или Автоматизировать
+
+- Добавить dashboard panel: ApeRAG status, collection freshness, eval score,
+  active provider path.
+- Добавить scheduled report в `docs/reports/aperag/`.

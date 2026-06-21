@@ -4,40 +4,44 @@
 
 ## Что проверяли
 
-- LightRAG deployment risk.
-- OmniRoute provider routing/fallback.
-- FreeDeepseekAPI as emergency route.
+- ApeRAG deployment risk.
+- FreeDeepseekAPI as project-owned completion route.
+- Local OpenAI-compatible embedding service.
+- Historical OmniRoute provider routing/fallback decision.
 - GitHub/community signals через `last30days`.
 
 ## `last30days` result
 
-Raw output:
-[lightrag-omniroute-freedeepseekapi-docker-reliability-raw-rag-stack-risk.md](raw/lightrag-omniroute-freedeepseekapi-docker-reliability-raw-rag-stack-risk.md)
+Raw output был переименован во время перехода со старого RAG design на
+изолированный ApeRAG design. Текущий raw research для RAG stack не является
+source of truth; актуальное operational состояние зафиксировано в runbooks и
+implementation audit.
 
 GitHub signals:
 
-- `HKUDS/LightRAG`: high adoption, but many open issues;
+- `HKUDS/ApeRAG`: high adoption, but many open issues;
 - `diegosouzapw/OmniRoute`: active gateway project with open issues;
 - `ForgetMeAI/FreeDeepseekAPI`: smaller project, OpenAI-compatible proxy,
   multiple open issues.
 
-Вывод: выбранная архитектура правильная только при health/eval/fallback gates.
+Вывод: выбранная архитектура правильная только при health/eval/freshness gates.
 Нельзя считать любой из этих компонентов безусловно stable.
 
 ## Official/project findings
 
 Sources:
-[LightRAG GitHub](https://github.com/HKUDS/LightRAG),
-[LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md),
+[ApeRAG GitHub](https://github.com/apecloud/ApeRAG),
+[ApeRAG Document Upload Design](https://rag.apecloud.com/docs/design/document_upload_design),
 [OmniRoute GitHub](https://github.com/diegosouzapw/OmniRoute),
 [OmniRoute Docker Hub](https://hub.docker.com/r/diegosouzapw/omniroute),
 [FreeDeepseekAPI GitHub](https://github.com/ForgetMeAI/FreeDeepseekAPI),
 [OmniRoute custom provider discussion](https://github.com/diegosouzapw/OmniRoute/discussions/1983).
 
-LightRAG supports Docker Compose deployment and requires LLM/embedding
+ApeRAG supports Docker Compose deployment and requires LLM/embedding
 configuration. Official/project docs also mention API server and Web UI.
 
-OmniRoute exposes OpenAI-compatible routing and auto-fallback concepts.
+OmniRoute exposes OpenAI-compatible routing and auto-fallback concepts, but it
+was removed from the current ApeRAG route to reduce dependency surface.
 
 OmniRoute custom provider compatibility requires base URL to be reachable from
 the OmniRoute container perspective. If provider and OmniRoute run in Docker,
@@ -52,24 +56,26 @@ Local check on 2026-06-19:
 - `/v1/models` responded;
 - `/v1/chat/completions` returned a short `OK` response.
 
-This proves compatibility in the current environment, but does not remove the
-need for separate `liquidation-free-deepseek`.
+This proves OpenAI-compatible completion compatibility in the current
+environment, but does not justify reusing the second project's FreeDeepseek.
 
 ## Design impact
 
 - Keep final route:
-  `LightRAG -> liquidation-omniroute -> Kiro combo`.
-- Keep emergency route:
-  `LightRAG/liq-rag -> liquidation-free-deepseek`.
+  `ApeRAG completion -> liquidation-free-deepseek`.
+- Keep embeddings route:
+  `ApeRAG embeddings -> liquidation-embedding`.
 - Do not reuse second project's `omniroute` or `stat-arb-free-deepseek`.
-- `liq-rag health` MVP must expose `ok` or `failed`. Direct FreeDeepseek
-  availability is reported as diagnostic `fallback_available`, not as usable
-  RAG status until direct failover is implemented and evaluated.
+- OmniRoute is historical/deprecated for this project and must not be restored
+  without a new design decision.
+- `liq-aperag health` MVP must expose `ok` or `failed` for ApeRAG API/Web,
+  FreeDeepseek completion and embedding readiness.
 - RAG index is not source of truth. Git docs remain authoritative.
+- `liquidation-aperag:local` includes a project-owned build-time patch for the
+  document status race; drift warnings are not accepted as normal.
 
 ## Что улучшить или автоматизировать
 
-- Add provider failover test: Omniroute down, FreeDeepseek direct route alive.
-- Add Docker network preflight: OmniRoute can reach FreeDeepseek by service name.
-- Add `liq-rag eval` with known Q/A pairs before trusting refreshed index.
+- Add `liq-aperag eval` with known Q/A pairs before trusting refreshed index.
 - Add dashboard panel for active provider path and indexed/current commit.
+- Pin `APERAG_BASE_IMAGE` by digest instead of floating nightly tag.

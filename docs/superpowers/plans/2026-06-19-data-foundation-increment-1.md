@@ -12,7 +12,7 @@
 
 ## Scope Boundary
 
-This plan implements the foundation increment only. It does not place real Polymarket orders, real Hyperliquid hedges, Dockerized LightRAG, dashboard UI, OKX adapter, or archive export. Those stay separate implementation plans.
+This plan implements the foundation increment only. It does not place real Polymarket orders, real Hyperliquid hedges, Dockerized ApeRAG, dashboard UI, OKX adapter, or archive export. Those stay separate implementation plans.
 
 Research decisions included in this plan:
 
@@ -76,14 +76,14 @@ Modify:
 Update `.gitignore` and keep existing RAG/Docker secret ignores:
 
 ```gitignore
-/infra/lightrag/.env
-/infra/lightrag/data/
+/infra/aperag/.env
+/infra/aperag/data/
 /target/
 /.env
 /.env.local
 /.sqlx/
-/docs/reports/rag/*.tmp
-/docs/reports/rag/*.log
+/docs/reports/aperag/*.tmp
+/docs/reports/aperag/*.log
 *.pdb
 *.profraw
 *.profdata
@@ -95,11 +95,10 @@ Create `.env.example`:
 LIQ_CONFIG_PATH=config/default.toml
 DATABASE_URL=postgres://liquidation:liquidation@127.0.0.1:15433/liquidation
 RUST_LOG=info,liq=debug
-LIGHTRAG_DATA_PATH=
-LIGHTRAG_BACKUP_PATH=
-LIGHTRAG_REPORT_PATH=docs/reports/rag
-LIGHTRAG_INDEXED_PATHS=docs/
-LIQUIDATION_OMNIROUTE_BASE_URL=
+APERAG_DATA_PATH=
+APERAG_BACKUP_PATH=
+APERAG_REPORT_PATH=docs/reports/aperag
+APERAG_INDEXED_PATHS=docs/
 LIQUIDATION_FREE_DEEPSEEK_BASE_URL=
 ```
 
@@ -188,6 +187,7 @@ okx_rest_enabled = false
 
 [replay]
 default_primary_source = "bybit"
+default_fallback_sources = []
 default_aggregation_policy = "primary_only"
 fill_model = "trade_cross"
 order_cancel_window_seconds = 60

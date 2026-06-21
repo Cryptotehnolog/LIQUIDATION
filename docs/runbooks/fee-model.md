@@ -42,6 +42,7 @@ Replay report должен показывать:
 
 Real trading запрещен, пока:
 
+- paper-only guard не снят после подтвержденной торговли на бумаге;
 - net PnL после fees не стабилен в replay;
 - paper-live не показывает приемлемый net PnL;
 - slippage и failed hedge penalties не учтены;

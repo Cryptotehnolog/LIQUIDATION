@@ -1,10 +1,9 @@
 param(
-    [string]$EnvFile = "infra/lightrag/.env",
+    [string]$EnvFile = "infra/aperag/.env",
     [string]$SecretName = "FREE_DEEPSEEK_AUTH_JSON",
     [string]$InfisicalEnvironment = "dev",
     [string]$InfisicalPath = "/",
     [string]$InfisicalProjectId = "",
-    [string]$InfisicalToken = "",
     [string]$InfisicalDomain = "",
     [switch]$StartFallback,
     [switch]$ValidateOnly
@@ -12,15 +11,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$ScriptDir = Split-Path -Parent $PSCommandPath
+$RepoRoot = Split-Path -Parent $ScriptDir
+
 function Read-DotEnv {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         throw "Env file not found: $Path"
     }
 
     $values = @{}
-    foreach ($line in Get-Content $Path) {
+    foreach ($line in Get-Content -LiteralPath $Path) {
         $trimmed = $line.Trim()
         if ($trimmed -eq "" -or $trimmed.StartsWith("#")) {
             continue
@@ -47,33 +49,42 @@ function Resolve-AuthPath {
         return $configured
     }
 
-    return (Join-Path "infra/lightrag" $configured)
+    return (Join-Path (Join-Path $RepoRoot "infra/aperag") $configured)
 }
 
 function Assert-AuthPathScope {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    $root = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "infra/aperag/data"))
     if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
         $root += [System.IO.Path]::DirectorySeparatorChar
     }
     if ([System.IO.Path]::IsPathRooted($Path)) {
         $candidate = [System.IO.Path]::GetFullPath($Path)
     } else {
-        $candidate = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
     }
 
     if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to use FreeDeepseek auth path outside LIQUIDATION infra/lightrag/data: $Path"
+        throw "Refusing to use FreeDeepseek auth path outside LIQUIDATION infra/aperag/data: $Path"
     }
 }
 
 function Assert-Ignored {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    git check-ignore -q $Path
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($RepoRoot)
+    if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+    if (-not $candidate.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to check ignored status outside repository: $candidate"
+    }
+    $relative = $candidate.Substring($rootFull.Length).Replace([System.IO.Path]::DirectorySeparatorChar, "/")
+    git -C $RepoRoot check-ignore -q -- $relative
     if ($LASTEXITCODE -ne 0) {
-        throw "Refusing to write auth file because it is not ignored by Git: $Path"
+        throw "Refusing to write auth file because it is not ignored by Git: $relative"
     }
 }
 
@@ -99,6 +110,34 @@ function Join-NativeArgs {
     }) -join " ")
 }
 
+function Join-CmdArgs {
+    param([Parameter(Mandatory = $true)][string[]]$Items)
+
+    return (($Items | ForEach-Object {
+        if ($_ -match '[\s&()^|<>"]') {
+            '"' + $_.Replace('"', '""') + '"'
+        } else {
+            $_
+        }
+    }) -join " ")
+}
+
+function Set-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.ProcessStartInfo]$ProcessInfo,
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    if ($Command -match '\.(cmd|bat)$') {
+        $ProcessInfo.FileName = $env:ComSpec
+        $ProcessInfo.Arguments = "/d /c " + (Join-CmdArgs (@($Command) + $Arguments))
+    } else {
+        $ProcessInfo.FileName = $Command
+        $ProcessInfo.Arguments = Join-NativeArgs $Arguments
+    }
+}
+
 function Get-InfisicalSecret {
     $cmd = (Get-Command infisical.cmd -ErrorAction SilentlyContinue).Source
     if (-not $cmd) {
@@ -120,31 +159,26 @@ function Get-InfisicalSecret {
         $args += "--domain=$InfisicalDomain"
     }
 
-    $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $processInfo.FileName = $cmd
-    $processInfo.Arguments = Join-NativeArgs $args
-    $processInfo.RedirectStandardOutput = $true
-    $processInfo.RedirectStandardError = $true
-    $processInfo.UseShellExecute = $false
-    if (-not [string]::IsNullOrWhiteSpace($InfisicalToken)) {
-        $processInfo.EnvironmentVariables["INFISICAL_TOKEN"] = $InfisicalToken
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $cmd @args 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $processInfo
-    $process.Start() | Out-Null
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
-
-    $output = (($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
-    if ($process.ExitCode -ne 0) {
-        throw "Infisical secret fetch failed. Provide LIQUIDATION project binding, --projectId, or --token. CLI output: $($output | Out-String)"
+    $outputText = ($output | Out-String).Trim()
+    if ($exitCode -ne 0) {
+        throw "Infisical secret fetch failed. Provide LIQUIDATION project binding, --projectId, or INFISICAL_TOKEN environment variable. CLI output: $outputText"
     }
 
-    return (($output | Out-String).Trim())
+    return $outputText
 }
 
+if (-not [System.IO.Path]::IsPathRooted($EnvFile)) {
+    $EnvFile = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $EnvFile))
+}
 $config = Read-DotEnv $EnvFile
 $authPath = Resolve-AuthPath $config
 
@@ -164,17 +198,18 @@ $authJson = (Get-InfisicalSecret).TrimStart([char]0xFEFF)
 
 Assert-Json $authJson
 
-New-Item -ItemType Directory -Force -Path (Split-Path $authPath -Parent) | Out-Null
+$authDir = Split-Path $authPath -Parent
+New-Item -ItemType Directory -Force -Path $authDir | Out-Null
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-[System.IO.File]::WriteAllText((Resolve-Path (Split-Path $authPath -Parent)).Path + [System.IO.Path]::DirectorySeparatorChar + (Split-Path $authPath -Leaf), $authJson, $utf8NoBom)
+[System.IO.File]::WriteAllText((Join-Path (Resolve-Path -LiteralPath $authDir).Path (Split-Path $authPath -Leaf)), $authJson, $utf8NoBom)
 
 Assert-Ignored $authPath
 Write-Output "FreeDeepseek auth written to ignored path: $authPath"
 
 if ($StartFallback) {
-    .\scripts\check-images.ps1 -EnvFile $EnvFile
-    .\scripts\guard-compose.ps1 -EnvFile $EnvFile
-    docker compose --env-file $EnvFile -f infra/lightrag/compose.yml -p liquidation --profile fallback up -d liquidation-free-deepseek
+    & (Join-Path $ScriptDir "check-images.ps1") -EnvFile $EnvFile
+    & (Join-Path $ScriptDir "guard-compose.ps1") -EnvFile $EnvFile
+    docker compose --env-file $EnvFile -f (Join-Path $RepoRoot "infra/aperag/compose.yml") -p liquidation --profile fallback up -d liquidation-free-deepseek
 
     Start-Sleep -Seconds 3
     Invoke-WebRequest "http://127.0.0.1:19655/health" -UseBasicParsing | Select-Object StatusCode,Content

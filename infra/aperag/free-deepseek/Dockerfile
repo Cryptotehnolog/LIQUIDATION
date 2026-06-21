@@ -5,7 +5,9 @@ ARG FREE_DEEPSEEK_REF=e54d324e1d6be1f4d074f5c7f078ae5d94deade8
 
 RUN apk add --no-cache git
 
-RUN git clone --depth 1 --branch "$FREE_DEEPSEEK_REF" "$FREE_DEEPSEEK_REPO" /app
+RUN git clone "$FREE_DEEPSEEK_REPO" /app \
+    && cd /app \
+    && git checkout "$FREE_DEEPSEEK_REF"
 
 WORKDIR /app
 

@@ -1,20 +1,23 @@
 param(
-    [string]$ComposeFile = "infra/lightrag/compose.yml",
-    [string]$EnvFile = "infra/lightrag/.env.example",
+    [string]$ComposeFile = "infra/aperag/compose.yml",
+    [string]$EnvFile = "infra/aperag/.env.example",
     [string]$ProjectName = "liquidation"
 )
 
 $ErrorActionPreference = "Stop"
 
+$ScriptDir = Split-Path -Parent $PSCommandPath
+$RepoRoot = Split-Path -Parent $ScriptDir
+
 function Read-DotEnv {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         throw "Env file not found: $Path"
     }
 
     $values = @{}
-    foreach ($line in Get-Content $Path) {
+    foreach ($line in Get-Content -LiteralPath $Path) {
         $trimmed = $line.Trim()
         if ($trimmed -eq "" -or $trimmed.StartsWith("#")) {
             continue
@@ -27,6 +30,44 @@ function Read-DotEnv {
     }
 
     return $values
+}
+
+function Resolve-RepoPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
+}
+
+function ConvertTo-RepoRelativePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = [System.IO.Path]::GetFullPath($RepoRoot)
+    if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+    if (-not $candidate.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is outside repository: $candidate"
+    }
+
+    return $candidate.Substring($rootFull.Length).Replace([System.IO.Path]::DirectorySeparatorChar, "/")
+}
+
+function Assert-IgnoredByGit {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $relative = ConvertTo-RepoRelativePath $Path
+    git -C $RepoRoot check-ignore --quiet -- $relative
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label path must be ignored by Git: $relative"
+    }
 }
 
 function Assert-LiquidationName {
@@ -54,22 +95,24 @@ function Assert-PathInside {
     }
 
     if (-not $candidate.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Label path is outside LIQUIDATION infra/lightrag/data: $candidate"
+        throw "$Label path is outside LIQUIDATION infra/aperag/data: $candidate"
     }
 }
 
+$ComposeFile = Resolve-RepoPath $ComposeFile
+$EnvFile = Resolve-RepoPath $EnvFile
 $envValues = Read-DotEnv $EnvFile
-$lightRagHost = $envValues["LIGHTRAG_HOST"]
-if ([string]::IsNullOrWhiteSpace($lightRagHost)) {
-    throw "LIGHTRAG_HOST is required in $EnvFile"
+$aperagHost = $envValues["APERAG_HOST"]
+if ([string]::IsNullOrWhiteSpace($aperagHost)) {
+    throw "APERAG_HOST is required in $EnvFile"
 }
-if ($lightRagHost -notin @("127.0.0.1", "localhost")) {
-    throw "LIGHTRAG_HOST must stay loopback-only for local safety. Refusing: $lightRagHost"
+if ($aperagHost -notin @("127.0.0.1", "localhost")) {
+    throw "APERAG_HOST must stay loopback-only for local safety. Refusing: $aperagHost"
 }
 
 $configText = docker compose --env-file $EnvFile -f $ComposeFile -p $ProjectName config --format json
 $config = $configText | ConvertFrom-Json
-$allowedDataRoot = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+$allowedDataRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "infra/aperag/data"))
 
 foreach ($service in $config.services.PSObject.Properties) {
     Assert-LiquidationName "service" $service.Name
@@ -108,6 +151,20 @@ if ($config.volumes) {
         Assert-LiquidationName "volume" $volume.Name
         if ($volume.Value.name) {
             Assert-LiquidationName "volume.name" ([string]$volume.Value.name)
+        }
+    }
+}
+
+if ($config.secrets) {
+    foreach ($secret in $config.secrets.PSObject.Properties) {
+        Assert-LiquidationName "secret" $secret.Name
+        if ($secret.Value.name) {
+            Assert-LiquidationName "secret.name" ([string]$secret.Value.name)
+        }
+        if ($secret.Value.file) {
+            $secretFile = [string]$secret.Value.file
+            Assert-PathInside $secretFile $allowedDataRoot "secret file"
+            Assert-IgnoredByGit $secretFile "secret file"
         }
     }
 }

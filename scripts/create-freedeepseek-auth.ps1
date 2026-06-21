@@ -1,8 +1,8 @@
 param(
-    [string]$EnvFile = "infra/lightrag/.env",
+    [string]$EnvFile = "infra/aperag/.env",
     [string]$AuthPath = "",
-    [string]$WorkDir = "infra/lightrag/data/freedeepseek-auth-work",
-    [string]$ChromeProfile = "infra/lightrag/data/chrome-profiles/freedeepseek-liq",
+    [string]$WorkDir = "infra/aperag/data/freedeepseek-auth-work",
+    [string]$ChromeProfile = "infra/aperag/data/chrome-profiles/freedeepseek-liq",
     [string]$FreeDeepseekRepo = "",
     [string]$FreeDeepseekRef = "",
     [switch]$ValidateOnly,
@@ -62,14 +62,14 @@ function Resolve-ProjectPath {
 function Assert-DataPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/aperag/data"))
     if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
         $root += [System.IO.Path]::DirectorySeparatorChar
     }
     $candidate = Resolve-ProjectPath $Path
 
     if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing path outside LIQUIDATION infra/lightrag/data: $Path"
+        throw "Refusing path outside LIQUIDATION infra/aperag/data: $Path"
     }
 }
 
@@ -135,7 +135,7 @@ if ([string]::IsNullOrWhiteSpace($AuthPath)) {
     if ([System.IO.Path]::IsPathRooted($configuredAuth)) {
         $AuthPath = $configuredAuth
     } else {
-        $AuthPath = Join-Path "infra/lightrag" $configuredAuth
+        $AuthPath = Join-Path "infra/aperag" $configuredAuth
     }
 }
 
@@ -169,7 +169,25 @@ New-Item -ItemType Directory -Force -Path (Split-Path $authFullPath -Parent) | O
 New-Item -ItemType Directory -Force -Path $profileFullPath | Out-Null
 
 if (-not (Test-Path $workFullPath)) {
-    Invoke-Checked "git" @("clone", "--depth", "1", "--branch", $FreeDeepseekRef, $FreeDeepseekRepo, $workFullPath)
+    Invoke-Checked "git" @("-c", "http.sslBackend=openssl", "clone", "--filter=blob:none", $FreeDeepseekRepo, $workFullPath)
+    Invoke-Checked "git" @("-C", $workFullPath, "checkout", $FreeDeepseekRef)
+}
+
+if (-not (Test-Path (Join-Path $workFullPath "package.json"))) {
+    throw "FreeDeepseek work directory is missing package.json: $workFullPath"
+}
+
+if (-not (Test-Path (Join-Path $workFullPath "node_modules"))) {
+    Push-Location $workFullPath
+    try {
+        if (Test-Path "package-lock.json") {
+            Invoke-Checked "npm" @("ci")
+        } else {
+            Invoke-Checked "npm" @("install")
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
 if (-not $SkipInteractive) {

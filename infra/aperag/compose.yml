@@ -1,0 +1,218 @@
+name: liquidation
+
+services:
+  liquidation-free-deepseek:
+    image: ${FREE_DEEPSEEK_LOCAL_IMAGE}
+    build:
+      context: ./free-deepseek
+      args:
+        FREE_DEEPSEEK_REPO: ${FREE_DEEPSEEK_REPO}
+        FREE_DEEPSEEK_REF: ${FREE_DEEPSEEK_REF}
+    container_name: liquidation-free-deepseek
+    restart: unless-stopped
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "9655"
+      NON_INTERACTIVE: "1"
+      DEEPSEEK_AUTH_PATH: /run/secrets/deepseek-auth.json
+    ports:
+      - "${APERAG_HOST}:${LIQUIDATION_FREE_DEEPSEEK_PORT}:9655"
+    volumes:
+      - liquidation-free-deepseek-data:/app/data
+    secrets:
+      - source: liquidation-free-deepseek-auth
+        target: deepseek-auth.json
+    networks:
+      - liquidation-aperag
+
+  liquidation-embedding:
+    image: ${EMBEDDING_IMAGE}
+    build:
+      context: ./embedding
+    container_name: liquidation-embedding
+    restart: unless-stopped
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+      EMBEDDING_CACHE_DIR: ${EMBEDDING_CACHE_DIR}
+      HF_HOME: ${EMBEDDING_CACHE_DIR}
+      FASTEMBED_CACHE_PATH: ${EMBEDDING_CACHE_DIR}
+    ports:
+      - "${APERAG_HOST}:${LIQUIDATION_EMBEDDING_PORT}:8080"
+    volumes:
+      - liquidation-embedding-cache:${EMBEDDING_CACHE_DIR}
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-postgres:
+    image: ${APERAG_POSTGRES_IMAGE}
+    container_name: liquidation-aperag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${APERAG_HOST}:25432:5432"
+    volumes:
+      - liquidation-aperag-postgres-data:/var/lib/postgresql/data
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-redis:
+    image: ${APERAG_REDIS_IMAGE}
+    container_name: liquidation-aperag-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    ports:
+      - "${APERAG_HOST}:26379:6379"
+    volumes:
+      - liquidation-aperag-redis-data:/data
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-qdrant:
+    image: ${APERAG_QDRANT_IMAGE}
+    container_name: liquidation-aperag-qdrant
+    restart: unless-stopped
+    ports:
+      - "${APERAG_HOST}:26333:6333"
+    volumes:
+      - liquidation-aperag-qdrant-data:/qdrant/storage
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-es:
+    image: ${APERAG_ELASTICSEARCH_IMAGE}
+    container_name: liquidation-aperag-es
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ports:
+      - "${APERAG_HOST}:29200:9200"
+    volumes:
+      - liquidation-aperag-es-data:/usr/share/elasticsearch/data
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-api:
+    image: ${APERAG_IMAGE}
+    build:
+      context: ./aperag
+      args:
+        APERAG_BASE_IMAGE: ${APERAG_BASE_IMAGE}
+    container_name: liquidation-aperag-api
+    restart: unless-stopped
+    depends_on:
+      - liquidation-aperag-postgres
+      - liquidation-aperag-redis
+      - liquidation-aperag-qdrant
+      - liquidation-aperag-es
+    environment:
+      POSTGRES_HOST: liquidation-aperag-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: liquidation-aperag-redis
+      REDIS_PORT: "6379"
+      REDIS_USER: default
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VECTOR_DB_TYPE: ${VECTOR_DB_TYPE}
+      VECTOR_DB_CONTEXT: '{"url":"http://liquidation-aperag-qdrant","port":6333,"distance":"Cosine","timeout":1000}'
+      ES_HOST_NAME: liquidation-aperag-es
+      ES_PORT: "9200"
+      ES_PROTOCOL: http
+      GRAPH_DB_TYPE: ${GRAPH_DB_TYPE}
+      OBJECT_STORE_TYPE: ${OBJECT_STORE_TYPE}
+      OBJECT_STORE_LOCAL_ROOT_DIR: /shared/objects
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_TYPE: ${AUTH_TYPE}
+      REGISTER_MODE: ${REGISTER_MODE}
+      NODE_IP: "127.0.0.1"
+      CHUNK_SIZE: ${CHUNK_SIZE}
+      CHUNK_OVERLAP_SIZE: ${CHUNK_OVERLAP_SIZE}
+    ports:
+      - "${APERAG_HOST}:${APERAG_API_PORT}:8000"
+    volumes:
+      - liquidation-aperag-shared-data:/shared
+    command: ["/app/scripts/entrypoint.sh", "/app/scripts/start-api.sh"]
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-worker:
+    image: ${APERAG_IMAGE}
+    build:
+      context: ./aperag
+      args:
+        APERAG_BASE_IMAGE: ${APERAG_BASE_IMAGE}
+    container_name: liquidation-aperag-worker
+    restart: unless-stopped
+    depends_on:
+      - liquidation-aperag-api
+    environment:
+      POSTGRES_HOST: liquidation-aperag-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: liquidation-aperag-redis
+      REDIS_PORT: "6379"
+      REDIS_USER: default
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VECTOR_DB_TYPE: ${VECTOR_DB_TYPE}
+      VECTOR_DB_CONTEXT: '{"url":"http://liquidation-aperag-qdrant","port":6333,"distance":"Cosine","timeout":1000}'
+      ES_HOST_NAME: liquidation-aperag-es
+      ES_PORT: "9200"
+      ES_PROTOCOL: http
+      GRAPH_DB_TYPE: ${GRAPH_DB_TYPE}
+      OBJECT_STORE_TYPE: ${OBJECT_STORE_TYPE}
+      OBJECT_STORE_LOCAL_ROOT_DIR: /shared/objects
+      JWT_SECRET: ${JWT_SECRET}
+      NODE_IP: "127.0.0.1"
+      APERAG_API_BASE_URL: http://liquidation-aperag-api:8000
+    volumes:
+      - liquidation-aperag-shared-data:/shared
+    command: ["/app/scripts/entrypoint.sh", "/app/scripts/start-celery-worker.sh"]
+    networks:
+      - liquidation-aperag
+
+  liquidation-aperag-frontend:
+    image: ${APERAG_FRONTEND_IMAGE}
+    container_name: liquidation-aperag-frontend
+    restart: unless-stopped
+    depends_on:
+      - liquidation-aperag-api
+    environment:
+      API_SERVER_ENDPOINT: http://liquidation-aperag-api:8000
+      API_SERVER_BASE_PATH: /api/v1
+    ports:
+      - "${APERAG_HOST}:${APERAG_WEB_PORT}:3000"
+    networks:
+      - liquidation-aperag
+
+networks:
+  liquidation-aperag:
+    name: liquidation-aperag
+
+volumes:
+  liquidation-free-deepseek-data:
+    name: liquidation-free-deepseek-data
+  liquidation-aperag-postgres-data:
+    name: liquidation-aperag-postgres-data
+  liquidation-aperag-redis-data:
+    name: liquidation-aperag-redis-data
+  liquidation-aperag-qdrant-data:
+    name: liquidation-aperag-qdrant-data
+  liquidation-aperag-es-data:
+    name: liquidation-aperag-es-data
+  liquidation-aperag-shared-data:
+    name: liquidation-aperag-shared-data
+  liquidation-embedding-cache:
+    name: liquidation-embedding-cache
+
+secrets:
+  liquidation-free-deepseek-auth:
+    name: liquidation-free-deepseek-auth
+    file: ${FREE_DEEPSEEK_AUTH_FILE}

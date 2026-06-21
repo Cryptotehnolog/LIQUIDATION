@@ -3,15 +3,17 @@ param(
     [string]$InfisicalEnvironment = "dev",
     [string]$InfisicalPath = "/",
     [string]$InfisicalProjectId = "",
-    [string]$InfisicalToken = "",
     [string]$InfisicalDomain = "http://127.0.0.1:8080",
-    [string]$RoundtripAuthPath = "infra/lightrag/data/secrets/roundtrip-check/deepseek-auth.json",
-    [string]$FreeDeepseekWorkDir = "infra/lightrag/data/freedeepseek-auth-work",
+    [string]$RoundtripAuthPath = "infra/aperag/data/secrets/roundtrip-check/deepseek-auth.json",
+    [string]$FreeDeepseekWorkDir = "infra/aperag/data/freedeepseek-auth-work",
     [switch]$KeepTemp,
     [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $PSCommandPath
+$RepoRoot = Split-Path -Parent $ScriptDir
 
 function Resolve-ProjectPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -20,13 +22,13 @@ function Resolve-ProjectPath {
         return [System.IO.Path]::GetFullPath($Path)
     }
 
-    return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
+    return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
 }
 
 function Get-RelativePath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $basePath = [System.IO.Path]::GetFullPath((Get-Location).Path)
+    $basePath = [System.IO.Path]::GetFullPath($RepoRoot)
     if (-not $basePath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
         $basePath += [System.IO.Path]::DirectorySeparatorChar
     }
@@ -39,14 +41,14 @@ function Get-RelativePath {
 function Assert-DataPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $root = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) "infra/lightrag/data"))
+    $root = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "infra/aperag/data"))
     if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
         $root += [System.IO.Path]::DirectorySeparatorChar
     }
     $candidate = Resolve-ProjectPath $Path
 
     if (-not $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing path outside LIQUIDATION infra/lightrag/data: $Path"
+        throw "Refusing path outside LIQUIDATION infra/aperag/data: $Path"
     }
 }
 
@@ -54,7 +56,7 @@ function Assert-Ignored {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $relative = Get-RelativePath $Path
-    git check-ignore -q $relative
+    git -C $RepoRoot check-ignore -q $relative
     if ($LASTEXITCODE -ne 0) {
         throw "Refusing to use path because it is not ignored by Git: $relative"
     }
@@ -100,14 +102,11 @@ try {
         InfisicalPath = $InfisicalPath
         InfisicalProjectId = $InfisicalProjectId
     }
-    if (-not [string]::IsNullOrWhiteSpace($InfisicalToken)) {
-        $bootstrapArgs["InfisicalToken"] = $InfisicalToken
-    }
     if (-not [string]::IsNullOrWhiteSpace($InfisicalDomain)) {
         $bootstrapArgs["InfisicalDomain"] = $InfisicalDomain
     }
 
-    & .\scripts\bootstrap-freedeepseek-auth.ps1 @bootstrapArgs
+    & (Join-Path $ScriptDir "bootstrap-freedeepseek-auth.ps1") @bootstrapArgs
     if ($LASTEXITCODE -ne 0) {
         throw "bootstrap-freedeepseek-auth failed"
     }

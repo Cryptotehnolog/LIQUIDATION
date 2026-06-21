@@ -4,9 +4,9 @@
   "cluster_mode": "theme",
   "subqueries": [
     {
-      "label": "lightrag operational risks",
-      "search_query": "LightRAG Docker deployment RAG index freshness evaluation issues GitHub",
-      "ranking_query": "What recent issues or discussions affect LightRAG deployment, index freshness, evaluation, and operational reliability?",
+      "label": "aperag operational risks",
+      "search_query": "ApeRAG Docker deployment RAG index freshness evaluation issues GitHub",
+      "ranking_query": "What recent issues or discussions affect ApeRAG deployment, index freshness, evaluation, and operational reliability?",
       "sources": ["reddit", "hackernews", "github", "grounding"],
       "weight": 1.0
     },

@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "Минимальный retrieval smoke test для ApeRAG Dev Memory проекта LIQUIDATION.",
+  "questions": [
+    {
+      "id": "rag_route",
+      "query": "Какая текущая схема ApeRAG Dev Memory для completion и embeddings?",
+      "expected_source": "docs__runbooks__aperag-dev-memory.md",
+      "expected_all": [
+        "liquidation-free-deepseek",
+        "liquidation-embedding"
+      ]
+    },
+    {
+      "id": "docker_isolation",
+      "query": "Docker safety stat-arb omniroute free_deepseek containers second project",
+      "expected_source": "docs__runbooks__docker-safety.md",
+      "expected_all": [
+        "docker-safety.md",
+        "stat-arb",
+        "omniroute",
+        "free_deepseek"
+      ]
+    },
+    {
+      "id": "russian_utf8",
+      "query": "Docker Safety Runbook Цель запускать инфраструктуру LIQUIDATION",
+      "expected_source": "docs__runbooks__docker-safety.md",
+      "expected_all": [
+        "Цель",
+        "инфраструктуру",
+        "контейнеры"
+      ]
+    },
+    {
+      "id": "paper_only",
+      "query": "Почему реальная торговля запрещена до paper trading?",
+      "expected_source": "docs__runbooks__fee-model.md",
+      "expected_all": [
+        "paper",
+        "paper-only",
+        "бумаге"
+      ]
+    },
+    {
+      "id": "fees",
+      "query": "Fee Model Polymarket Hyperliquid fees first venues",
+      "expected_source": "docs__runbooks__fee-model.md",
+      "expected_all": [
+        "fee-model.md",
+        "Polymarket",
+        "Hyperliquid"
+      ]
+    },
+    {
+      "id": "archive_verification",
+      "query": "Какие проверки нужны для Parquet archive verification?",
+      "expected_source": "docs__runbooks__rag-operations.md",
+      "expected_all": [
+        "checksum",
+        "readback",
+        "parquet_schema_version"
+      ]
+    }
+  ]
+}

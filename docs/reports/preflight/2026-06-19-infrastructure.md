@@ -3,7 +3,7 @@
 ## Git
 
 - status: clean
-- branch: `main 70ed7ae [origin/main] docs: plan lightrag memory deployment`
+- branch: `main 70ed7ae [origin/main] docs: plan aperag memory deployment`
 
 ## Docker
 
@@ -71,7 +71,7 @@
 
 - `21128` - proposed host port для `liquidation-omniroute`
 - `19655` - proposed host port для `liquidation-free-deepseek`
-- `19621` - proposed host port для `liquidation-lightrag`
+- `19621` - proposed host port для `liquidation-aperag`
 
 Все три proposed ports были свободны во время preflight.
 
@@ -86,10 +86,10 @@
 ## Blockers
 
 - отсутствуют для Task 1 и Task 2.
-- перед реальным deployment всё ещё нужно проверить image names и создать игнорируемый `infra/lightrag/.env` до любого `docker compose pull` или `docker compose up`.
+- перед реальным deployment всё ещё нужно проверить image names и создать игнорируемый `infra/aperag/.env` до любого `docker compose pull` или `docker compose up`.
 
 ## Что Улучшить Или Автоматизировать
 
 - Добавить `scripts/preflight.ps1`, чтобы эту инвентаризацию можно было повторять перед каждым infrastructure change.
 - Добавить guard, который падает, если compose file ссылается на container names, networks или volumes без префикса `liquidation-*`.
-- Добавить dashboard tile для RAG health статусов `ok` и `failed`, плюс diagnostic field `fallback_available`.
+- Добавить dashboard tile для ApeRAG health/eval/freshness/drift статусов.

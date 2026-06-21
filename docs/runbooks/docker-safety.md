@@ -10,6 +10,7 @@
 - `omniroute`;
 - `stat-arb-free-qwen`;
 - `stat-arb-free-deepseek`;
+- legacy `free_deepseek` stacks второго проекта;
 - все `aperag-*`;
 - все `stat-arb-infisical-*`.
 

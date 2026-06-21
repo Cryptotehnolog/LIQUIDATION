@@ -28,7 +28,7 @@
         "okx_liquidation_orders_changes",
         "polymarket_clob_market_data_and_fees",
         "hyperliquid_fees_funding_info_endpoint",
-        "lightrag_omniroute_freedeepseek_operations",
+        "aperag_freedeepseek_embedding_operations",
         "rust_websocket_sqlx_parquet_stack"
       ]
     }
@@ -44,7 +44,6 @@
     "docs/research/raw/crypto-liquidation-websocket-feed-reliability-raw-exchange-liquidation-feeds.md",
     "docs/research/raw/polymarket-clob-api-market-data-fees-arbitrage-raw-polymarket-market-data.md",
     "docs/research/raw/hyperliquid-api-fees-funding-execution-slippage-raw-hyperliquid-fees-execution.md",
-    "docs/research/raw/lightrag-omniroute-freedeepseekapi-docker-reliability-raw-rag-stack-risk.md",
     "docs/research/raw/rust-websocket-parquet-timescaledb-crypto-market-data-pipeline-raw-rust-data-stack.md"
   ],
   "spec_sections_changed": [
@@ -86,7 +85,11 @@
     },
     {
       "id": "rag_health_eval_required",
-      "summary": "LightRAG, OmniRoute, and FreeDeepseek are useful but must be guarded by health, eval, freshness, and fallback checks."
+      "summary": "ApeRAG Dev Memory uses project-owned FreeDeepseek completion, local embeddings, freshness checks, eval checks, and drift checks. OmniRoute is not part of the current ApeRAG route."
+    },
+    {
+      "id": "aperag_status_race_patched",
+      "summary": "ApeRAG status drift is handled at source by project-owned image liquidation-aperag:local, which applies a build-time reconciler patch. Post-ingest status repair is not accepted."
     }
   ],
   "next_refresh": {

@@ -2,7 +2,7 @@
 
 ## Цель
 
-Перед deployment LightRAG Dev Memory проверить локальную инфраструктуру так,
+Перед deployment ApeRAG Dev Memory проверить локальную инфраструктуру так,
 чтобы не сломать второй проект в Docker.
 
 Preflight read-only по умолчанию. Любое изменение Docker допускается только
@@ -16,9 +16,10 @@ Preflight read-only по умолчанию. Любое изменение Docke
 - Docker daemon доступен;
 - чужие containers живы;
 - занятые ports известны;
-- existing Omniroute/FreeDeepseek проверены только read-only;
+- existing FreeDeepseek и embedding route проверены read-only;
 - будущие `liquidation-*` names не конфликтуют;
 - Git clean;
+- Git/GitHub/Infisical auth context понятен;
 - secrets не лежат в repo;
 - research status актуален.
 
@@ -42,6 +43,34 @@ git branch -vv
 ```
 
 Ожидаемо: рабочее дерево чистое, branch `main` синхронизирован с `origin/main`.
+
+### Auth Context
+
+```powershell
+.\scripts\preflight-auth.ps1
+```
+
+Эта команда разделяет разные auth layers, чтобы не путать пользовательскую
+среду и текущую Codex-среду:
+
+- `git_remote_head` проверяет Git remote access;
+- `gh_auth_status` проверяет GitHub CLI auth именно в текущей Codex-среде;
+- `gh_api_repo_view` проверяет GitHub API через `gh`;
+- `infisical_executable` проверяет, виден ли Infisical CLI;
+- `docker_daemon` проверяет Docker access без изменения контейнеров;
+- `freedeepseek_auth_ignored` проверяет, что локальный auth file не попадёт в Git.
+
+Важно: warning по `gh_auth_status` в Codex-среде не означает, что пользовательский
+GitHub token сломан. Не запускать `gh auth logout` для диагностики.
+
+Для явной проверки secret в Infisical использовать только explicit
+LIQUIDATION project id:
+
+```powershell
+.\scripts\preflight-auth.ps1 `
+  -InfisicalProjectId "<LIQUIDATION_PROJECT_ID>" `
+  -CheckInfisicalSecret
+```
 
 ### Docker inventory
 
@@ -75,11 +104,11 @@ netstat -ano | findstr LISTENING
 - `16333`;
 - `8080`.
 
-### Existing FreeDeepseek read-only proof
+### Project FreeDeepseek proof
 
 ```powershell
-Invoke-WebRequest "http://127.0.0.1:9655/health" -UseBasicParsing
-Invoke-WebRequest "http://127.0.0.1:9655/v1/models" -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:19655/health" -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:19655/v1/models" -UseBasicParsing
 ```
 
 Completion smoke test:
@@ -93,7 +122,7 @@ $body = @{
 } | ConvertTo-Json -Depth 5
 
 Invoke-WebRequest `
-  -Uri "http://127.0.0.1:9655/v1/chat/completions" `
+  -Uri "http://127.0.0.1:19655/v1/chat/completions" `
   -Method POST `
   -Headers @{ Authorization = "Bearer test" } `
   -Body $body `
@@ -102,17 +131,28 @@ Invoke-WebRequest `
   -UseBasicParsing
 ```
 
-Это не означает, что `LIQUIDATION` будет использовать чужой container. Это
-только read-only proof, что FreeDeepseek route работает на машине.
+Это должен быть project-owned container `liquidation-free-deepseek`, не
+FreeDeepseek второго проекта.
 
-### Existing Omniroute read-only proof
+### Project Embedding proof
 
 ```powershell
-Invoke-WebRequest "http://127.0.0.1:20128/v1/models" -UseBasicParsing
+$body = @{
+  model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  input = @("test document")
+} | ConvertTo-Json -Depth 5
+
+Invoke-WebRequest "http://127.0.0.1:28001/v1/models" -UseBasicParsing
+Invoke-WebRequest `
+  -Uri "http://127.0.0.1:28001/v1/embeddings" `
+  -Method POST `
+  -Body $body `
+  -ContentType "application/json" `
+  -TimeoutSec 120 `
+  -UseBasicParsing
 ```
 
-Если endpoint требует auth или другой path, зафиксировать факт в preflight
-report. Не менять настройки чужого Omniroute.
+Это должен быть project-owned container `liquidation-embedding`.
 
 ### Secrets scan
 
@@ -144,11 +184,12 @@ docs/reports/preflight/YYYY-MM-DD-infrastructure.md
 Минимальное содержимое:
 
 - Git status;
+- auth preflight summary;
 - Docker containers summary;
 - occupied ports;
 - chosen `liquidation-*` ports;
-- FreeDeepseek read-only result;
-- Omniroute read-only result;
+- `liquidation-free-deepseek` result;
+- `liquidation-embedding` result;
 - secrets scan result;
 - blockers.
 
@@ -168,6 +209,7 @@ Deployment запрещен, если:
 ## Что улучшить или автоматизировать
 
 - Добавить `scripts/preflight.ps1`.
+- Добавить `scripts/preflight-auth.ps1`.
 - Добавить JSON output для dashboard.
 - Добавить port allocation helper.
 - Добавить automatic report generation в `docs/reports/preflight/`.
