@@ -15,6 +15,27 @@ cargo test --workspace --doc
 cargo run -p liq-cli -- replay dry-run --source bybit --start-unix-ms 1 --end-unix-ms 2
 ```
 
+На ноутбуке не запускать полный набор тяжёлых проверок без причины. `target/`
+может разрастаться до нескольких GB, после чего Windows Defender начинает
+сканировать build artifacts и CPU уходит в `MsMpEng`.
+
+CPU diagnostics:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/diagnose-cpu.ps1
+```
+
+Если CPU грузит `MsMpEng`, лучшее локальное решение - добавить Defender
+exclusion только для build artifacts, а не для всего repo:
+
+```powershell
+Add-MpPreference -ExclusionPath "D:\Liquidation\LIQUIDATION\target"
+```
+
+Команду нужно выполнять в PowerShell от администратора. Не исключать `docs/`,
+`config/`, `.env`, `infra/` или весь `D:\Liquidation`: это снижает защиту от
+случайно попавших secrets и вредных файлов.
+
 Ожидаемый результат CLI:
 
 ```text
