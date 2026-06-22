@@ -155,7 +155,7 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
         .fetch_one(&pool)
         .await
         .expect("collector health row must be readable");
-        assert_eq!(persisted, (2, 1, Some(250), 250));
+        assert_eq!(persisted, (3, 2, Some(750), 750));
 
         let latest_health = repository::list_collector_health(&pool, Some("bybit"), 500)
             .await
