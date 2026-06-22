@@ -877,6 +877,7 @@ dependencies = [
  "liq-collector",
  "liq-recorder",
  "liq-replay",
+ "serde_json",
  "sqlx",
  "time",
  "tokio",
@@ -944,6 +945,7 @@ version = "0.1.0"
 dependencies = [
  "liq-domain",
  "rust_decimal",
+ "serde",
  "serde_json",
  "sqlx",
  "time",

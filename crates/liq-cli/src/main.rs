@@ -154,9 +154,15 @@ enum CollectorCommand {
         /// Optional source id: bybit or binance.
         #[arg(long)]
         source: Option<String>,
-        /// Maximum rows to print.
+        /// Maximum rows to print in table mode. Ignored with `--json`.
         #[arg(long, default_value_t = 10)]
         limit: i64,
+        /// Emit dashboard-ready JSON metrics instead of table rows.
+        #[arg(long)]
+        json: bool,
+        /// Metrics aggregation window in minutes for JSON output.
+        #[arg(long, default_value_t = 60)]
+        window_minutes: i64,
     },
 }
 
@@ -291,8 +297,19 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             database_url,
             source,
             limit,
+            json: false,
+            window_minutes: _,
         } => {
             print_collector_health(database_url, source, limit).await?;
+        }
+        CollectorCommand::Status {
+            database_url,
+            source,
+            limit,
+            json: true,
+            window_minutes,
+        } => {
+            print_collector_status_json(database_url, source, limit, window_minutes).await?;
         }
     }
     Ok(())
@@ -459,6 +476,32 @@ async fn print_collector_health(
             row.max_latency_ms
         );
     }
+    Ok(())
+}
+
+async fn print_collector_status_json(
+    database_url: String,
+    source: Option<String>,
+    _limit: i64,
+    window_minutes: i64,
+) -> anyhow::Result<()> {
+    if let Some(source) = source.as_deref() {
+        parse_collector_source(source)?;
+    }
+    let pool = connect(&database_url).await?;
+    let mut metrics = repository::collector_dashboard_metrics(
+        &pool,
+        repository::MetricsWindow::minutes(window_minutes.max(1)),
+    )
+    .await
+    .context("failed to read collector dashboard metrics")?;
+    if let Some(source) = source {
+        metrics.sources.retain(|row| row.source == source);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&metrics).context("failed to serialize collector metrics")?
+    );
     Ok(())
 }
 

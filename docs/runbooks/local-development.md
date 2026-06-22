@@ -149,11 +149,29 @@ cargo run -p liq-cli -- collector run --source bybit --source binance --symbol B
 $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
 cargo run -p liq-cli -- collector status --limit 10
 cargo run -p liq-cli -- collector health --source bybit --limit 20
+cargo run -p liq-cli -- collector status --json --window-minutes 60
 ```
 
 `status=backpressure` означает, что bounded recorder channel оставался полным
 дольше `--channel-send-timeout-seconds`. `status=circuit_open` означает, что
 источник превысил reconnect budget за rolling 5 минут.
+
+`collector status --json` предназначен для dashboard и alerting. Он отдаёт
+агрегированный снимок:
+
+- `sources[]`: состояние по `source`/`symbol`;
+- `freshness_ms`: возраст последнего raw payload, если он известен;
+- `latency_bucket_*`: распределение последних latency samples в выбранном окне;
+- `max_reconnects_5m`: reconnect trend внутри выбранного окна;
+- `last_payload_ts` и `last_event_ts`: RFC3339 timestamps или `null`;
+- `storage`: размер collector-facing таблиц и рост raw/canonical rows за окно.
+
+Для фильтрации одного источника:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector status --source bybit --json --window-minutes 15
+```
 
 ## Heavy Tests
 

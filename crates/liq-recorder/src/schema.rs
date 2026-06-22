@@ -161,6 +161,12 @@ fn expected_contracts() -> &'static [ColumnContract] {
         },
         ColumnContract {
             table: "collector_health",
+            column: "last_payload_ts",
+            data_type: "timestamp with time zone",
+            nullable: true,
+        },
+        ColumnContract {
+            table: "collector_health",
             column: "max_latency_ms",
             data_type: "bigint",
             nullable: false,

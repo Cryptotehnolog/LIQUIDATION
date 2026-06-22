@@ -42,9 +42,8 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             .expect("schema contract query must succeed");
         assert_eq!(violations, Vec::new());
 
-        let exchange_ts =
-            OffsetDateTime::from_unix_timestamp(1_718_750_000).expect("fixture timestamp");
-        let received_ts = exchange_ts + time::Duration::milliseconds(250);
+        let received_ts = OffsetDateTime::now_utc();
+        let exchange_ts = received_ts - time::Duration::milliseconds(250);
         let suffix = unique_suffix();
         let source_event_id = format!("bybit:test:{suffix}");
 
@@ -112,6 +111,7 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             symbol: format!("BTCUSDT-{suffix}"),
             status: "ok".to_owned(),
             reconnects_5m: 1,
+            last_payload_ts: Some(received_ts),
             last_event_ts: Some(received_ts),
             checked_at: received_ts + time::Duration::seconds(1),
             messages_received: 2,
@@ -150,6 +150,20 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
                 .iter()
                 .any(|row| row.source == "bybit" && row.symbol == health.symbol)
         );
+
+        let dashboard =
+            repository::collector_dashboard_metrics(&pool, repository::MetricsWindow::minutes(60))
+                .await
+                .expect("collector dashboard metrics must be queryable");
+        assert!(dashboard.sources.iter().any(|row| row.source == "bybit"
+            && row.symbol == health.symbol
+            && row.last_payload_ts.is_some()
+            && row.freshness_ms.is_some()
+            && row.latency_bucket_lt_100_ms == 0
+            && row.latency_bucket_100_500_ms >= 1
+            && row.max_reconnects_5m >= 1));
+        assert!(dashboard.storage.total_bytes > 0);
+        assert!(dashboard.storage.raw_rows_window >= 1);
     });
 }
 

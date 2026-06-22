@@ -226,6 +226,8 @@ pub struct CollectorStats {
     pub canonical_inserted: u64,
     /// Reconnect attempts made.
     pub reconnects: u64,
+    /// Last raw payload timestamp observed by the collector.
+    pub last_payload_ts: Option<OffsetDateTime>,
     /// Last canonical event timestamp observed by the collector.
     pub last_event_ts: Option<OffsetDateTime>,
     /// Last observed exchange-to-receive latency in milliseconds.
@@ -250,6 +252,11 @@ pub struct CollectorRunReport {
 }
 
 impl CollectorStats {
+    /// Observe a raw payload and update freshness counters.
+    pub fn observe_payload(&mut self, received_ts: OffsetDateTime) {
+        self.last_payload_ts = Some(received_ts);
+    }
+
     /// Observe canonical events and update event/latency counters.
     pub fn observe_events(&mut self, events: &[LiquidationEvent]) {
         self.normalized_events += events.len() as u64;
@@ -275,6 +282,7 @@ impl CollectorStats {
             symbol: probe.symbol().to_owned(),
             status: status.into(),
             reconnects_5m,
+            last_payload_ts: self.last_payload_ts,
             last_event_ts: self.last_event_ts,
             checked_at,
             messages_received: saturating_u64_to_i64(self.received_messages),
@@ -730,6 +738,7 @@ async fn record_payloads(
 ) -> Result<CollectorStats, CollectorError> {
     let mut stats = CollectorStats::default();
     while let Some(received) = receiver.recv().await {
+        stats.observe_payload(received.received_ts);
         let events = probe.normalize_payload(&received.payload, received.received_ts)?;
         stats.observe_events(&events);
         for event in events {
@@ -759,6 +768,7 @@ async fn record_payloads_batched(
     loop {
         match tokio::time::timeout(batch_flush_interval, receiver.recv()).await {
             Ok(Some(payload_item)) => {
+                stats.observe_payload(payload_item.received_ts);
                 let events =
                     probe.normalize_payload(&payload_item.payload, payload_item.received_ts)?;
                 stats.observe_events(&events);
@@ -1021,6 +1031,7 @@ mod tests {
 
         assert_eq!(health.source, "bybit");
         assert_eq!(health.symbol, "BTCUSDT");
+        assert_eq!(health.last_payload_ts, None);
         assert_eq!(health.messages_received, 2);
         assert_eq!(health.normalized_events, 1);
         assert_eq!(health.last_latency_ms, Some(350));

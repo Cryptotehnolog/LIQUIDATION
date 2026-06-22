@@ -2,8 +2,34 @@
 
 use liq_domain::{LiquidationEvent, LiquidationSide, Source, SourceQuality};
 use sqlx::{PgPool, QueryBuilder};
+use time::OffsetDateTime;
 
-use crate::records::{CollectorHealthRecord, RawSourceEvent};
+use crate::records::{
+    CollectorDashboardMetrics, CollectorHealthRecord, CollectorSourceMetrics,
+    CollectorStorageSignal, RawSourceEvent,
+};
+
+/// Metrics aggregation window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetricsWindow {
+    seconds: i64,
+}
+
+impl MetricsWindow {
+    /// Build a window from minutes.
+    #[must_use]
+    pub const fn minutes(minutes: i64) -> Self {
+        Self {
+            seconds: minutes * 60,
+        }
+    }
+
+    /// Return the window size in seconds.
+    #[must_use]
+    pub const fn seconds(self) -> i64 {
+        self.seconds
+    }
+}
 
 /// Insert a raw source event.
 ///
@@ -294,6 +320,7 @@ pub async fn insert_collector_health(
             status,
             reconnects_5m,
             last_event_ts,
+            last_payload_ts,
             checked_at,
             messages_received,
             normalized_events,
@@ -302,7 +329,7 @@ pub async fn insert_collector_health(
             last_latency_ms,
             max_latency_ms
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ",
     )
     .bind(&health.source)
@@ -310,6 +337,7 @@ pub async fn insert_collector_health(
     .bind(&health.status)
     .bind(health.reconnects_5m)
     .bind(health.last_event_ts)
+    .bind(health.last_payload_ts)
     .bind(health.checked_at)
     .bind(health.messages_received)
     .bind(health.normalized_events)
@@ -343,6 +371,7 @@ pub async fn list_collector_health(
                 status,
                 reconnects_5m,
                 last_event_ts,
+                last_payload_ts,
                 checked_at,
                 messages_received,
                 normalized_events,
@@ -369,6 +398,7 @@ pub async fn list_collector_health(
                 status,
                 reconnects_5m,
                 last_event_ts,
+                last_payload_ts,
                 checked_at,
                 messages_received,
                 normalized_events,
@@ -389,6 +419,114 @@ pub async fn list_collector_health(
     Ok(rows.into_iter().map(CollectorHealthRecord::from).collect())
 }
 
+/// Return dashboard-ready collector metrics.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects one of the metrics queries.
+pub async fn collector_dashboard_metrics(
+    pool: &PgPool,
+    window: MetricsWindow,
+) -> Result<CollectorDashboardMetrics, sqlx::Error> {
+    let window_seconds = window.seconds().max(1);
+    let sources = sqlx::query_as::<_, CollectorSourceMetricsRow>(
+        r"
+        WITH latest AS (
+            SELECT DISTINCT ON (source, symbol)
+                source,
+                symbol,
+                status,
+                checked_at,
+                last_payload_ts,
+                last_event_ts,
+                messages_received,
+                normalized_events,
+                raw_inserted,
+                canonical_inserted,
+                reconnects_5m
+            FROM collector_health
+            ORDER BY source, symbol, checked_at DESC
+        ),
+        bucketed AS (
+            SELECT
+                source,
+                symbol,
+                COALESCE(MAX(reconnects_5m), 0)::INT AS max_reconnects_5m,
+                COUNT(*) FILTER (WHERE last_latency_ms < 100) AS latency_bucket_lt_100_ms,
+                COUNT(*) FILTER (WHERE last_latency_ms >= 100 AND last_latency_ms < 500) AS latency_bucket_100_500_ms,
+                COUNT(*) FILTER (WHERE last_latency_ms >= 500 AND last_latency_ms < 1000) AS latency_bucket_500_1000_ms,
+                COUNT(*) FILTER (WHERE last_latency_ms >= 1000) AS latency_bucket_ge_1000_ms
+            FROM collector_health
+            WHERE checked_at >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            GROUP BY source, symbol
+        )
+        SELECT
+            latest.source,
+            latest.symbol,
+            latest.status,
+            latest.checked_at,
+            latest.last_payload_ts,
+            latest.last_event_ts,
+            CASE
+                WHEN latest.last_payload_ts IS NULL THEN NULL
+                ELSE (EXTRACT(EPOCH FROM (NOW() - latest.last_payload_ts)) * 1000)::BIGINT
+            END AS freshness_ms,
+            latest.messages_received,
+            latest.normalized_events,
+            latest.raw_inserted,
+            latest.canonical_inserted,
+            latest.reconnects_5m,
+            COALESCE(bucketed.max_reconnects_5m, latest.reconnects_5m)::INT AS max_reconnects_5m,
+            COALESCE(bucketed.latency_bucket_lt_100_ms, 0)::BIGINT AS latency_bucket_lt_100_ms,
+            COALESCE(bucketed.latency_bucket_100_500_ms, 0)::BIGINT AS latency_bucket_100_500_ms,
+            COALESCE(bucketed.latency_bucket_500_1000_ms, 0)::BIGINT AS latency_bucket_500_1000_ms,
+            COALESCE(bucketed.latency_bucket_ge_1000_ms, 0)::BIGINT AS latency_bucket_ge_1000_ms
+        FROM latest
+        LEFT JOIN bucketed USING (source, symbol)
+        ORDER BY latest.source, latest.symbol
+        ",
+    )
+    .bind(window_seconds)
+    .fetch_all(pool)
+    .await?;
+
+    let storage = sqlx::query_as::<_, CollectorStorageSignalRow>(
+        r"
+        SELECT
+            (
+                pg_total_relation_size('raw_source_events'::regclass)
+                + pg_total_relation_size('liquidation_events'::regclass)
+                + pg_total_relation_size('collector_health'::regclass)
+            )::BIGINT AS total_bytes,
+            pg_total_relation_size('raw_source_events'::regclass)::BIGINT AS raw_source_events_bytes,
+            pg_total_relation_size('liquidation_events'::regclass)::BIGINT AS liquidation_events_bytes,
+            pg_total_relation_size('collector_health'::regclass)::BIGINT AS collector_health_bytes,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM raw_source_events
+                WHERE received_ts >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            ) AS raw_rows_window,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM liquidation_events
+                WHERE received_ts >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            ) AS canonical_rows_window
+        ",
+    )
+    .bind(window_seconds)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(CollectorDashboardMetrics {
+        window_seconds,
+        sources: sources
+            .into_iter()
+            .map(CollectorSourceMetrics::from)
+            .collect(),
+        storage: CollectorStorageSignal::from(storage),
+    })
+}
+
 #[derive(sqlx::FromRow)]
 struct CollectorHealthRow {
     source: String,
@@ -396,6 +534,7 @@ struct CollectorHealthRow {
     status: String,
     reconnects_5m: i32,
     last_event_ts: Option<time::OffsetDateTime>,
+    last_payload_ts: Option<time::OffsetDateTime>,
     checked_at: time::OffsetDateTime,
     messages_received: i64,
     normalized_events: i64,
@@ -412,6 +551,7 @@ impl From<CollectorHealthRow> for CollectorHealthRecord {
             symbol: row.symbol,
             status: row.status,
             reconnects_5m: row.reconnects_5m,
+            last_payload_ts: row.last_payload_ts,
             last_event_ts: row.last_event_ts,
             checked_at: row.checked_at,
             messages_received: row.messages_received,
@@ -420,6 +560,74 @@ impl From<CollectorHealthRow> for CollectorHealthRecord {
             canonical_inserted: row.canonical_inserted,
             last_latency_ms: row.last_latency_ms,
             max_latency_ms: row.max_latency_ms,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CollectorSourceMetricsRow {
+    source: String,
+    symbol: String,
+    status: String,
+    checked_at: OffsetDateTime,
+    last_payload_ts: Option<OffsetDateTime>,
+    last_event_ts: Option<OffsetDateTime>,
+    freshness_ms: Option<i64>,
+    messages_received: i64,
+    normalized_events: i64,
+    raw_inserted: i64,
+    canonical_inserted: i64,
+    reconnects_5m: i32,
+    max_reconnects_5m: i32,
+    latency_bucket_lt_100_ms: i64,
+    latency_bucket_100_500_ms: i64,
+    latency_bucket_500_1000_ms: i64,
+    latency_bucket_ge_1000_ms: i64,
+}
+
+impl From<CollectorSourceMetricsRow> for CollectorSourceMetrics {
+    fn from(row: CollectorSourceMetricsRow) -> Self {
+        Self {
+            source: row.source,
+            symbol: row.symbol,
+            status: row.status,
+            checked_at: row.checked_at,
+            last_payload_ts: row.last_payload_ts,
+            last_event_ts: row.last_event_ts,
+            freshness_ms: row.freshness_ms,
+            messages_received: row.messages_received,
+            normalized_events: row.normalized_events,
+            raw_inserted: row.raw_inserted,
+            canonical_inserted: row.canonical_inserted,
+            reconnects_5m: row.reconnects_5m,
+            max_reconnects_5m: row.max_reconnects_5m,
+            latency_bucket_lt_100_ms: row.latency_bucket_lt_100_ms,
+            latency_bucket_100_500_ms: row.latency_bucket_100_500_ms,
+            latency_bucket_500_1000_ms: row.latency_bucket_500_1000_ms,
+            latency_bucket_ge_1000_ms: row.latency_bucket_ge_1000_ms,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CollectorStorageSignalRow {
+    total_bytes: i64,
+    raw_source_events_bytes: i64,
+    liquidation_events_bytes: i64,
+    collector_health_bytes: i64,
+    raw_rows_window: i64,
+    canonical_rows_window: i64,
+}
+
+impl From<CollectorStorageSignalRow> for CollectorStorageSignal {
+    fn from(row: CollectorStorageSignalRow) -> Self {
+        Self {
+            total_bytes: row.total_bytes,
+            raw_source_events_bytes: row.raw_source_events_bytes,
+            liquidation_events_bytes: row.liquidation_events_bytes,
+            collector_health_bytes: row.collector_health_bytes,
+            raw_rows_window: row.raw_rows_window,
+            canonical_rows_window: row.canonical_rows_window,
         }
     }
 }

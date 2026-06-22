@@ -34,6 +34,31 @@ Dashboard read-only. Он не должен:
 - Storage: TimescaleDB, raw hot table, Parquet archive size.
 - Archive: verification status, corrupted files, deletion watermark.
 
+## Collector Data Contract
+
+Первый машинный контракт для dashboard:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector status --json --window-minutes 60
+```
+
+Dashboard не должен парсить табличный `collector status`. Используйте только
+JSON-режим. Поля времени приходят как RFC3339 strings или `null`.
+
+Минимальные поля для первой версии dashboard:
+
+- `sources[].source`, `sources[].symbol`, `sources[].status`;
+- `sources[].freshness_ms`;
+- `sources[].latency_bucket_lt_100_ms`;
+- `sources[].latency_bucket_100_500_ms`;
+- `sources[].latency_bucket_500_1000_ms`;
+- `sources[].latency_bucket_ge_1000_ms`;
+- `sources[].reconnects_5m`, `sources[].max_reconnects_5m`;
+- `sources[].last_payload_ts`, `sources[].last_event_ts`;
+- `storage.total_bytes`, `storage.raw_rows_window`,
+  `storage.canonical_rows_window`.
+
 ## Design workflow
 
 Dashboard work should use:
