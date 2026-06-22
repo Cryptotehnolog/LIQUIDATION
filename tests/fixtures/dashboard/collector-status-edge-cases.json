@@ -4,6 +4,9 @@
     {
       "source": "bybit",
       "symbol": "BTCUSDT",
+      "source_quality": "all_events",
+      "coverage_role": "strategy_primary",
+      "participates_in_signals": true,
       "status": "ok",
       "checked_at": "2026-06-22T00:00:05Z",
       "last_payload_ts": "2026-06-22T00:00:04Z",
@@ -23,6 +26,9 @@
     {
       "source": "binance",
       "symbol": "btcusdt",
+      "source_quality": "snapshot_only",
+      "coverage_role": "diagnostic_only",
+      "participates_in_signals": false,
       "status": "ok",
       "checked_at": "2026-06-22T00:00:05Z",
       "last_payload_ts": null,
@@ -42,6 +48,9 @@
     {
       "source": "bybit",
       "symbol": "ETHUSDT",
+      "source_quality": "all_events",
+      "coverage_role": "strategy_primary",
+      "participates_in_signals": true,
       "status": "degraded",
       "checked_at": "2026-06-22T00:00:05Z",
       "last_payload_ts": "2026-06-21T23:45:05Z",

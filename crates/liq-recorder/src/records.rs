@@ -77,6 +77,12 @@ pub struct CollectorSourceMetrics {
     pub source: String,
     /// Exchange symbol.
     pub symbol: String,
+    /// Source quality semantics used by replay/dashboard policy.
+    pub source_quality: String,
+    /// Dashboard coverage role, e.g. `strategy_primary` or `diagnostic_only`.
+    pub coverage_role: String,
+    /// Whether this source is allowed to participate in strategy signals.
+    pub participates_in_signals: bool,
     /// Latest source status.
     pub status: String,
     /// Latest health check timestamp.
@@ -110,6 +116,39 @@ pub struct CollectorSourceMetrics {
     pub latency_bucket_500_1000_ms: i64,
     /// Health rows in window with latency at or above 1000 ms.
     pub latency_bucket_ge_1000_ms: i64,
+}
+
+/// Dashboard-ready history series for trend widgets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectorDashboardHistory {
+    /// Metrics window in seconds.
+    pub window_seconds: i64,
+    /// Historical samples ordered by source, symbol, and timestamp.
+    pub samples: Vec<CollectorHistorySample>,
+}
+
+/// One collector trend sample.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectorHistorySample {
+    /// Source venue or provider id.
+    pub source: String,
+    /// Exchange symbol.
+    pub symbol: String,
+    /// Health check timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub checked_at: OffsetDateTime,
+    /// Health status at the sample timestamp.
+    pub status: String,
+    /// Milliseconds since the latest payload at read time when known.
+    pub freshness_ms: Option<i64>,
+    /// Last observed exchange-to-receive latency in milliseconds.
+    pub last_latency_ms: Option<i64>,
+    /// Latest reconnect count inside rolling 5-minute window.
+    pub reconnects_5m: i32,
+    /// Latest raw WebSocket messages received counter.
+    pub messages_received: i64,
+    /// Latest normalized events counter.
+    pub normalized_events: i64,
 }
 
 /// Dashboard-ready storage pressure signal.

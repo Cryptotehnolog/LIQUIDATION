@@ -5,8 +5,8 @@ use sqlx::{PgPool, QueryBuilder};
 use time::OffsetDateTime;
 
 use crate::records::{
-    CollectorDashboardMetrics, CollectorHealthRecord, CollectorSourceMetrics,
-    CollectorStorageSignal, RawSourceEvent,
+    CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHealthRecord,
+    CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal, RawSourceEvent,
 };
 
 /// Metrics aggregation window.
@@ -527,6 +527,49 @@ pub async fn collector_dashboard_metrics(
     })
 }
 
+/// Return dashboard-ready collector history samples.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the history query.
+pub async fn collector_dashboard_history(
+    pool: &PgPool,
+    window: MetricsWindow,
+) -> Result<CollectorDashboardHistory, sqlx::Error> {
+    let window_seconds = window.seconds().max(1);
+    let samples = sqlx::query_as::<_, CollectorHistorySampleRow>(
+        r"
+        SELECT
+            source,
+            symbol,
+            checked_at,
+            status,
+            CASE
+                WHEN last_payload_ts IS NULL THEN NULL
+                ELSE (EXTRACT(EPOCH FROM (NOW() - last_payload_ts)) * 1000)::BIGINT
+            END AS freshness_ms,
+            last_latency_ms,
+            reconnects_5m,
+            messages_received,
+            normalized_events
+        FROM collector_health
+        WHERE checked_at >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+        ORDER BY source, symbol, checked_at
+        ",
+    )
+    .bind(window_seconds)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(CollectorDashboardHistory {
+        window_seconds,
+        samples: samples
+            .into_iter()
+            .map(CollectorHistorySample::from)
+            .collect(),
+    })
+}
+
 #[derive(sqlx::FromRow)]
 struct CollectorHealthRow {
     source: String,
@@ -587,9 +630,13 @@ struct CollectorSourceMetricsRow {
 
 impl From<CollectorSourceMetricsRow> for CollectorSourceMetrics {
     fn from(row: CollectorSourceMetricsRow) -> Self {
+        let policy = SourcePolicy::from_source(&row.source);
         Self {
             source: row.source,
             symbol: row.symbol,
+            source_quality: policy.source_quality.to_owned(),
+            coverage_role: policy.coverage_role.to_owned(),
+            participates_in_signals: policy.participates_in_signals,
             status: row.status,
             checked_at: row.checked_at,
             last_payload_ts: row.last_payload_ts,
@@ -605,6 +652,35 @@ impl From<CollectorSourceMetricsRow> for CollectorSourceMetrics {
             latency_bucket_100_500_ms: row.latency_bucket_100_500_ms,
             latency_bucket_500_1000_ms: row.latency_bucket_500_1000_ms,
             latency_bucket_ge_1000_ms: row.latency_bucket_ge_1000_ms,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CollectorHistorySampleRow {
+    source: String,
+    symbol: String,
+    checked_at: OffsetDateTime,
+    status: String,
+    freshness_ms: Option<i64>,
+    last_latency_ms: Option<i64>,
+    reconnects_5m: i32,
+    messages_received: i64,
+    normalized_events: i64,
+}
+
+impl From<CollectorHistorySampleRow> for CollectorHistorySample {
+    fn from(row: CollectorHistorySampleRow) -> Self {
+        Self {
+            source: row.source,
+            symbol: row.symbol,
+            checked_at: row.checked_at,
+            status: row.status,
+            freshness_ms: row.freshness_ms,
+            last_latency_ms: row.last_latency_ms,
+            reconnects_5m: row.reconnects_5m,
+            messages_received: row.messages_received,
+            normalized_events: row.normalized_events,
         }
     }
 }
@@ -641,6 +717,34 @@ fn source_quality_as_str(source_quality: SourceQuality) -> &'static str {
         SourceQuality::AllEvents => "all_events",
         SourceQuality::SnapshotOnly => "snapshot_only",
         SourceQuality::Derived => "derived",
+    }
+}
+
+struct SourcePolicy {
+    source_quality: &'static str,
+    coverage_role: &'static str,
+    participates_in_signals: bool,
+}
+
+impl SourcePolicy {
+    fn from_source(source: &str) -> Self {
+        match source {
+            "bybit" => Self {
+                source_quality: "all_events",
+                coverage_role: "strategy_primary",
+                participates_in_signals: true,
+            },
+            "binance" => Self {
+                source_quality: "snapshot_only",
+                coverage_role: "diagnostic_only",
+                participates_in_signals: false,
+            },
+            _ => Self {
+                source_quality: "unknown",
+                coverage_role: "diagnostic_only",
+                participates_in_signals: false,
+            },
+        }
     }
 }
 

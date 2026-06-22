@@ -9,6 +9,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $FixtureFullPath = Join-Path $RepoRoot $FixturePath
 $OutLog = Join-Path $RepoRoot ".cache/dashboard-smoke.out.log"
 $ErrLog = Join-Path $RepoRoot ".cache/dashboard-smoke.err.log"
+$ScreenshotDir = Join-Path $RepoRoot ".cache/dashboard-smoke"
 $DashboardUrl = "http://127.0.0.1:$Port"
 
 if (-not (Test-Path $FixtureFullPath)) {
@@ -16,7 +17,9 @@ if (-not (Test-Path $FixtureFullPath)) {
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot ".cache") | Out-Null
+New-Item -ItemType Directory -Force -Path $ScreenshotDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $OutLog, $ErrLog
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $ScreenshotDir "*.png")
 
 $Args = @(
     "run", "-p", "liq-cli", "--",
@@ -54,6 +57,7 @@ try {
     }
 
     $env:DASHBOARD_URL = $DashboardUrl
+    $env:DASHBOARD_SCREENSHOT_DIR = $ScreenshotDir
     if (-not (Test-Path (Join-Path $RepoRoot "node_modules/@playwright/test"))) {
         npm install
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

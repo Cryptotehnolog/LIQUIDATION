@@ -10,9 +10,13 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use liq_recorder::{records::CollectorDashboardMetrics, repository};
+use liq_recorder::{
+    records::{CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHistorySample},
+    repository,
+};
 use serde::Deserialize;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -100,6 +104,7 @@ pub(crate) async fn serve_dashboard(args: DashboardArgs) -> anyhow::Result<()> {
         .route("/", get(index))
         .route("/healthz", get(healthz))
         .route("/api/collector/status", get(collector_status))
+        .route("/api/collector/history", get(collector_history))
         .with_state(state);
 
     let listener = TcpListener::bind(bind)
@@ -147,4 +152,62 @@ async fn collector_status(
         .context("failed to read collector dashboard metrics")?
     };
     Ok(Json(metrics))
+}
+
+async fn collector_history(
+    State(state): State<DashboardState>,
+    Query(query): Query<CollectorStatusQuery>,
+) -> Result<Json<CollectorDashboardHistory>, DashboardError> {
+    let window_minutes = query.window_minutes.unwrap_or(state.window_minutes).max(1);
+    let history = if let Some(path) = &state.fixture_path {
+        let body = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("failed to read dashboard fixture: {}", path.display()))?;
+        let metrics = serde_json::from_str::<CollectorDashboardMetrics>(&body)
+            .with_context(|| format!("failed to parse dashboard fixture: {}", path.display()))?;
+        history_from_fixture(&metrics)
+    } else {
+        let pool = state
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow!("dashboard database pool is not configured"))?;
+        repository::collector_dashboard_history(
+            pool,
+            repository::MetricsWindow::minutes(window_minutes),
+        )
+        .await
+        .context("failed to read collector dashboard history")?
+    };
+    Ok(Json(history))
+}
+
+fn history_from_fixture(metrics: &CollectorDashboardMetrics) -> CollectorDashboardHistory {
+    let mut samples = Vec::new();
+    for source in &metrics.sources {
+        for offset in [120_i64, 60, 0] {
+            samples.push(CollectorHistorySample {
+                source: source.source.clone(),
+                symbol: source.symbol.clone(),
+                checked_at: source.checked_at - Duration::seconds(offset),
+                status: source.status.clone(),
+                freshness_ms: source
+                    .freshness_ms
+                    .map(|freshness| freshness.saturating_add(offset * 1000)),
+                last_latency_ms: Some(
+                    source
+                        .latency_bucket_ge_1000_ms
+                        .checked_mul(1000)
+                        .unwrap_or_default()
+                        .max(25),
+                ),
+                reconnects_5m: source.reconnects_5m,
+                messages_received: source.messages_received.saturating_sub(offset),
+                normalized_events: source.normalized_events,
+            });
+        }
+    }
+    CollectorDashboardHistory {
+        window_seconds: metrics.window_seconds,
+        samples,
+    }
 }

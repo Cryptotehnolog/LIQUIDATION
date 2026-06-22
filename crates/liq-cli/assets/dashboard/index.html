@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Collector Operations</title>
+  <title>Операционный дашборд collector</title>
   <style>
     :root {
       color-scheme: dark;
@@ -60,7 +60,7 @@
 
     h1 {
       margin: 0;
-      font-size: clamp(28px, 5vw, 52px);
+      font-size: 52px;
       line-height: 0.95;
       font-weight: 720;
     }
@@ -263,6 +263,32 @@
       gap: 10px;
     }
 
+    .coverage-grid,
+    .trend-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .coverage-row,
+    .trend-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      border-top: 1px solid var(--line);
+      padding-top: 9px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .coverage-row strong,
+    .trend-row strong {
+      color: var(--text);
+      font-weight: 600;
+      text-align: right;
+    }
+
     .storage-cell {
       border-top: 1px solid var(--line);
       padding-top: 10px;
@@ -307,6 +333,10 @@
       .source-grid {
         grid-template-columns: 1fr;
       }
+
+      h1 {
+        font-size: 34px;
+      }
     }
 
     @media (max-width: 520px) {
@@ -318,6 +348,10 @@
       .bar-row {
         grid-template-columns: 78px minmax(0, 1fr) 38px;
       }
+
+      h1 {
+        font-size: 28px;
+      }
     }
   </style>
 </head>
@@ -325,7 +359,7 @@
   <main class="shell">
     <section class="topbar" aria-label="Collector summary">
       <div>
-        <h1>Collector Operations</h1>
+        <h1>Collector dashboard</h1>
         <div class="subtitle" id="updated-at">loading snapshot</div>
       </div>
       <div class="toolbar">
@@ -336,7 +370,7 @@
 
     <section class="overview" aria-label="Operational metrics">
       <div class="metric">
-        <div class="metric-label">Sources</div>
+        <div class="metric-label">Источники</div>
         <div class="metric-value" id="metric-sources">-</div>
       </div>
       <div class="metric">
@@ -344,11 +378,11 @@
         <div class="metric-value" id="metric-live">-</div>
       </div>
       <div class="metric">
-        <div class="metric-label">Needs attention</div>
+        <div class="metric-label">Требуют внимания</div>
         <div class="metric-value" id="metric-attention">-</div>
       </div>
       <div class="metric">
-        <div class="metric-label">Raw rows window</div>
+        <div class="metric-label">Raw rows в окне</div>
         <div class="metric-value" id="metric-raw">-</div>
       </div>
     </section>
@@ -357,7 +391,7 @@
       <section class="panel" aria-labelledby="sources-title">
         <div class="panel-header">
           <div>
-            <div class="panel-title" id="sources-title">Source health</div>
+            <div class="panel-title" id="sources-title">Состояние источников</div>
           </div>
           <span class="chip" id="window-label">window -</span>
         </div>
@@ -369,6 +403,16 @@
           <div class="panel-title">Latency buckets</div>
         </div>
         <div class="bars" id="latency-buckets" data-testid="latency-buckets"></div>
+
+        <div class="panel-header" style="margin-top: 22px;">
+          <div class="panel-title">Source coverage</div>
+        </div>
+        <div class="coverage-grid" id="source-coverage" data-testid="source-coverage"></div>
+
+        <div class="panel-header" style="margin-top: 22px;">
+          <div class="panel-title">Тренд окна</div>
+        </div>
+        <div class="trend-grid" id="trend-summary" data-testid="trend-summary"></div>
 
         <div class="panel-header" style="margin-top: 22px;">
           <div class="panel-title">Storage signal</div>
@@ -420,6 +464,13 @@
       return String(value).replace(/[^a-zA-Z0-9_-]/g, "-");
     }
 
+    function formatPolicy(source) {
+      const role = source.coverage_role ?? "unknown";
+      const signal = source.participates_in_signals ? "signals: on" : "signals: off";
+      const quality = source.source_quality ?? "unknown";
+      return `${role} / ${quality} / ${signal}`;
+    }
+
     function renderSources(sources) {
       const grid = el("source-grid");
       grid.replaceChildren();
@@ -437,6 +488,7 @@
             <span class="badge ${stateInfo.key}">${stateInfo.label}</span>
           </div>
           <div class="kv">
+            <span>coverage</span><strong>${formatPolicy(source)}</strong>
             <span>freshness</span><strong>${formatDuration(source.freshness_ms)}</strong>
             <span>messages</span><strong>${source.messages_received}</strong>
             <span>events</span><strong>${source.normalized_events}</strong>
@@ -445,6 +497,23 @@
           </div>
         `;
         grid.appendChild(card);
+      }
+    }
+
+    function renderCoverage(sources) {
+      const root = el("source-coverage");
+      root.replaceChildren();
+      const rows = sources.length
+        ? sources.map((source) => [
+            `${source.source}/${source.symbol}`,
+            `${source.coverage_role ?? "unknown"} · ${source.participates_in_signals ? "signal" : "diagnostic"}`
+          ])
+        : [["no sources", "diagnostic"]];
+      for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        row.className = "coverage-row";
+        row.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+        root.appendChild(row);
       }
     }
 
@@ -470,6 +539,36 @@
       }
     }
 
+    function renderTrend(history) {
+      const root = el("trend-summary");
+      root.replaceChildren();
+      const samples = history?.samples ?? [];
+      if (!samples.length) {
+        const row = document.createElement("div");
+        row.className = "trend-row";
+        row.innerHTML = "<span>history</span><strong>no samples</strong>";
+        root.appendChild(row);
+        return;
+      }
+      const latency = samples
+        .map((sample) => sample.last_latency_ms)
+        .filter((value) => Number.isFinite(value));
+      const reconnectMax = Math.max(0, ...samples.map((sample) => sample.reconnects_5m ?? 0));
+      const nonOkSamples = samples.filter((sample) => sample.status !== "ok").length;
+      const rows = [
+        ["samples", samples.length],
+        ["latency max", latency.length ? `${Math.max(...latency)} ms` : "n/a"],
+        ["reconnect max", reconnectMax],
+        ["non-ok samples", nonOkSamples]
+      ];
+      for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        row.className = "trend-row";
+        row.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+        root.appendChild(row);
+      }
+    }
+
     function renderStorage(storage) {
       const root = el("storage-signal");
       root.replaceChildren();
@@ -487,7 +586,7 @@
       }
     }
 
-    function render(snapshot) {
+    function render(snapshot, history) {
       const sources = snapshot.sources ?? [];
       const states = sources.map(classifySource);
       const live = states.filter((item) => item.key === "live").length;
@@ -504,15 +603,21 @@
 
       renderSources(sources);
       renderLatency(sources);
+      renderCoverage(sources);
+      renderTrend(history);
       renderStorage(snapshot.storage ?? {});
     }
 
     async function refresh() {
       try {
         el("connection-state").textContent = "REFRESHING";
-        const response = await fetch("/api/collector/status", { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        render(await response.json());
+        const [statusResponse, historyResponse] = await Promise.all([
+          fetch("/api/collector/status", { cache: "no-store" }),
+          fetch("/api/collector/history", { cache: "no-store" })
+        ]);
+        if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
+        if (!historyResponse.ok) throw new Error(`history HTTP ${historyResponse.status}`);
+        render(await statusResponse.json(), await historyResponse.json());
       } catch (error) {
         el("connection-state").textContent = "ERROR";
         el("state-line").textContent = `Dashboard API error: ${error.message}`;

@@ -126,6 +126,21 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             .expect("collector health insert must succeed");
         assert_eq!(inserted, 1);
 
+        let later_health = CollectorHealthRecord {
+            checked_at: received_ts + time::Duration::seconds(2),
+            messages_received: 3,
+            normalized_events: 2,
+            raw_inserted: 2,
+            canonical_inserted: 2,
+            last_latency_ms: Some(750),
+            max_latency_ms: 750,
+            ..health.clone()
+        };
+        let inserted = repository::insert_collector_health(&pool, &later_health)
+            .await
+            .expect("second collector health insert must succeed");
+        assert_eq!(inserted, 1);
+
         let persisted: (i64, i64, Option<i64>, i64) = sqlx::query_as(
             r"
             SELECT messages_received, normalized_events, last_latency_ms, max_latency_ms
@@ -157,6 +172,9 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
                 .expect("collector dashboard metrics must be queryable");
         assert!(dashboard.sources.iter().any(|row| row.source == "bybit"
             && row.symbol == health.symbol
+            && row.source_quality == "all_events"
+            && row.coverage_role == "strategy_primary"
+            && row.participates_in_signals
             && row.last_payload_ts.is_some()
             && row.freshness_ms.is_some()
             && row.latency_bucket_lt_100_ms == 0
@@ -164,6 +182,16 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             && row.max_reconnects_5m >= 1));
         assert!(dashboard.storage.total_bytes > 0);
         assert!(dashboard.storage.raw_rows_window >= 1);
+
+        let history =
+            repository::collector_dashboard_history(&pool, repository::MetricsWindow::minutes(60))
+                .await
+                .expect("collector dashboard history must be queryable");
+        assert!(history.window_seconds > 0);
+        assert!(history.samples.iter().any(|row| row.source == "bybit"
+            && row.symbol == health.symbol
+            && row.last_latency_ms == Some(750)
+            && row.messages_received == 3));
     });
 }
 

@@ -160,6 +160,8 @@ cargo run -p liq-cli -- collector status --json --window-minutes 60
 агрегированный снимок:
 
 - `sources[]`: состояние по `source`/`symbol`;
+- `source_quality`, `coverage_role`, `participates_in_signals`: operational
+  policy для dashboard source coverage;
 - `freshness_ms`: возраст последнего raw payload, если он известен;
 - `latency_bucket_*`: распределение последних latency samples в выбранном окне;
 - `max_reconnects_5m`: reconnect trend внутри выбранного окна;
@@ -173,6 +175,13 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 cargo run -p liq-cli -- collector status --source bybit --json --window-minutes 15
 ```
 
+Dashboard history endpoint отдаёт trend samples из `collector_health` через
+локальный HTTP server:
+
+```text
+http://127.0.0.1:18080/api/collector/history
+```
+
 Для read-only dashboard skeleton:
 
 ```powershell
@@ -184,6 +193,13 @@ Smoke test dashboard edge states:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-dashboard-smoke.ps1
+```
+
+После smoke test screenshots лежат в:
+
+```text
+.cache/dashboard-smoke/desktop.png
+.cache/dashboard-smoke/mobile.png
 ```
 
 ## Heavy Tests

@@ -53,6 +53,17 @@ JSON-режим. Поля времени приходят как RFC3339 strings
 Он читает только `/api/collector/status`, который возвращает тот же JSON
 contract, что и `collector status --json`.
 
+Для трендов dashboard также читает `/api/collector/history`. Этот endpoint
+возвращает read-only samples из `collector_health` за выбранное окно:
+
+- `samples[].checked_at`;
+- `samples[].status`;
+- `samples[].freshness_ms`;
+- `samples[].last_latency_ms`;
+- `samples[].reconnects_5m`;
+- `samples[].messages_received`;
+- `samples[].normalized_events`.
+
 ```powershell
 $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
 cargo run -p liq-cli -- collector dashboard --bind 127.0.0.1:18080 --window-minutes 60 --poll-seconds 5
@@ -83,12 +94,26 @@ Smoke test проверяет:
 - stale/degraded source;
 - latency buckets;
 - storage signal;
+- history endpoint и trend summary;
+- source coverage policy;
 - mobile viewport без horizontal overflow;
 - отсутствие browser console errors.
+
+Smoke test сохраняет screenshots:
+
+```text
+.cache/dashboard-smoke/desktop.png
+.cache/dashboard-smoke/mobile.png
+```
+
+GitHub Actions загружает эти файлы как artifact
+`dashboard-smoke-screenshots`, включая failed runs.
 
 Минимальные поля для первой версии dashboard:
 
 - `sources[].source`, `sources[].symbol`, `sources[].status`;
+- `sources[].source_quality`, `sources[].coverage_role`,
+  `sources[].participates_in_signals`;
 - `sources[].freshness_ms`;
 - `sources[].latency_bucket_lt_100_ms`;
 - `sources[].latency_bucket_100_500_ms`;
@@ -98,6 +123,16 @@ Smoke test проверяет:
 - `sources[].last_payload_ts`, `sources[].last_event_ts`;
 - `storage.total_bytes`, `storage.raw_rows_window`,
   `storage.canonical_rows_window`.
+
+MVP source coverage policy:
+
+- `bybit`: `source_quality=all_events`, `coverage_role=strategy_primary`,
+  `participates_in_signals=true`;
+- `binance`: `source_quality=snapshot_only`,
+  `coverage_role=diagnostic_only`, `participates_in_signals=false`.
+
+Это только operational/dashboard policy. Она не означает, что strategy runtime
+уже разрешён к real trading.
 
 ## Design workflow
 

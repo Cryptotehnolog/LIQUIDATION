@@ -58,6 +58,13 @@ jobs:
       - name: dashboard smoke
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-dashboard-smoke.ps1
+      - name: upload dashboard screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: dashboard-smoke-screenshots
+          path: .cache/dashboard-smoke/*.png
+          if-no-files-found: warn
 
   timescaledb:
     runs-on: ubuntu-latest
