@@ -996,6 +996,7 @@ dependencies = [
  "axum",
  "clap",
  "liq-collector",
+ "liq-connectors",
  "liq-recorder",
  "liq-replay",
  "serde",

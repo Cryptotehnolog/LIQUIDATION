@@ -11,6 +11,7 @@ anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
 liq-collector = { path = "../liq-collector", version = "0.1.0" }
+liq-connectors = { path = "../liq-connectors", version = "0.1.0" }
 liq-recorder = { path = "../liq-recorder", version = "0.1.0" }
 liq-replay = { path = "../liq-replay", version = "0.1.0" }
 serde.workspace = true

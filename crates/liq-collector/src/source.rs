@@ -44,6 +44,7 @@ impl CollectorSource {
 pub struct SourceProbe {
     source: CollectorSource,
     symbol: String,
+    okx_instrument_cache: Option<okx::OkxInstrumentCache>,
 }
 
 impl SourceProbe {
@@ -53,6 +54,7 @@ impl SourceProbe {
         Self {
             source: CollectorSource::Bybit,
             symbol: symbol.into().to_ascii_uppercase(),
+            okx_instrument_cache: None,
         }
     }
 
@@ -62,6 +64,7 @@ impl SourceProbe {
         Self {
             source: CollectorSource::Binance,
             symbol: symbol.into().to_ascii_lowercase(),
+            okx_instrument_cache: None,
         }
     }
 
@@ -71,7 +74,15 @@ impl SourceProbe {
         Self {
             source: CollectorSource::Okx,
             symbol: symbol.into().to_ascii_uppercase(),
+            okx_instrument_cache: None,
         }
+    }
+
+    /// Attach OKX instrument metadata required for canonical normalization.
+    #[must_use]
+    pub fn with_okx_instrument_cache(mut self, cache: okx::OkxInstrumentCache) -> Self {
+        self.okx_instrument_cache = Some(cache);
+        self
     }
 
     /// Build a probe from source id and symbol.
@@ -144,7 +155,10 @@ impl SourceProbe {
             CollectorSource::Binance => {
                 binance::normalize_force_order(payload, received_ts).map(|event| vec![event])
             }
-            CollectorSource::Okx => Ok(Vec::new()),
+            CollectorSource::Okx => self.okx_instrument_cache.as_ref().map_or_else(
+                || Ok(Vec::new()),
+                |cache| okx::normalize_liquidation_orders(payload, received_ts, cache),
+            ),
         }
     }
 
@@ -160,6 +174,7 @@ impl SourceProbe {
     ) -> Result<Vec<RawOnlySourceEvent>, ConnectorError> {
         match self.source {
             CollectorSource::Bybit | CollectorSource::Binance => Ok(Vec::new()),
+            CollectorSource::Okx if self.okx_instrument_cache.is_some() => Ok(Vec::new()),
             CollectorSource::Okx => okx::parse_liquidation_orders(payload).map(|items| {
                 items
                     .into_iter()
@@ -250,5 +265,31 @@ mod tests {
         assert_eq!(raw[0].source, Source::Okx);
         assert_eq!(raw[0].source_quality, "websocket_only");
         assert_eq!(raw[0].symbol, "BTC-USDT-SWAP");
+    }
+
+    #[test]
+    fn normalizes_okx_canonical_payload_when_cache_is_attached() {
+        let cache = okx::OkxInstrumentCache::from_instruments_response(include_str!(
+            "../../liq-connectors/tests/fixtures/okx_instruments_btc_usdt_swap.json"
+        ))
+        .expect("fixture should parse");
+        let probe = SourceProbe::okx("BTC-USDT-SWAP").with_okx_instrument_cache(cache);
+        let received_ts = OffsetDateTime::from_unix_timestamp(1_718_750_002)
+            .expect("fixture timestamp must be valid");
+
+        let events = probe
+            .normalize_payload(
+                include_str!("../../liq-connectors/tests/fixtures/okx_liquidation_orders.json"),
+                received_ts,
+            )
+            .expect("fixture should normalize");
+        let raw_only = probe
+            .raw_only_events(include_str!(
+                "../../liq-connectors/tests/fixtures/okx_liquidation_orders.json"
+            ))
+            .expect("raw-only parser should not fail");
+
+        assert_eq!(events.len(), 1);
+        assert!(raw_only.is_empty());
     }
 }

@@ -9,6 +9,7 @@ use liq_collector::{
     CollectorRunSettings, CollectorSettings, CollectorSource, SourceProbe, run_live_collector,
     run_live_collectors, run_live_probe,
 };
+use liq_connectors::okx::OkxInstrumentCache;
 use liq_recorder::{migrations, repository, schema};
 use liq_replay::{DryRunRequest, validate_dry_run};
 use sqlx::postgres::PgPoolOptions;
@@ -89,6 +90,9 @@ enum CollectorCommand {
         /// Exchange symbol, e.g. BTCUSDT.
         #[arg(long)]
         symbol: String,
+        /// Optional OKX instruments response JSON used to enable canonical OKX normalization.
+        #[arg(long)]
+        okx_instruments_path: Option<PathBuf>,
         /// Stop after this many raw WebSocket messages.
         #[arg(long, default_value_t = 1)]
         max_messages: usize,
@@ -113,6 +117,9 @@ enum CollectorCommand {
         /// Exchange symbol, e.g. BTCUSDT.
         #[arg(long)]
         symbol: String,
+        /// Optional OKX instruments response JSON used to enable canonical OKX normalization.
+        #[arg(long)]
+        okx_instruments_path: Option<PathBuf>,
         /// Bounded recorder channel capacity.
         #[arg(long, default_value_t = 1024)]
         channel_capacity: usize,
@@ -266,26 +273,29 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             database_url,
             source,
             symbol,
+            okx_instruments_path,
             max_messages,
             min_messages,
             channel_capacity,
             read_timeout_seconds,
         } => {
-            run_collector_probe(
+            run_collector_probe(CollectorProbeArgs {
                 database_url,
                 source,
                 symbol,
+                okx_instruments_path,
                 max_messages,
                 min_messages,
                 channel_capacity,
                 read_timeout_seconds,
-            )
+            })
             .await?;
         }
         CollectorCommand::Run {
             database_url,
             source,
             symbol,
+            okx_instruments_path,
             channel_capacity,
             read_timeout_seconds,
             channel_send_timeout_seconds,
@@ -299,6 +309,7 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
                 database_url,
                 source,
                 symbol,
+                okx_instruments_path,
                 channel_capacity,
                 read_timeout_seconds,
                 channel_send_timeout_seconds,
@@ -353,27 +364,35 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
     Ok(())
 }
 
-async fn run_collector_probe(
+struct CollectorProbeArgs {
     database_url: String,
     source: String,
     symbol: String,
+    okx_instruments_path: Option<PathBuf>,
     max_messages: usize,
     min_messages: usize,
     channel_capacity: usize,
     read_timeout_seconds: u64,
-) -> anyhow::Result<()> {
-    let source = parse_collector_source(&source)?;
-    let pool = connect(&database_url).await?;
+}
+
+async fn run_collector_probe(args: CollectorProbeArgs) -> anyhow::Result<()> {
+    let source = parse_collector_source(&args.source)?;
+    let okx_instrument_cache = load_okx_instrument_cache(args.okx_instruments_path.as_ref())?;
+    let pool = connect(&args.database_url).await?;
     let settings = CollectorSettings {
-        channel_capacity,
-        max_messages,
-        min_messages,
-        read_timeout: Duration::from_secs(read_timeout_seconds),
+        channel_capacity: args.channel_capacity,
+        max_messages: args.max_messages,
+        min_messages: args.min_messages,
+        read_timeout: Duration::from_secs(args.read_timeout_seconds),
         ..CollectorSettings::default()
     };
-    let stats = run_live_probe(pool, SourceProbe::new(source, symbol), settings)
-        .await
-        .context("collector probe failed")?;
+    let stats = run_live_probe(
+        pool,
+        source_probe(source, args.symbol, okx_instrument_cache.as_ref()),
+        settings,
+    )
+    .await
+    .context("collector probe failed")?;
     println!(
         "collector probe ok: received_messages={} normalized_events={} raw_inserted={} canonical_inserted={} reconnects={}",
         stats.received_messages,
@@ -389,6 +408,7 @@ struct CollectorRunArgs {
     database_url: String,
     source: Vec<String>,
     symbol: String,
+    okx_instruments_path: Option<PathBuf>,
     channel_capacity: usize,
     read_timeout_seconds: u64,
     channel_send_timeout_seconds: u64,
@@ -401,6 +421,7 @@ struct CollectorRunArgs {
 
 async fn run_collector_service(args: CollectorRunArgs) -> anyhow::Result<()> {
     let sources = parse_collector_sources(&args.source)?;
+    let okx_instrument_cache = load_okx_instrument_cache(args.okx_instruments_path.as_ref())?;
     let pool = connect(&args.database_url).await?;
     let settings = CollectorRunSettings {
         channel_capacity: args.channel_capacity,
@@ -422,7 +443,7 @@ async fn run_collector_service(args: CollectorRunArgs) -> anyhow::Result<()> {
 
     let probes = sources
         .into_iter()
-        .map(|source| SourceProbe::new(source, args.symbol.clone()))
+        .map(|source| source_probe(source, args.symbol.clone(), okx_instrument_cache.as_ref()))
         .collect::<Vec<_>>();
     let reports = if probes.len() == 1 {
         let probe = probes
@@ -480,6 +501,32 @@ fn parse_collector_sources(sources: &[String]) -> anyhow::Result<Vec<CollectorSo
         .iter()
         .map(|source| parse_collector_source(source))
         .collect()
+}
+
+fn source_probe(
+    source: CollectorSource,
+    symbol: impl Into<String>,
+    okx_instrument_cache: Option<&OkxInstrumentCache>,
+) -> SourceProbe {
+    let probe = SourceProbe::new(source, symbol);
+    if source == CollectorSource::Okx
+        && let Some(cache) = okx_instrument_cache
+    {
+        return probe.with_okx_instrument_cache(cache.clone());
+    }
+
+    probe
+}
+
+fn load_okx_instrument_cache(path: Option<&PathBuf>) -> anyhow::Result<Option<OkxInstrumentCache>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let payload = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read OKX instruments file: {}", path.display()))?;
+    let cache = OkxInstrumentCache::from_instruments_response(&payload)
+        .context("failed to parse OKX instruments metadata")?;
+    Ok(Some(cache))
 }
 
 async fn print_collector_health(

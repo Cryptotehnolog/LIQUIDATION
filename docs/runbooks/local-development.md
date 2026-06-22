@@ -153,6 +153,16 @@ OKX в текущем инкременте raw-only diagnostic source. Он мо
 `raw_source_events`, но не пишет canonical `liquidation_events`, пока не добавлен
 instrument metadata для корректного `notional_usd`.
 
+Для OKX canonical probe используйте явный metadata cache:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --okx-instruments-path .cache/okx/instruments-BTC-USDT-SWAP.json --max-messages 1 --min-messages 0 --read-timeout-seconds 30
+```
+
+Если `--okx-instruments-path` не задан, OKX остается raw-only. Это лучше, чем
+тихо считать неверный `notional_usd`.
+
 Для bounded проверки long-running collector mode:
 
 ```powershell

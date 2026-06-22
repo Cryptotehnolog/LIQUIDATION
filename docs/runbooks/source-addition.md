@@ -26,10 +26,18 @@ normalizer test, source policy, dashboard visibility и CI guard.
 - `okx`: `source_quality=websocket_only`, `coverage_role=diagnostic_only`,
   `participates_in_signals=false`.
 
-`okx` намеренно не участвует в сигналах: OKX `liquidation-orders` WebSocket
-дает raw liquidation details, но для безопасного `notional_usd` нужен
-instrument metadata/contract value. До этого OKX используется только для
-coverage, freshness и reliability diagnostics.
+`okx` намеренно не участвует в сигналах по умолчанию: OKX
+`liquidation-orders` WebSocket дает liquidation details, но безопасный
+`notional_usd` требует instrument metadata/contract value.
+
+Canonical OKX normalization разрешается только при явном metadata cache:
+
+- источник metadata: `GET /api/v5/public/instruments?instType=SWAP&instId=...`;
+- обязательные поля: `instId`, `ctVal`, `ctValCcy`;
+- поддержанный MVP-case: `ctValCcy` совпадает с base asset инструмента,
+  например `BTC-USDT-SWAP` и `ctValCcy=BTC`;
+- формула: `quantity_base = sz * ctVal`, `notional_usd = quantity_base * bkPx`;
+- если metadata отсутствует или не доказывает формулу, OKX остается raw-only.
 
 ## Executable guard
 
@@ -91,6 +99,18 @@ cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --ma
 - `raw_inserted` может стать больше 0 при наличии liquidation payload;
 - `normalized_events=0` и `canonical_inserted=0` до instrument metadata;
 - dashboard показывает `okx` как `diagnostic_only`.
+
+Для canonical OKX probe сначала сохраните official instruments response в
+локальный JSON-файл вне секретов, например `.cache/okx/instruments-BTC-USDT-SWAP.json`,
+и запустите:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --okx-instruments-path .cache/okx/instruments-BTC-USDT-SWAP.json --max-messages 1 --min-messages 0 --read-timeout-seconds 30
+```
+
+Даже в canonical mode OKX остается `diagnostic_only` до overlap validation и
+ручного решения о signal policy.
 
 ## Что улучшить или автоматизировать
 

@@ -80,6 +80,10 @@
       "summary": "OKX WebSocket liquidation-orders can be collected as raw diagnostic data, but canonical liquidation_events remain disabled until instrument metadata is available for correct notional_usd."
     },
     {
+      "id": "okx_canonical_requires_contract_metadata",
+      "summary": "OKX canonical normalization is allowed only when instrument metadata proves ctVal and ctValCcy support honest notional_usd calculation; otherwise OKX remains raw-only diagnostic."
+    },
+    {
       "id": "polymarket_recorder_required",
       "summary": "Polymarket historical data limitations strengthen the requirement for a project-owned recorder and replay archive."
     },

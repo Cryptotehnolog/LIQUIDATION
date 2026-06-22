@@ -72,3 +72,46 @@ fn ignores_okx_non_liquidation_service_payload() {
 
     assert!(events.is_empty());
 }
+
+#[test]
+fn normalizes_okx_liquidation_when_contract_metadata_is_supported() {
+    let cache = okx::OkxInstrumentCache::from_instruments_response(include_str!(
+        "fixtures/okx_instruments_btc_usdt_swap.json"
+    ))
+    .expect("instrument fixture must parse");
+    let received_ts = OffsetDateTime::from_unix_timestamp(1_718_750_002)
+        .expect("fixture timestamp must be valid");
+
+    let events = okx::normalize_liquidation_orders(
+        include_str!("fixtures/okx_liquidation_orders.json"),
+        received_ts,
+        &cache,
+    )
+    .expect("supported instrument must normalize canonically");
+
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.source, Source::Okx);
+    assert_eq!(event.source_quality, SourceQuality::WebsocketOnly);
+    assert_eq!(event.symbol, "BTC-USDT-SWAP");
+    assert_eq!(event.side, LiquidationSide::Long);
+    assert_eq!(event.price, Decimal::new(6_500_000, 2));
+    assert_eq!(event.quantity, Decimal::new(1, 0));
+    assert_eq!(event.notional_usd, Decimal::new(6_500_000, 2));
+}
+
+#[test]
+fn rejects_okx_canonical_normalization_without_metadata() {
+    let cache = okx::OkxInstrumentCache::default();
+    let received_ts = OffsetDateTime::from_unix_timestamp(1_718_750_002)
+        .expect("fixture timestamp must be valid");
+
+    let err = okx::normalize_liquidation_orders(
+        include_str!("fixtures/okx_liquidation_orders.json"),
+        received_ts,
+        &cache,
+    )
+    .expect_err("missing instrument metadata must block canonical normalization");
+
+    assert!(err.to_string().contains("okx.instrument_metadata"));
+}
