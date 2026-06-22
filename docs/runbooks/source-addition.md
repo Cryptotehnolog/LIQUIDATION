@@ -163,7 +163,18 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-market-data-nightly-check.ps1 -RuntimeSeconds 30 -HealthIntervalSeconds 5 -WindowMinutes 60
 ```
 
+Для сравнения нескольких nightly artifacts используйте history report:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\market-data-report-history.ps1 -InputRoot .cache\nightly-market-data -OutputPath .cache\nightly-market-data\trend.md -JsonOutputPath .cache\nightly-market-data\trend.json -MinRunsForSignal 3
+```
+
+Отчёт выводит `insufficient-history`, пока запусков меньше заданного минимума.
+После накопления истории он классифицирует OKX как `useful-diagnostic`,
+`healthy-but-sparse`, `unreliable-metadata` или `unreliable-source`. Это
+по-прежнему не разрешает использовать OKX в сигналах автоматически.
+
 ## Что улучшить или автоматизировать
 
 - Добавить nightly official docs changelog check для Binance/Bybit/OKX.
-- Добавить trend comparison для нескольких ночных overlap reports.
+- Добавить сравнение trend reports между GitHub artifacts разных дат.

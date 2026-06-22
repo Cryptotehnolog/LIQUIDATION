@@ -12,7 +12,7 @@ test("collector dashboard handles null, empty, and stale source states", async (
     }
   });
 
-  await page.goto(dashboardUrl, { waitUntil: "networkidle" });
+  await page.goto(dashboardUrl, { waitUntil: "domcontentloaded" });
 
   await expect(page.getByRole("heading", { name: "Collector dashboard" })).toBeVisible();
   await expect(page.getByTestId("source-card-bybit-BTCUSDT")).toContainText("LIVE");

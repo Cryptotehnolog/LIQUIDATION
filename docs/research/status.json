@@ -93,7 +93,11 @@
     },
     {
       "id": "nightly_market_data_diagnostics",
-      "summary": "A scheduled/manual GitHub Actions workflow runs bounded market-data diagnostics, fetches OKX metadata, captures collector status, writes an overlap report, and uploads artifacts without blocking normal push CI."
+      "summary": "A scheduled/manual GitHub Actions workflow runs bounded market-data diagnostics, fetches OKX metadata, captures collector status, writes an overlap report, writes a local trend report, and uploads artifacts without blocking normal push CI."
+    },
+    {
+      "id": "market_data_history_report",
+      "summary": "scripts/market-data-report-history.ps1 summarizes multiple nightly artifacts and classifies OKX usefulness as diagnostic-only evidence: insufficient-history, useful-diagnostic, healthy-but-sparse, unreliable-metadata, or unreliable-source."
     },
     {
       "id": "polymarket_recorder_required",

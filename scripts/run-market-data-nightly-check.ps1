@@ -1,6 +1,6 @@
 param(
     [string]$DatabaseUrl = $env:DATABASE_URL,
-    [string]$ReportDir = ".cache\nightly-market-data",
+    [string]$ReportDir = ".cache/nightly-market-data",
     [string]$BybitSymbol = "BTCUSDT",
     [string]$OkxSymbol = "BTC-USDT-SWAP",
     [int]$RuntimeSeconds = 30,

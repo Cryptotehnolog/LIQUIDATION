@@ -239,6 +239,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-market-data-nigh
 Отчёт сохраняет `collector-status.json`, `overlap-report.json`, `summary.md` и
 `nightly-run.log` в `.cache/nightly-market-data/`.
 
+Чтобы посмотреть тренд по нескольким сохранённым nightly artifacts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/market-data-report-history.ps1 -InputRoot .cache/nightly-market-data
+```
+
+Trend report сохраняется в `.cache/market-data-report-history/`.
+
 Dashboard history endpoint отдаёт trend samples из `collector_health` через
 локальный HTTP server:
 

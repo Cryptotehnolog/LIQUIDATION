@@ -30,7 +30,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: run bounded market-data diagnostics
         shell: pwsh
-        run: ./scripts/run-market-data-nightly-check.ps1 -RuntimeSeconds 30 -HealthIntervalSeconds 5 -WindowMinutes 60
+        run: |
+          ./scripts/run-market-data-nightly-check.ps1 -RuntimeSeconds 30 -HealthIntervalSeconds 5 -WindowMinutes 60
+          ./scripts/market-data-report-history.ps1 -InputRoot .cache/nightly-market-data -OutputPath .cache/nightly-market-data/trend.md -JsonOutputPath .cache/nightly-market-data/trend.json -MinRunsForSignal 3
       - name: upload market-data diagnostics
         if: always()
         uses: actions/upload-artifact@v6
