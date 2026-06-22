@@ -189,6 +189,20 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 cargo run -p liq-cli -- collector dashboard --bind 127.0.0.1:18080 --window-minutes 60 --poll-seconds 5
 ```
 
+Для обычного operator-запуска используйте wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
+```
+
+Он выбирает live mode при наличии `DATABASE_URL`; иначе запускает fixture mode,
+чтобы dashboard можно было открыть без поднятой БД. Проверить выбранную команду
+без запуска сервера:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1 -PrintCommandOnly
+```
+
 Smoke test dashboard edge states:
 
 ```powershell

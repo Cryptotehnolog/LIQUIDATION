@@ -69,6 +69,18 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 cargo run -p liq-cli -- collector dashboard --bind 127.0.0.1:18080 --window-minutes 60 --poll-seconds 5
 ```
 
+Operator-friendly launcher сам выбирает режим:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
+```
+
+- если `DATABASE_URL` задан, запускается live dashboard;
+- если `DATABASE_URL` пустой, запускается fixture dashboard;
+- `-Mode Live` требует `DATABASE_URL` или `-DatabaseUrl`;
+- `-Mode Fixture` всегда использует fixture JSON;
+- `-PrintCommandOnly` показывает выбранную команду без запуска сервера.
+
 Открыть в браузере:
 
 ```text

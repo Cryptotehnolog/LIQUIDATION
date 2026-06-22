@@ -55,6 +55,9 @@ jobs:
           cache: npm
       - name: npm install
         run: npm install
+      - name: dashboard launcher script
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-start-dashboard.ps1
       - name: dashboard smoke
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-dashboard-smoke.ps1
