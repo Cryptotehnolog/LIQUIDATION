@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use crate::records::{
     CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHealthRecord,
     CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal, RawSourceEvent,
+    SourceOverlapBucket, SourceOverlapReport, SourceOverlapSummary,
 };
 
 /// Metrics aggregation window.
@@ -570,6 +571,181 @@ pub async fn collector_dashboard_history(
     })
 }
 
+/// Return source coverage overlap for a primary and diagnostic source.
+///
+/// This is not event deduplication: different venues can liquidate correlated
+/// positions at similar times, and those remain distinct events. The report is
+/// a coverage/readiness diagnostic over the same time window.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects one of the report queries.
+pub async fn source_overlap_report(
+    pool: &PgPool,
+    primary_source: &str,
+    diagnostic_source: &str,
+    window: MetricsWindow,
+    bucket_seconds: i64,
+) -> Result<SourceOverlapReport, sqlx::Error> {
+    let window_seconds = window.seconds().max(1);
+    let bucket_seconds = bucket_seconds.max(1);
+    let primary = source_overlap_summary(pool, primary_source, window_seconds).await?;
+    let diagnostic = source_overlap_summary(pool, diagnostic_source, window_seconds).await?;
+    let buckets = source_overlap_buckets(
+        pool,
+        primary_source,
+        diagnostic_source,
+        window_seconds,
+        bucket_seconds,
+    )
+    .await?;
+
+    Ok(SourceOverlapReport {
+        window_seconds,
+        bucket_seconds,
+        primary,
+        diagnostic,
+        buckets,
+    })
+}
+
+async fn source_overlap_summary(
+    pool: &PgPool,
+    source: &str,
+    window_seconds: i64,
+) -> Result<SourceOverlapSummary, sqlx::Error> {
+    let row = sqlx::query_as::<_, SourceOverlapSummaryRow>(
+        r"
+        WITH latest AS (
+            SELECT
+                status,
+                last_payload_ts,
+                last_event_ts,
+                messages_received,
+                normalized_events,
+                raw_inserted,
+                canonical_inserted
+            FROM collector_health
+            WHERE source = $1
+              AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            ORDER BY checked_at DESC
+            LIMIT 1
+        ),
+        symbols AS (
+            SELECT symbol
+            FROM collector_health
+            WHERE source = $1
+              AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            UNION
+            SELECT symbol
+            FROM raw_source_events
+            WHERE source = $1
+              AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            UNION
+            SELECT symbol
+            FROM liquidation_events
+            WHERE source = $1
+              AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+        )
+        SELECT
+            $1::TEXT AS source,
+            COALESCE((SELECT string_agg(symbol, ',' ORDER BY symbol) FROM symbols), '') AS symbols_csv,
+            (SELECT status FROM latest) AS latest_status,
+            (SELECT last_payload_ts FROM latest) AS last_payload_ts,
+            (SELECT last_event_ts FROM latest) AS last_event_ts,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM collector_health
+                WHERE source = $1
+                  AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            ) AS health_rows,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM raw_source_events
+                WHERE source = $1
+                  AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            ) AS raw_events,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM liquidation_events
+                WHERE source = $1
+                  AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            ) AS canonical_events,
+            COALESCE((SELECT messages_received FROM latest), 0)::BIGINT AS messages_received,
+            COALESCE((SELECT normalized_events FROM latest), 0)::BIGINT AS normalized_events,
+            COALESCE((SELECT raw_inserted FROM latest), 0)::BIGINT AS raw_inserted,
+            COALESCE((SELECT canonical_inserted FROM latest), 0)::BIGINT AS canonical_inserted
+        ",
+    )
+    .bind(source)
+    .bind(window_seconds)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(SourceOverlapSummary::from(row))
+}
+
+async fn source_overlap_buckets(
+    pool: &PgPool,
+    primary_source: &str,
+    diagnostic_source: &str,
+    window_seconds: i64,
+    bucket_seconds: i64,
+) -> Result<Vec<SourceOverlapBucket>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, SourceOverlapBucketRow>(
+        r"
+        WITH raw_counts AS (
+            SELECT
+                source,
+                to_timestamp(floor(extract(epoch FROM received_ts) / $4::BIGINT) * $4::BIGINT) AS bucket_start,
+                COUNT(*)::BIGINT AS event_count
+            FROM raw_source_events
+            WHERE source IN ($1, $2)
+              AND received_ts >= NOW() - ($3::BIGINT * INTERVAL '1 second')
+            GROUP BY source, bucket_start
+        ),
+        canonical_counts AS (
+            SELECT
+                source,
+                to_timestamp(floor(extract(epoch FROM received_ts) / $4::BIGINT) * $4::BIGINT) AS bucket_start,
+                COUNT(*)::BIGINT AS event_count
+            FROM liquidation_events
+            WHERE source IN ($1, $2)
+              AND received_ts >= NOW() - ($3::BIGINT * INTERVAL '1 second')
+            GROUP BY source, bucket_start
+        ),
+        buckets AS (
+            SELECT bucket_start FROM raw_counts
+            UNION
+            SELECT bucket_start FROM canonical_counts
+        )
+        SELECT
+            buckets.bucket_start,
+            COALESCE(SUM(raw_counts.event_count) FILTER (WHERE raw_counts.source = $1), 0)::BIGINT
+                AS primary_raw_events,
+            COALESCE(SUM(canonical_counts.event_count) FILTER (WHERE canonical_counts.source = $1), 0)::BIGINT
+                AS primary_canonical_events,
+            COALESCE(SUM(raw_counts.event_count) FILTER (WHERE raw_counts.source = $2), 0)::BIGINT
+                AS diagnostic_raw_events,
+            COALESCE(SUM(canonical_counts.event_count) FILTER (WHERE canonical_counts.source = $2), 0)::BIGINT
+                AS diagnostic_canonical_events
+        FROM buckets
+        LEFT JOIN raw_counts USING (bucket_start)
+        LEFT JOIN canonical_counts USING (bucket_start)
+        GROUP BY buckets.bucket_start
+        ORDER BY buckets.bucket_start
+        ",
+    )
+    .bind(primary_source)
+    .bind(diagnostic_source)
+    .bind(window_seconds)
+    .bind(bucket_seconds)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(SourceOverlapBucket::from).collect())
+}
+
 #[derive(sqlx::FromRow)]
 struct CollectorHealthRow {
     source: String,
@@ -706,6 +882,70 @@ impl From<CollectorStorageSignalRow> for CollectorStorageSignal {
             canonical_rows_window: row.canonical_rows_window,
         }
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct SourceOverlapSummaryRow {
+    source: String,
+    symbols_csv: String,
+    latest_status: Option<String>,
+    last_payload_ts: Option<OffsetDateTime>,
+    last_event_ts: Option<OffsetDateTime>,
+    health_rows: i64,
+    raw_events: i64,
+    canonical_events: i64,
+    messages_received: i64,
+    normalized_events: i64,
+    raw_inserted: i64,
+    canonical_inserted: i64,
+}
+
+impl From<SourceOverlapSummaryRow> for SourceOverlapSummary {
+    fn from(row: SourceOverlapSummaryRow) -> Self {
+        Self {
+            source: row.source,
+            symbols: split_symbols_csv(&row.symbols_csv),
+            latest_status: row.latest_status,
+            last_payload_ts: row.last_payload_ts,
+            last_event_ts: row.last_event_ts,
+            health_rows: row.health_rows,
+            raw_events: row.raw_events,
+            canonical_events: row.canonical_events,
+            messages_received: row.messages_received,
+            normalized_events: row.normalized_events,
+            raw_inserted: row.raw_inserted,
+            canonical_inserted: row.canonical_inserted,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SourceOverlapBucketRow {
+    bucket_start: OffsetDateTime,
+    primary_raw_events: i64,
+    primary_canonical_events: i64,
+    diagnostic_raw_events: i64,
+    diagnostic_canonical_events: i64,
+}
+
+impl From<SourceOverlapBucketRow> for SourceOverlapBucket {
+    fn from(row: SourceOverlapBucketRow) -> Self {
+        Self {
+            bucket_start: row.bucket_start,
+            primary_raw_events: row.primary_raw_events,
+            primary_canonical_events: row.primary_canonical_events,
+            diagnostic_raw_events: row.diagnostic_raw_events,
+            diagnostic_canonical_events: row.diagnostic_canonical_events,
+        }
+    }
+}
+
+fn split_symbols_csv(symbols: &str) -> Vec<String> {
+    if symbols.is_empty() {
+        return Vec::new();
+    }
+
+    symbols.split(',').map(str::to_owned).collect()
 }
 
 fn source_as_str(source: Source) -> &'static str {

@@ -157,7 +157,11 @@ impl SourceProbe {
             }
             CollectorSource::Okx => self.okx_instrument_cache.as_ref().map_or_else(
                 || Ok(Vec::new()),
-                |cache| okx::normalize_liquidation_orders(payload, received_ts, cache),
+                |cache| match okx::normalize_liquidation_orders(payload, received_ts, cache) {
+                    Ok(events) => Ok(events),
+                    Err(ConnectorError::Missing("okx.instrument_metadata")) => Ok(Vec::new()),
+                    Err(error) => Err(error),
+                },
             ),
         }
     }
@@ -174,7 +178,25 @@ impl SourceProbe {
     ) -> Result<Vec<RawOnlySourceEvent>, ConnectorError> {
         match self.source {
             CollectorSource::Bybit | CollectorSource::Binance => Ok(Vec::new()),
-            CollectorSource::Okx if self.okx_instrument_cache.is_some() => Ok(Vec::new()),
+            CollectorSource::Okx if self.okx_instrument_cache.is_some() => {
+                if let Some(cache) = self.okx_instrument_cache.as_ref() {
+                    okx::parse_liquidation_orders(payload).map(|items| {
+                        items
+                            .into_iter()
+                            .filter(|item| !cache.supports_canonical_instrument(&item.symbol))
+                            .map(|item| RawOnlySourceEvent {
+                                source: Source::Okx,
+                                source_event_id: item.source_event_id,
+                                source_quality: "websocket_only",
+                                symbol: item.symbol,
+                                exchange_ts: item.exchange_ts,
+                            })
+                            .collect()
+                    })
+                } else {
+                    Ok(Vec::new())
+                }
+            }
             CollectorSource::Okx => okx::parse_liquidation_orders(payload).map(|items| {
                 items
                     .into_iter()
@@ -291,5 +313,29 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert!(raw_only.is_empty());
+    }
+
+    #[test]
+    fn keeps_okx_unknown_metadata_payload_as_raw_only_when_cache_is_attached() {
+        let cache = okx::OkxInstrumentCache::from_instruments_response(include_str!(
+            "../../liq-connectors/tests/fixtures/okx_instruments_btc_usdt_swap.json"
+        ))
+        .expect("fixture should parse");
+        let probe = SourceProbe::okx("BTC-USDT-SWAP").with_okx_instrument_cache(cache);
+        let payload =
+            include_str!("../../liq-connectors/tests/fixtures/okx_liquidation_orders.json")
+                .replace("BTC-USDT-SWAP", "ETH-USDT-SWAP")
+                .replace("BTC-USDT", "ETH-USDT");
+
+        let events = probe
+            .normalize_payload(&payload, OffsetDateTime::UNIX_EPOCH)
+            .expect("unsupported instrument metadata should not fail collector routing");
+        let raw_only = probe
+            .raw_only_events(&payload)
+            .expect("unsupported instrument should stay raw-only");
+
+        assert!(events.is_empty());
+        assert_eq!(raw_only.len(), 1);
+        assert_eq!(raw_only[0].symbol, "ETH-USDT-SWAP");
     }
 }

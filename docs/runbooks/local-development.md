@@ -222,6 +222,23 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 cargo run -p liq-cli -- collector status --source bybit --json --window-minutes 15
 ```
 
+Для overlap validation между Bybit primary и OKX diagnostic:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector overlap-report --primary-source bybit --diagnostic-source okx --window-minutes 60 --bucket-seconds 60
+```
+
+Для bounded nightly-style diagnostics с artifacts:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-market-data-nightly-check.ps1 -RuntimeSeconds 30 -HealthIntervalSeconds 5 -WindowMinutes 60
+```
+
+Отчёт сохраняет `collector-status.json`, `overlap-report.json`, `summary.md` и
+`nightly-run.log` в `.cache/nightly-market-data/`.
+
 Dashboard history endpoint отдаёт trend samples из `collector_health` через
 локальный HTTP server:
 

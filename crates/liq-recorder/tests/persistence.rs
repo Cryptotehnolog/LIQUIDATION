@@ -192,6 +192,59 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             && row.symbol == health.symbol
             && row.last_latency_ms == Some(750)
             && row.messages_received == 3));
+
+        let okx_raw = RawSourceEvent {
+            source: "okx".to_owned(),
+            source_event_id: format!("okx:test:{suffix}"),
+            source_quality: "websocket_only".to_owned(),
+            symbol: "BTC-USDT-SWAP".to_owned(),
+            exchange_ts,
+            received_ts,
+            payload: json!({"fixture": suffix, "source": "okx"}),
+            payload_sha256: "2".repeat(64),
+        };
+        let inserted = repository::insert_raw_source_event(&pool, &okx_raw)
+            .await
+            .expect("okx raw event insert must succeed");
+        assert_eq!(inserted, 1);
+
+        let okx_health = CollectorHealthRecord {
+            source: "okx".to_owned(),
+            symbol: "BTC-USDT-SWAP".to_owned(),
+            status: "ok".to_owned(),
+            reconnects_5m: 0,
+            last_payload_ts: Some(received_ts),
+            last_event_ts: None,
+            checked_at: received_ts + time::Duration::seconds(3),
+            messages_received: 1,
+            normalized_events: 0,
+            raw_inserted: 1,
+            canonical_inserted: 0,
+            last_latency_ms: None,
+            max_latency_ms: 0,
+        };
+        let inserted = repository::insert_collector_health(&pool, &okx_health)
+            .await
+            .expect("okx health insert must succeed");
+        assert_eq!(inserted, 1);
+
+        let overlap = repository::source_overlap_report(
+            &pool,
+            "bybit",
+            "okx",
+            repository::MetricsWindow::minutes(60),
+            60,
+        )
+        .await
+        .expect("source overlap report must be queryable");
+        assert_eq!(overlap.primary.source, "bybit");
+        assert_eq!(overlap.diagnostic.source, "okx");
+        assert!(overlap.primary.canonical_events >= 1);
+        assert!(overlap.diagnostic.raw_events >= 1);
+        assert_eq!(overlap.diagnostic.canonical_events, 0);
+        assert!(overlap.buckets.iter().any(
+            |bucket| bucket.primary_canonical_events >= 1 && bucket.diagnostic_raw_events >= 1
+        ));
     });
 }
 

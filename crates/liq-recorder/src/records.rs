@@ -167,3 +167,65 @@ pub struct CollectorStorageSignal {
     /// Canonical rows inserted inside the dashboard window.
     pub canonical_rows_window: i64,
 }
+
+/// Source coverage overlap report for one primary and one diagnostic source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceOverlapReport {
+    /// Metrics window in seconds.
+    pub window_seconds: i64,
+    /// Bucket size in seconds.
+    pub bucket_seconds: i64,
+    /// Primary source summary.
+    pub primary: SourceOverlapSummary,
+    /// Diagnostic source summary.
+    pub diagnostic: SourceOverlapSummary,
+    /// Per-bucket raw/canonical counts.
+    pub buckets: Vec<SourceOverlapBucket>,
+}
+
+/// Source-level overlap summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceOverlapSummary {
+    /// Source venue id.
+    pub source: String,
+    /// Comma-free list of symbols observed in the window.
+    pub symbols: Vec<String>,
+    /// Latest health status in the window, when known.
+    pub latest_status: Option<String>,
+    /// Latest payload timestamp in the window, when known.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_payload_ts: Option<OffsetDateTime>,
+    /// Latest canonical event timestamp in the window, when known.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_event_ts: Option<OffsetDateTime>,
+    /// Health rows observed in the window.
+    pub health_rows: i64,
+    /// Raw rows observed in the window.
+    pub raw_events: i64,
+    /// Canonical rows observed in the window.
+    pub canonical_events: i64,
+    /// Latest reported message counter in the window.
+    pub messages_received: i64,
+    /// Latest reported normalized event counter in the window.
+    pub normalized_events: i64,
+    /// Latest reported raw insert counter in the window.
+    pub raw_inserted: i64,
+    /// Latest reported canonical insert counter in the window.
+    pub canonical_inserted: i64,
+}
+
+/// One overlap bucket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceOverlapBucket {
+    /// Bucket start timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub bucket_start: OffsetDateTime,
+    /// Primary raw rows in this bucket.
+    pub primary_raw_events: i64,
+    /// Primary canonical rows in this bucket.
+    pub primary_canonical_events: i64,
+    /// Diagnostic raw rows in this bucket.
+    pub diagnostic_raw_events: i64,
+    /// Diagnostic canonical rows in this bucket.
+    pub diagnostic_canonical_events: i64,
+}

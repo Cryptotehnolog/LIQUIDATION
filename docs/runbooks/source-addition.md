@@ -138,9 +138,32 @@ cargo run -p liq-cli -- collector status --source okx --json --window-minutes 60
 Даже в canonical mode OKX остается `diagnostic_only` до overlap validation и
 ручного решения о signal policy.
 
+Для overlap validation используйте read-only report:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector overlap-report --primary-source bybit --diagnostic-source okx --window-minutes 60 --bucket-seconds 60
+```
+
+Этот отчёт не дедуплицирует события между биржами. Bybit и OKX являются разными
+venues, поэтому близкие по времени ликвидации считаются разными событиями.
+Отчёт отвечает на другой вопрос: есть ли coverage/freshness/health у primary и
+diagnostic source в одном окне.
+
+Если OKX присылает liquidation payload по инструменту, которого нет в текущем
+metadata cache, collector не должен падать. Такой payload сохраняется raw-only,
+а canonical normalization остаётся выключенной до появления validated metadata
+для этого instrument.
+
+Для scheduled/manual diagnostics есть отдельный workflow
+`.github/workflows/nightly-market-data.yml`. Локально тот же сценарий:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-market-data-nightly-check.ps1 -RuntimeSeconds 30 -HealthIntervalSeconds 5 -WindowMinutes 60
+```
+
 ## Что улучшить или автоматизировать
 
 - Добавить nightly official docs changelog check для Binance/Bybit/OKX.
-- Добавить overlap validation report: Bybit primary vs OKX diagnostic window.
-- Добавить instrument metadata cache для OKX, после чего разрешить canonical
-  normalization только для проверенных instrument types.
+- Добавить trend comparison для нескольких ночных overlap reports.

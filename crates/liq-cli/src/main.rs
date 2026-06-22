@@ -175,6 +175,24 @@ enum CollectorCommand {
         #[arg(long, default_value_t = 60)]
         window_minutes: i64,
     },
+    /// Print source coverage overlap report for one primary and one diagnostic source.
+    OverlapReport {
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        /// Primary source used for strategy signals.
+        #[arg(long, default_value = "bybit")]
+        primary_source: String,
+        /// Diagnostic source compared against the primary source.
+        #[arg(long, default_value = "okx")]
+        diagnostic_source: String,
+        /// Metrics aggregation window in minutes.
+        #[arg(long, default_value_t = 60)]
+        window_minutes: i64,
+        /// Bucket size in seconds.
+        #[arg(long, default_value_t = 60)]
+        bucket_seconds: i64,
+    },
     /// Serve a read-only collector dashboard backed by the status JSON contract.
     Dashboard {
         /// Bind address for the local dashboard server.
@@ -321,6 +339,13 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             })
             .await?;
         }
+        command => handle_collector_inspection_command(command).await?,
+    }
+    Ok(())
+}
+
+async fn handle_collector_inspection_command(command: CollectorCommand) -> anyhow::Result<()> {
+    match command {
         CollectorCommand::Health {
             database_url,
             source,
@@ -344,6 +369,22 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
         } => {
             print_collector_status_json(database_url, source, limit, window_minutes).await?;
         }
+        CollectorCommand::OverlapReport {
+            database_url,
+            primary_source,
+            diagnostic_source,
+            window_minutes,
+            bucket_seconds,
+        } => {
+            print_collector_overlap_report(
+                database_url,
+                primary_source,
+                diagnostic_source,
+                window_minutes,
+                bucket_seconds,
+            )
+            .await?;
+        }
         CollectorCommand::Dashboard {
             bind,
             database_url,
@@ -359,6 +400,9 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
                 fixture_path,
             })
             .await?;
+        }
+        CollectorCommand::Probe { .. } | CollectorCommand::Run { .. } => {
+            anyhow::bail!("collector runtime command reached inspection handler");
         }
     }
     Ok(())
@@ -586,6 +630,36 @@ async fn print_collector_status_json(
     println!(
         "{}",
         serde_json::to_string_pretty(&metrics).context("failed to serialize collector metrics")?
+    );
+    Ok(())
+}
+
+async fn print_collector_overlap_report(
+    database_url: String,
+    primary_source: String,
+    diagnostic_source: String,
+    window_minutes: i64,
+    bucket_seconds: i64,
+) -> anyhow::Result<()> {
+    parse_collector_source(&primary_source)?;
+    parse_collector_source(&diagnostic_source)?;
+    if primary_source == diagnostic_source {
+        anyhow::bail!("primary-source and diagnostic-source must be different");
+    }
+
+    let pool = connect(&database_url).await?;
+    let report = repository::source_overlap_report(
+        &pool,
+        &primary_source,
+        &diagnostic_source,
+        repository::MetricsWindow::minutes(window_minutes.max(1)),
+        bucket_seconds.max(1),
+    )
+    .await
+    .context("failed to read source overlap report")?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).context("failed to serialize overlap report")?
     );
     Ok(())
 }

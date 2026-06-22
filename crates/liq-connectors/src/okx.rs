@@ -56,6 +56,21 @@ impl OkxInstrumentCache {
     fn get(&self, instrument_id: &str) -> Option<&OkxInstrument> {
         self.instruments.get(instrument_id)
     }
+
+    /// Return whether this instrument has metadata that supports canonical
+    /// notional calculation in the current MVP rules.
+    #[must_use]
+    pub fn supports_canonical_instrument(&self, instrument_id: &str) -> bool {
+        let Some(instrument) = self.get(instrument_id) else {
+            return false;
+        };
+        let Some(base_asset) = base_asset(instrument_id) else {
+            return false;
+        };
+
+        instrument.instrument_id == instrument_id
+            && instrument.contract_value_currency == base_asset
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

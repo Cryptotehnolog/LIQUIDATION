@@ -1,0 +1,40 @@
+name: Nightly market data diagnostics
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  market-data-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.17.2-pg16
+        env:
+          POSTGRES_DB: liquidation
+          POSTGRES_USER: liquidation
+          POSTGRES_PASSWORD: liquidation
+        ports:
+          - 15433:5432
+        options: >-
+          --health-cmd "pg_isready -U liquidation -d liquidation"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://liquidation:liquidation@127.0.0.1:15433/liquidation
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: run bounded market-data diagnostics
+        shell: pwsh
+        run: ./scripts/run-market-data-nightly-check.ps1 -RuntimeSeconds 30 -HealthIntervalSeconds 5 -WindowMinutes 60
+      - name: upload market-data diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-market-data-diagnostics
+          path: .cache/nightly-market-data/**
+          if-no-files-found: error

@@ -88,6 +88,14 @@
       "summary": "OKX instruments metadata fetch is automated through scripts/fetch-okx-instruments.ps1 with ctVal/ctValCcy validation and UTF-8 without BOM output. A bounded OKX WebSocket run confirmed connectivity and dashboard diagnostic visibility; raw/canonical inserts still require an actual liquidation event in the probe window."
     },
     {
+      "id": "bybit_okx_overlap_report",
+      "summary": "Bybit primary vs OKX diagnostic overlap validation is implemented as a coverage report, not event deduplication. OKX payloads for instruments missing validated metadata are stored raw-only instead of failing the collector."
+    },
+    {
+      "id": "nightly_market_data_diagnostics",
+      "summary": "A scheduled/manual GitHub Actions workflow runs bounded market-data diagnostics, fetches OKX metadata, captures collector status, writes an overlap report, and uploads artifacts without blocking normal push CI."
+    },
+    {
       "id": "polymarket_recorder_required",
       "summary": "Polymarket historical data limitations strengthen the requirement for a project-owned recorder and replay archive."
     },
