@@ -1,7 +1,10 @@
 //! LIQUIDATION operator CLI.
 
+mod dashboard;
+
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use dashboard::DashboardArgs;
 use liq_collector::{
     CollectorRunSettings, CollectorSettings, CollectorSource, SourceProbe, run_live_collector,
     run_live_collectors, run_live_probe,
@@ -9,6 +12,7 @@ use liq_collector::{
 use liq_recorder::{migrations, repository, schema};
 use liq_replay::{DryRunRequest, validate_dry_run};
 use sqlx::postgres::PgPoolOptions;
+use std::path::PathBuf;
 use std::time::Duration;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::info;
@@ -164,6 +168,24 @@ enum CollectorCommand {
         #[arg(long, default_value_t = 60)]
         window_minutes: i64,
     },
+    /// Serve a read-only collector dashboard backed by the status JSON contract.
+    Dashboard {
+        /// Bind address for the local dashboard server.
+        #[arg(long, default_value = "127.0.0.1:18080")]
+        bind: String,
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: Option<String>,
+        /// Metrics aggregation window in minutes.
+        #[arg(long, default_value_t = 60)]
+        window_minutes: i64,
+        /// Browser polling interval in seconds.
+        #[arg(long, default_value_t = 5)]
+        poll_seconds: u64,
+        /// Development-only fixture path used by smoke tests.
+        #[arg(long)]
+        fixture_path: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -310,6 +332,22 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             window_minutes,
         } => {
             print_collector_status_json(database_url, source, limit, window_minutes).await?;
+        }
+        CollectorCommand::Dashboard {
+            bind,
+            database_url,
+            window_minutes,
+            poll_seconds,
+            fixture_path,
+        } => {
+            dashboard::serve_dashboard(DashboardArgs {
+                bind,
+                database_url,
+                window_minutes,
+                poll_seconds,
+                fixture_path,
+            })
+            .await?;
         }
     }
     Ok(())

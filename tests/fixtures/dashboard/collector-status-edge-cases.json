@@ -1,0 +1,70 @@
+{
+  "window_seconds": 3600,
+  "sources": [
+    {
+      "source": "bybit",
+      "symbol": "BTCUSDT",
+      "status": "ok",
+      "checked_at": "2026-06-22T00:00:05Z",
+      "last_payload_ts": "2026-06-22T00:00:04Z",
+      "last_event_ts": "2026-06-22T00:00:03Z",
+      "freshness_ms": 1200,
+      "messages_received": 42,
+      "normalized_events": 18,
+      "raw_inserted": 42,
+      "canonical_inserted": 18,
+      "reconnects_5m": 0,
+      "max_reconnects_5m": 1,
+      "latency_bucket_lt_100_ms": 8,
+      "latency_bucket_100_500_ms": 9,
+      "latency_bucket_500_1000_ms": 1,
+      "latency_bucket_ge_1000_ms": 0
+    },
+    {
+      "source": "binance",
+      "symbol": "btcusdt",
+      "status": "ok",
+      "checked_at": "2026-06-22T00:00:05Z",
+      "last_payload_ts": null,
+      "last_event_ts": null,
+      "freshness_ms": null,
+      "messages_received": 0,
+      "normalized_events": 0,
+      "raw_inserted": 0,
+      "canonical_inserted": 0,
+      "reconnects_5m": 0,
+      "max_reconnects_5m": 0,
+      "latency_bucket_lt_100_ms": 0,
+      "latency_bucket_100_500_ms": 0,
+      "latency_bucket_500_1000_ms": 0,
+      "latency_bucket_ge_1000_ms": 0
+    },
+    {
+      "source": "bybit",
+      "symbol": "ETHUSDT",
+      "status": "degraded",
+      "checked_at": "2026-06-22T00:00:05Z",
+      "last_payload_ts": "2026-06-21T23:45:05Z",
+      "last_event_ts": "2026-06-21T23:45:02Z",
+      "freshness_ms": 900000,
+      "messages_received": 12,
+      "normalized_events": 3,
+      "raw_inserted": 12,
+      "canonical_inserted": 3,
+      "reconnects_5m": 4,
+      "max_reconnects_5m": 5,
+      "latency_bucket_lt_100_ms": 0,
+      "latency_bucket_100_500_ms": 1,
+      "latency_bucket_500_1000_ms": 1,
+      "latency_bucket_ge_1000_ms": 2
+    }
+  ],
+  "storage": {
+    "total_bytes": 73728,
+    "raw_source_events_bytes": 24576,
+    "liquidation_events_bytes": 24576,
+    "collector_health_bytes": 24576,
+    "raw_rows_window": 42,
+    "canonical_rows_window": 18
+  }
+}

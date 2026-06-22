@@ -19,6 +19,7 @@ repository = "https://github.com/Cryptotehnolog/LIQUIDATION"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
@@ -29,7 +30,7 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "time", "uuid", "rust_decimal", "json"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde", "serde-well-known"] }
-tokio = { version = "1", features = ["rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 toml = "0.8"
 tracing = "0.1"

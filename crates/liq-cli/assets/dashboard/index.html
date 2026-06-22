@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collector Operations</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #11161b;
+      --panel-2: #151b22;
+      --line: #2a3440;
+      --text: #eef3f7;
+      --muted: #94a3b8;
+      --soft: #64748b;
+      --live: #20c997;
+      --warn: #f5b84b;
+      --bad: #fb7185;
+      --info: #60a5fa;
+      --violet: #a78bfa;
+      --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(180deg, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 5vw, 52px);
+      line-height: 0.95;
+      font-weight: 720;
+    }
+
+    .subtitle {
+      margin-top: 10px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip,
+    .button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: rgba(17, 22, 27, 0.92);
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .button {
+      cursor: pointer;
+    }
+
+    .button:hover,
+    .button:focus-visible {
+      border-color: var(--info);
+      outline: none;
+    }
+
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .metric,
+    .source-card,
+    .panel {
+      background: rgba(17, 22, 27, 0.94);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      min-width: 0;
+    }
+
+    .metric {
+      padding: 14px;
+      min-height: 94px;
+    }
+
+    .metric-label,
+    .panel-title,
+    .source-meta {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .metric-value {
+      margin-top: 12px;
+      font-family: var(--mono);
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.85fr);
+      gap: 14px;
+      align-items: start;
+      margin-top: 14px;
+    }
+
+    .panel {
+      padding: 14px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .source-card {
+      padding: 12px;
+      border-left: 3px solid var(--soft);
+      min-height: 152px;
+    }
+
+    .source-card.live {
+      border-left-color: var(--live);
+    }
+
+    .source-card.stale,
+    .source-card.empty {
+      border-left-color: var(--warn);
+    }
+
+    .source-card.failed {
+      border-left-color: var(--bad);
+    }
+
+    .source-head {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+
+    .source-name {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .badge {
+      border: 1px solid currentColor;
+      padding: 3px 7px;
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .badge.live { color: var(--live); }
+    .badge.stale, .badge.empty { color: var(--warn); }
+    .badge.failed { color: var(--bad); }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .kv strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .bars {
+      display: grid;
+      gap: 10px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr) 44px;
+      gap: 10px;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar-track {
+      height: 10px;
+      background: #0d1117;
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      min-width: 2px;
+      background: linear-gradient(90deg, var(--info), var(--violet));
+    }
+
+    .storage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .storage-cell {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      font-family: var(--mono);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .storage-cell strong {
+      display: block;
+      margin-top: 8px;
+      color: var(--text);
+      font-size: 18px;
+    }
+
+    .state-line {
+      margin-top: 14px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    @media (max-width: 940px) {
+      .shell {
+        padding: 16px;
+      }
+
+      .topbar,
+      .main-grid {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .toolbar {
+        justify-content: start;
+      }
+
+      .overview {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .source-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .overview,
+      .storage-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .bar-row {
+        grid-template-columns: 78px minmax(0, 1fr) 38px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar" aria-label="Collector summary">
+      <div>
+        <h1>Collector Operations</h1>
+        <div class="subtitle" id="updated-at">loading snapshot</div>
+      </div>
+      <div class="toolbar">
+        <span class="chip" id="connection-state">CONNECTING</span>
+        <button class="button" id="refresh-button" type="button">Refresh</button>
+      </div>
+    </section>
+
+    <section class="overview" aria-label="Operational metrics">
+      <div class="metric">
+        <div class="metric-label">Sources</div>
+        <div class="metric-value" id="metric-sources">-</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Live</div>
+        <div class="metric-value" id="metric-live">-</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Needs attention</div>
+        <div class="metric-value" id="metric-attention">-</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Raw rows window</div>
+        <div class="metric-value" id="metric-raw">-</div>
+      </div>
+    </section>
+
+    <section class="main-grid">
+      <section class="panel" aria-labelledby="sources-title">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title" id="sources-title">Source health</div>
+          </div>
+          <span class="chip" id="window-label">window -</span>
+        </div>
+        <div class="source-grid" id="source-grid" data-testid="source-grid"></div>
+      </section>
+
+      <aside class="panel" aria-label="Collector diagnostics">
+        <div class="panel-header">
+          <div class="panel-title">Latency buckets</div>
+        </div>
+        <div class="bars" id="latency-buckets" data-testid="latency-buckets"></div>
+
+        <div class="panel-header" style="margin-top: 22px;">
+          <div class="panel-title">Storage signal</div>
+        </div>
+        <div class="storage-grid" id="storage-signal" data-testid="storage-signal"></div>
+        <div class="state-line" id="state-line">No snapshot loaded.</div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const pollMs = __POLL_MS__;
+    const state = { timer: null };
+
+    const el = (id) => document.getElementById(id);
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes)) return "-";
+      if (bytes < 1000) return `${bytes} B`;
+      if (bytes < 1000000) return `${(bytes / 1000).toFixed(1)} KB`;
+      if (bytes < 1000000000) return `${(bytes / 1000000).toFixed(1)} MB`;
+      return `${(bytes / 1000000000).toFixed(1)} GB`;
+    }
+
+    function formatDuration(ms) {
+      if (ms === null || ms === undefined) return "No payload yet";
+      if (ms < 1000) return `${ms} ms`;
+      const seconds = Math.round(ms / 1000);
+      if (seconds < 60) return `${seconds} s`;
+      const minutes = Math.round(seconds / 60);
+      if (minutes < 60) return `${minutes} min`;
+      return `${Math.round(minutes / 60)} h`;
+    }
+
+    function classifySource(source) {
+      if (!source.last_payload_ts || source.freshness_ms === null || source.freshness_ms === undefined) {
+        return { key: "empty", label: "NO PAYLOAD" };
+      }
+      if (source.status === "failed" || source.status === "circuit_open") {
+        return { key: "failed", label: "FAILED" };
+      }
+      if (source.status !== "ok" || source.freshness_ms > 300000 || source.max_reconnects_5m >= 5) {
+        return { key: "stale", label: "STALE" };
+      }
+      return { key: "live", label: "LIVE" };
+    }
+
+    function safeId(value) {
+      return String(value).replace(/[^a-zA-Z0-9_-]/g, "-");
+    }
+
+    function renderSources(sources) {
+      const grid = el("source-grid");
+      grid.replaceChildren();
+      for (const source of sources) {
+        const stateInfo = classifySource(source);
+        const card = document.createElement("article");
+        card.className = `source-card ${stateInfo.key}`;
+        card.dataset.testid = `source-card-${safeId(source.source)}-${safeId(source.symbol)}`;
+        card.innerHTML = `
+          <div class="source-head">
+            <div>
+              <div class="source-name">${source.source} / ${source.symbol}</div>
+              <div class="source-meta">${source.status}</div>
+            </div>
+            <span class="badge ${stateInfo.key}">${stateInfo.label}</span>
+          </div>
+          <div class="kv">
+            <span>freshness</span><strong>${formatDuration(source.freshness_ms)}</strong>
+            <span>messages</span><strong>${source.messages_received}</strong>
+            <span>events</span><strong>${source.normalized_events}</strong>
+            <span>reconnect max</span><strong>${source.max_reconnects_5m}</strong>
+            <span>last payload</span><strong>${source.last_payload_ts ?? "No payload yet"}</strong>
+          </div>
+        `;
+        grid.appendChild(card);
+      }
+    }
+
+    function renderLatency(sources) {
+      const totals = [
+        ["<100 ms", sources.reduce((sum, row) => sum + row.latency_bucket_lt_100_ms, 0)],
+        ["100-500 ms", sources.reduce((sum, row) => sum + row.latency_bucket_100_500_ms, 0)],
+        ["500-1000 ms", sources.reduce((sum, row) => sum + row.latency_bucket_500_1000_ms, 0)],
+        [">=1000 ms", sources.reduce((sum, row) => sum + row.latency_bucket_ge_1000_ms, 0)]
+      ];
+      const max = Math.max(1, ...totals.map(([, value]) => value));
+      const root = el("latency-buckets");
+      root.replaceChildren();
+      for (const [label, value] of totals) {
+        const row = document.createElement("div");
+        row.className = "bar-row";
+        row.innerHTML = `
+          <span>${label}</span>
+          <span class="bar-track"><span class="bar-fill" style="width:${Math.max(2, (value / max) * 100)}%"></span></span>
+          <strong>${value}</strong>
+        `;
+        root.appendChild(row);
+      }
+    }
+
+    function renderStorage(storage) {
+      const root = el("storage-signal");
+      root.replaceChildren();
+      const rows = [
+        ["total", formatBytes(storage.total_bytes)],
+        ["raw table", formatBytes(storage.raw_source_events_bytes)],
+        ["canonical table", formatBytes(storage.liquidation_events_bytes)],
+        ["health table", formatBytes(storage.collector_health_bytes)]
+      ];
+      for (const [label, value] of rows) {
+        const cell = document.createElement("div");
+        cell.className = "storage-cell";
+        cell.innerHTML = `${label}<strong>${value}</strong>`;
+        root.appendChild(cell);
+      }
+    }
+
+    function render(snapshot) {
+      const sources = snapshot.sources ?? [];
+      const states = sources.map(classifySource);
+      const live = states.filter((item) => item.key === "live").length;
+      const attention = states.filter((item) => item.key !== "live").length;
+
+      el("metric-sources").textContent = sources.length;
+      el("metric-live").textContent = live;
+      el("metric-attention").textContent = attention;
+      el("metric-raw").textContent = snapshot.storage?.raw_rows_window ?? "-";
+      el("window-label").textContent = `window ${Math.round((snapshot.window_seconds ?? 0) / 60)} min`;
+      el("updated-at").textContent = `updated ${new Date().toISOString()}`;
+      el("connection-state").textContent = "LIVE SNAPSHOT";
+      el("state-line").textContent = `${sources.length} sources, ${snapshot.storage?.canonical_rows_window ?? 0} canonical rows in window.`;
+
+      renderSources(sources);
+      renderLatency(sources);
+      renderStorage(snapshot.storage ?? {});
+    }
+
+    async function refresh() {
+      try {
+        el("connection-state").textContent = "REFRESHING";
+        const response = await fetch("/api/collector/status", { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        render(await response.json());
+      } catch (error) {
+        el("connection-state").textContent = "ERROR";
+        el("state-line").textContent = `Dashboard API error: ${error.message}`;
+      }
+    }
+
+    el("refresh-button").addEventListener("click", refresh);
+    refresh();
+    state.timer = setInterval(refresh, pollMs);
+  </script>
+</body>
+</html>

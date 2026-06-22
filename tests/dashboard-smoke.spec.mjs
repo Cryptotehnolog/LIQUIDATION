@@ -1,0 +1,30 @@
+import { test, expect } from "@playwright/test";
+
+const dashboardUrl = process.env.DASHBOARD_URL ?? "http://127.0.0.1:18080";
+
+test("collector dashboard handles null, empty, and stale source states", async ({ page }) => {
+  const consoleErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      consoleErrors.push(message.text());
+    }
+  });
+
+  await page.goto(dashboardUrl, { waitUntil: "networkidle" });
+
+  await expect(page.getByRole("heading", { name: "Collector Operations" })).toBeVisible();
+  await expect(page.getByTestId("source-card-bybit-BTCUSDT")).toContainText("LIVE");
+  await expect(page.getByTestId("source-card-binance-btcusdt")).toContainText("NO PAYLOAD");
+  await expect(page.getByTestId("source-card-binance-btcusdt")).toContainText("No payload yet");
+  await expect(page.getByTestId("source-card-bybit-ETHUSDT")).toContainText("STALE");
+  await expect(page.getByTestId("latency-buckets")).toContainText(">=1000 ms");
+  await expect(page.getByTestId("storage-signal")).toContainText("73.7 KB");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId("source-grid")).toBeVisible();
+  await expect(page.getByTestId("source-card-binance-btcusdt")).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  expect(consoleErrors).toEqual([]);
+});

@@ -1,0 +1,11 @@
+{
+  "name": "liquidation-dashboard-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:dashboard": "playwright test tests/dashboard-smoke.spec.mjs --browser=chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.0"
+  }
+}

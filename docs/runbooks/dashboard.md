@@ -46,6 +46,46 @@ cargo run -p liq-cli -- collector status --json --window-minutes 60
 Dashboard не должен парсить табличный `collector status`. Используйте только
 JSON-режим. Поля времени приходят как RFC3339 strings или `null`.
 
+## Local Dashboard Server
+
+Первый dashboard skeleton запускается как read-only локальный HTTP server из
+`liq-cli`. Браузер не ходит напрямую в TimescaleDB и не запускает shell-команды.
+Он читает только `/api/collector/status`, который возвращает тот же JSON
+contract, что и `collector status --json`.
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector dashboard --bind 127.0.0.1:18080 --window-minutes 60 --poll-seconds 5
+```
+
+Открыть в браузере:
+
+```text
+http://127.0.0.1:18080/
+```
+
+Development-only fixture mode используется только для smoke tests и UI
+проверок edge states:
+
+```powershell
+cargo run -p liq-cli -- collector dashboard --bind 127.0.0.1:18080 --fixture-path tests/fixtures/dashboard/collector-status-edge-cases.json --poll-seconds 1
+```
+
+Smoke test:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-dashboard-smoke.ps1
+```
+
+Smoke test проверяет:
+
+- `null` timestamps и отсутствие payload у Binance;
+- stale/degraded source;
+- latency buckets;
+- storage signal;
+- mobile viewport без horizontal overflow;
+- отсутствие browser console errors.
+
 Минимальные поля для первой версии dashboard:
 
 - `sources[].source`, `sources[].symbol`, `sources[].status`;

@@ -173,6 +173,19 @@ $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidatio
 cargo run -p liq-cli -- collector status --source bybit --json --window-minutes 15
 ```
 
+Для read-only dashboard skeleton:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector dashboard --bind 127.0.0.1:18080 --window-minutes 60 --poll-seconds 5
+```
+
+Smoke test dashboard edge states:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-dashboard-smoke.ps1
+```
+
 ## Heavy Tests
 
 Heavy tests не запускаются на каждом push. Локально:

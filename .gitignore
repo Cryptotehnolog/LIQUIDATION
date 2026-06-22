@@ -1,6 +1,10 @@
 /.env
 /.env.local
 /target/
+/.cache/
+/node_modules/
+/playwright-report/
+/test-results/
 /.sqlx/
 /infra/aperag/.env
 /infra/aperag/data/
