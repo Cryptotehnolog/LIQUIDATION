@@ -58,6 +58,10 @@ jobs:
           cache: npm
       - name: npm install
         run: npm install
+      - name: install playwright chromium
+        shell: powershell
+        timeout-minutes: 2
+        run: npx.cmd playwright install chromium
       - name: dashboard launcher script
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-start-dashboard.ps1

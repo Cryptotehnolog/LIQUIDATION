@@ -1,6 +1,7 @@
 param(
     [int]$Port = 18080,
-    [string]$FixturePath = "tests/fixtures/dashboard/collector-status-edge-cases.json"
+    [string]$FixturePath = "tests/fixtures/dashboard/collector-status-edge-cases.json",
+    [switch]$InstallBrowser
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,18 +30,16 @@ $Args = @(
     "--poll-seconds", "1"
 )
 
-$Process = Start-Process -FilePath "cargo" `
-    -ArgumentList $Args `
-    -WorkingDirectory $RepoRoot `
-    -RedirectStandardOutput $OutLog `
-    -RedirectStandardError $ErrLog `
-    -WindowStyle Hidden `
-    -PassThru
+$DashboardJob = Start-Job -ScriptBlock {
+    param($RepoRoot, $CargoArgs, $OutLog, $ErrLog)
+    Set-Location $RepoRoot
+    & cargo @CargoArgs > $OutLog 2> $ErrLog
+} -ArgumentList $RepoRoot, $Args, $OutLog, $ErrLog
 
 try {
     $Ready = $false
     for ($i = 0; $i -lt 60; $i++) {
-        if ($Process.HasExited) {
+        if ($DashboardJob.State -ne "Running") {
             $stderr = if (Test-Path $ErrLog) { Get-Content $ErrLog -Raw } else { "" }
             throw "Dashboard process exited before readiness. stderr: $stderr"
         }
@@ -59,15 +58,18 @@ try {
     $env:DASHBOARD_URL = $DashboardUrl
     $env:DASHBOARD_SCREENSHOT_DIR = $ScreenshotDir
     if (-not (Test-Path (Join-Path $RepoRoot "node_modules/@playwright/test"))) {
-        npm install
+        npm.cmd install
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
-    npx playwright install chromium
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    npm run test:dashboard
+    if ($InstallBrowser) {
+        npx.cmd playwright install chromium
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    npm.cmd run test:dashboard
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
-    if ($Process -and -not $Process.HasExited) {
-        Stop-Process -Id $Process.Id -Force
+    if ($DashboardJob) {
+        Stop-Job -Job $DashboardJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $DashboardJob -Force -ErrorAction SilentlyContinue
     }
 }
