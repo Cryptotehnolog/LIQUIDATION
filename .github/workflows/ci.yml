@@ -17,6 +17,9 @@ jobs:
       - name: source addition guard
         shell: pwsh
         run: ./scripts/check-source-addition.ps1
+      - name: OKX instruments fetch guard
+        shell: pwsh
+        run: ./scripts/test-fetch-okx-instruments.ps1
       - uses: taiki-e/install-action@nextest
       - name: cargo fmt
         run: cargo fmt --all --check

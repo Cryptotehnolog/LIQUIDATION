@@ -157,11 +157,22 @@ instrument metadata для корректного `notional_usd`.
 
 ```powershell
 $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch-okx-instruments.ps1 -Symbol BTC-USDT-SWAP -OutputPath .cache\okx\instruments-BTC-USDT-SWAP.json
 cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --okx-instruments-path .cache/okx/instruments-BTC-USDT-SWAP.json --max-messages 1 --min-messages 0 --read-timeout-seconds 30
 ```
 
 Если `--okx-instruments-path` не задан, OKX остается raw-only. Это лучше, чем
 тихо считать неверный `notional_usd`.
+
+Если нужно проверить dashboard visibility для OKX, используйте bounded
+`collector run`, а не только `collector probe`: `run` пишет `collector_health`
+даже без liquidation event.
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector run --source okx --symbol BTC-USDT-SWAP --okx-instruments-path .cache\okx\instruments-BTC-USDT-SWAP.json --max-runtime-seconds 15 --health-interval-seconds 3 --read-timeout-seconds 10 --batch-flush-interval-seconds 1
+cargo run -p liq-cli -- collector status --source okx --json --window-minutes 60
+```
 
 Для bounded проверки long-running collector mode:
 

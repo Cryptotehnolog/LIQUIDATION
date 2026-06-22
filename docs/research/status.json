@@ -84,6 +84,10 @@
       "summary": "OKX canonical normalization is allowed only when instrument metadata proves ctVal and ctValCcy support honest notional_usd calculation; otherwise OKX remains raw-only diagnostic."
     },
     {
+      "id": "okx_metadata_fetch_and_bounded_probe",
+      "summary": "OKX instruments metadata fetch is automated through scripts/fetch-okx-instruments.ps1 with ctVal/ctValCcy validation and UTF-8 without BOM output. A bounded OKX WebSocket run confirmed connectivity and dashboard diagnostic visibility; raw/canonical inserts still require an actual liquidation event in the probe window."
+    },
+    {
       "id": "polymarket_recorder_required",
       "summary": "Polymarket historical data limitations strengthen the requirement for a project-owned recorder and replay archive."
     },

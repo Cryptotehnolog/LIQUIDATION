@@ -100,13 +100,39 @@ cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --ma
 - `normalized_events=0` и `canonical_inserted=0` до instrument metadata;
 - dashboard показывает `okx` как `diagnostic_only`.
 
-Для canonical OKX probe сначала сохраните official instruments response в
-локальный JSON-файл вне секретов, например `.cache/okx/instruments-BTC-USDT-SWAP.json`,
-и запустите:
+Для canonical OKX probe сначала скачайте и провалидируйте official instruments
+response. Не сохраняйте JSON вручную: так легко получить BOM, неполный payload
+или metadata для другого instrument.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch-okx-instruments.ps1 -Symbol BTC-USDT-SWAP -OutputPath .cache\okx\instruments-BTC-USDT-SWAP.json
+```
+
+Скрипт проверяет:
+
+- `code=0`;
+- ровно один `instId`, совпадающий с `-Symbol`;
+- `instType=SWAP`;
+- положительный `ctVal`;
+- непустой `ctValCcy`;
+- `ctValCcy` совпадает с base asset инструмента, например `BTC` для
+  `BTC-USDT-SWAP`;
+- output пишется как UTF-8 без BOM, чтобы Rust `serde_json` мог читать файл.
+
+После этого запустите bounded canonical probe:
 
 ```powershell
 $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
 cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --okx-instruments-path .cache/okx/instruments-BTC-USDT-SWAP.json --max-messages 1 --min-messages 0 --read-timeout-seconds 30
+```
+
+Для dashboard visibility лучше использовать bounded `collector run`, потому что
+он пишет `collector_health` даже если в коротком окне нет liquidation event:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector run --source okx --symbol BTC-USDT-SWAP --okx-instruments-path .cache\okx\instruments-BTC-USDT-SWAP.json --max-runtime-seconds 15 --health-interval-seconds 3 --read-timeout-seconds 10 --batch-flush-interval-seconds 1
+cargo run -p liq-cli -- collector status --source okx --json --window-minutes 60
 ```
 
 Даже в canonical mode OKX остается `diagnostic_only` до overlap validation и
