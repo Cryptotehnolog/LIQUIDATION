@@ -34,6 +34,8 @@ pub struct SourcesConfig {
     pub bybit: SourceConfig,
     /// Binance source configuration.
     pub binance: SourceConfig,
+    /// OKX source configuration.
+    pub okx: SourceConfig,
 }
 
 /// Single market-data source configuration.
@@ -180,6 +182,7 @@ impl AppConfig {
 
         validate_source("sources.bybit", &self.sources.bybit)?;
         validate_source("sources.binance", &self.sources.binance)?;
+        validate_source("sources.okx", &self.sources.okx)?;
 
         if self.backfill.okx_rest_enabled {
             return Err(ConfigError::DisabledByResearch {
@@ -201,6 +204,7 @@ impl AppConfig {
         match source {
             "bybit" => self.sources.bybit.enabled,
             "binance" => self.sources.binance.enabled,
+            "okx" => self.sources.okx.enabled,
             _ => false,
         }
     }
@@ -223,6 +227,12 @@ impl AppConfig {
                     enabled: true,
                     quality: "snapshot_only".to_owned(),
                     symbols: vec!["btcusdt".to_owned()],
+                    max_reconnects_per_5min: 5,
+                },
+                okx: SourceConfig {
+                    enabled: false,
+                    quality: "websocket_only".to_owned(),
+                    symbols: vec!["BTC-USDT-SWAP".to_owned()],
                     max_reconnects_per_5min: 5,
                 },
             },
@@ -259,7 +269,7 @@ fn validate_source(field: &'static str, source: &SourceConfig) -> Result<(), Con
         60,
     )?;
     match source.quality.as_str() {
-        "all_events" | "snapshot_only" | "derived" | "unknown" => Ok(()),
+        "all_events" | "snapshot_only" | "derived" | "websocket_only" | "unknown" => Ok(()),
         _ => Err(ConfigError::UnknownSourceQuality {
             field,
             actual: source.quality.clone(),
@@ -323,5 +333,7 @@ mod tests {
         assert_eq!(cfg.replay.default_primary_source, "bybit");
         assert!(cfg.sources.bybit.enabled);
         assert_eq!(cfg.sources.binance.quality, "snapshot_only");
+        assert!(!cfg.sources.okx.enabled);
+        assert_eq!(cfg.sources.okx.quality, "websocket_only");
     }
 }

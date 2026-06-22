@@ -14,6 +14,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: source addition guard
+        shell: pwsh
+        run: ./scripts/check-source-addition.ps1
       - uses: taiki-e/install-action@nextest
       - name: cargo fmt
         run: cargo fmt --all --check

@@ -76,6 +76,10 @@
       "summary": "Binance liquidation streams remain diagnostic because official docs describe snapshot-only semantics per 1000 ms window."
     },
     {
+      "id": "okx_raw_only_until_instrument_metadata",
+      "summary": "OKX WebSocket liquidation-orders can be collected as raw diagnostic data, but canonical liquidation_events remain disabled until instrument metadata is available for correct notional_usd."
+    },
+    {
       "id": "polymarket_recorder_required",
       "summary": "Polymarket historical data limitations strengthen the requirement for a project-owned recorder and replay archive."
     },

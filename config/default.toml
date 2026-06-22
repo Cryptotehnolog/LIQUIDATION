@@ -14,6 +14,12 @@ quality = "snapshot_only"
 symbols = ["btcusdt"]
 max_reconnects_per_5min = 5
 
+[sources.okx]
+enabled = false
+quality = "websocket_only"
+symbols = ["BTC-USDT-SWAP"]
+max_reconnects_per_5min = 5
+
 [backfill]
 binance_enabled = false
 bybit_enabled = false

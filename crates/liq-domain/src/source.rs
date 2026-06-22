@@ -10,6 +10,8 @@ pub enum Source {
     Bybit,
     /// Binance USD-M futures.
     Binance,
+    /// OKX public derivatives liquidation stream.
+    Okx,
 }
 
 /// Quality semantics for a source stream.
@@ -22,6 +24,8 @@ pub enum SourceQuality {
     SnapshotOnly,
     /// Source is derived from another source and must not fill gaps silently.
     Derived,
+    /// Source is WebSocket-only and has no verified historical backfill.
+    WebsocketOnly,
 }
 
 impl Source {
@@ -31,6 +35,7 @@ impl Source {
         match self {
             Self::Bybit => "bybit",
             Self::Binance => "binance",
+            Self::Okx => "okx",
         }
     }
 }

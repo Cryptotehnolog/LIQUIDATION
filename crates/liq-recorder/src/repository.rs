@@ -717,6 +717,7 @@ fn source_quality_as_str(source_quality: SourceQuality) -> &'static str {
         SourceQuality::AllEvents => "all_events",
         SourceQuality::SnapshotOnly => "snapshot_only",
         SourceQuality::Derived => "derived",
+        SourceQuality::WebsocketOnly => "websocket_only",
     }
 }
 
@@ -736,6 +737,11 @@ impl SourcePolicy {
             },
             "binance" => Self {
                 source_quality: "snapshot_only",
+                coverage_role: "diagnostic_only",
+                participates_in_signals: false,
+            },
+            "okx" => Self {
+                source_quality: "websocket_only",
                 coverage_role: "diagnostic_only",
                 participates_in_signals: false,
             },

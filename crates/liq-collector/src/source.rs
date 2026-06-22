@@ -1,6 +1,6 @@
 //! Source probe definitions and payload normalization routing.
 
-use liq_connectors::{ConnectorError, binance, bybit};
+use liq_connectors::{ConnectorError, binance, bybit, okx};
 use liq_domain::{LiquidationEvent, Source};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -12,6 +12,8 @@ pub enum CollectorSource {
     Bybit,
     /// Binance USD-M public forceOrder snapshot stream.
     Binance,
+    /// OKX public liquidation-orders stream.
+    Okx,
 }
 
 impl CollectorSource {
@@ -21,6 +23,7 @@ impl CollectorSource {
         match value {
             "bybit" => Some(Self::Bybit),
             "binance" => Some(Self::Binance),
+            "okx" => Some(Self::Okx),
             _ => None,
         }
     }
@@ -31,6 +34,7 @@ impl CollectorSource {
         match self {
             Self::Bybit => Source::Bybit,
             Self::Binance => Source::Binance,
+            Self::Okx => Source::Okx,
         }
     }
 }
@@ -61,12 +65,22 @@ impl SourceProbe {
         }
     }
 
+    /// Build an OKX probe.
+    #[must_use]
+    pub fn okx(symbol: impl Into<String>) -> Self {
+        Self {
+            source: CollectorSource::Okx,
+            symbol: symbol.into().to_ascii_uppercase(),
+        }
+    }
+
     /// Build a probe from source id and symbol.
     #[must_use]
     pub fn new(source: CollectorSource, symbol: impl Into<String>) -> Self {
         match source {
             CollectorSource::Bybit => Self::bybit(symbol),
             CollectorSource::Binance => Self::binance(symbol),
+            CollectorSource::Okx => Self::okx(symbol),
         }
     }
 
@@ -90,6 +104,7 @@ impl SourceProbe {
             CollectorSource::Binance => {
                 format!("wss://fstream.binance.com/ws/{}@forceOrder", self.symbol)
             }
+            CollectorSource::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_owned(),
         }
     }
 
@@ -102,6 +117,10 @@ impl SourceProbe {
                 self.symbol
             )),
             CollectorSource::Binance => None,
+            CollectorSource::Okx => Some(format!(
+                r#"{{"op":"subscribe","args":[{{"channel":"liquidation-orders","instType":"SWAP","instId":"{}"}}]}}"#,
+                self.symbol
+            )),
         }
     }
 
@@ -125,8 +144,51 @@ impl SourceProbe {
             CollectorSource::Binance => {
                 binance::normalize_force_order(payload, received_ts).map(|event| vec![event])
             }
+            CollectorSource::Okx => Ok(Vec::new()),
         }
     }
+
+    /// Parse raw-only source metadata for payloads that are not canonical-safe.
+    ///
+    /// # Errors
+    ///
+    /// Returns a connector error when a source-specific raw metadata payload is
+    /// malformed.
+    pub fn raw_only_events(
+        &self,
+        payload: &str,
+    ) -> Result<Vec<RawOnlySourceEvent>, ConnectorError> {
+        match self.source {
+            CollectorSource::Bybit | CollectorSource::Binance => Ok(Vec::new()),
+            CollectorSource::Okx => okx::parse_liquidation_orders(payload).map(|items| {
+                items
+                    .into_iter()
+                    .map(|item| RawOnlySourceEvent {
+                        source: Source::Okx,
+                        source_event_id: item.source_event_id,
+                        source_quality: "websocket_only",
+                        symbol: item.symbol,
+                        exchange_ts: item.exchange_ts,
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
+
+/// Raw source event identity parsed without canonical liquidation normalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawOnlySourceEvent {
+    /// Source venue.
+    pub source: Source,
+    /// Source-local event id.
+    pub source_event_id: String,
+    /// Source quality string stored with raw payloads.
+    pub source_quality: &'static str,
+    /// Exchange symbol.
+    pub symbol: String,
+    /// Exchange event timestamp.
+    pub exchange_ts: OffsetDateTime,
 }
 
 fn is_bybit_liquidation_payload(payload: &str) -> bool {
@@ -156,6 +218,10 @@ mod tests {
             SourceProbe::binance("BTCUSDT").websocket_url(),
             "wss://fstream.binance.com/ws/btcusdt@forceOrder"
         );
+        assert_eq!(
+            SourceProbe::okx("btc-usdt-swap").websocket_url(),
+            "wss://ws.okx.com:8443/ws/v5/public"
+        );
     }
 
     #[test]
@@ -169,5 +235,20 @@ mod tests {
             .expect("ack should not be an error");
 
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn parses_okx_raw_only_payload() {
+        let probe = SourceProbe::okx("BTC-USDT-SWAP");
+        let raw = probe
+            .raw_only_events(include_str!(
+                "../../liq-connectors/tests/fixtures/okx_liquidation_orders.json"
+            ))
+            .expect("fixture should parse");
+
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].source, Source::Okx);
+        assert_eq!(raw[0].source_quality, "websocket_only");
+        assert_eq!(raw[0].symbol, "BTC-USDT-SWAP");
     }
 }

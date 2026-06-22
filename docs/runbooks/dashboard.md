@@ -142,6 +142,8 @@ MVP source coverage policy:
   `participates_in_signals=true`;
 - `binance`: `source_quality=snapshot_only`,
   `coverage_role=diagnostic_only`, `participates_in_signals=false`.
+- `okx`: `source_quality=websocket_only`, `coverage_role=diagnostic_only`,
+  `participates_in_signals=false`.
 
 Это только operational/dashboard policy. Она не означает, что strategy runtime
 уже разрешён к real trading.

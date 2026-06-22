@@ -141,12 +141,17 @@ GitHub Actions также запускает disposable TimescaleDB service job 
 $env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
 cargo run -p liq-cli -- collector probe --source bybit --symbol BTCUSDT --max-messages 1 --read-timeout-seconds 30
 cargo run -p liq-cli -- collector probe --source binance --symbol BTCUSDT --max-messages 1 --min-messages 0 --read-timeout-seconds 10
+cargo run -p liq-cli -- collector probe --source okx --symbol BTC-USDT-SWAP --max-messages 1 --min-messages 0 --read-timeout-seconds 30
 ```
 
 `normalized_events=0` в коротком probe не означает сбой: Bybit сначала присылает
 subscription ack, а Binance `forceOrder` может молчать, если в окне проверки нет
 ликвидаций. Для проверки обязательного события задавайте `--min-messages 1`, но
 такая проверка может законно упасть по таймауту на спокойном рынке.
+
+OKX в текущем инкременте raw-only diagnostic source. Он может писать
+`raw_source_events`, но не пишет canonical `liquidation_events`, пока не добавлен
+instrument metadata для корректного `notional_usd`.
 
 Для bounded проверки long-running collector mode:
 
@@ -201,6 +206,12 @@ Dashboard history endpoint отдаёт trend samples из `collector_health` ч
 
 ```text
 http://127.0.0.1:18080/api/collector/history
+```
+
+Перед добавлением или изменением источника market data:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-source-addition.ps1
 ```
 
 Для read-only dashboard skeleton:

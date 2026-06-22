@@ -83,7 +83,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit or binance.
+        /// Source id: bybit, binance, or okx.
         #[arg(long)]
         source: String,
         /// Exchange symbol, e.g. BTCUSDT.
@@ -107,7 +107,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit or binance. Repeat for multi-source runs.
+        /// Source id: bybit, binance, or okx. Repeat for multi-source runs.
         #[arg(long = "source", required = true)]
         source: Vec<String>,
         /// Exchange symbol, e.g. BTCUSDT.
@@ -143,7 +143,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Optional source id: bybit or binance.
+        /// Optional source id: bybit, binance, or okx.
         #[arg(long)]
         source: Option<String>,
         /// Maximum rows to print.
@@ -155,7 +155,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Optional source id: bybit or binance.
+        /// Optional source id: bybit, binance, or okx.
         #[arg(long)]
         source: Option<String>,
         /// Maximum rows to print in table mode. Ignored with `--json`.

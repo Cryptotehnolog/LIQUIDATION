@@ -22,7 +22,7 @@ use tokio::task::JoinSet;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
-use crate::source::SourceProbe;
+use crate::source::{RawOnlySourceEvent, SourceProbe};
 
 static RUSTLS_PROVIDER: Once = Once::new();
 
@@ -740,11 +740,16 @@ async fn record_payloads(
     while let Some(received) = receiver.recv().await {
         stats.observe_payload(received.received_ts);
         let events = probe.normalize_payload(&received.payload, received.received_ts)?;
+        let raw_only = probe.raw_only_events(&received.payload)?;
         stats.observe_events(&events);
         for event in events {
             let raw = raw_event_from_payload(&event, &received.payload)?;
             stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
             stats.canonical_inserted += repository::insert_liquidation_event(pool, &event).await?;
+        }
+        for event in raw_only {
+            let raw = raw_event_from_raw_only(&event, &received.payload, received.received_ts)?;
+            stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
         }
     }
 
@@ -771,10 +776,18 @@ async fn record_payloads_batched(
                 stats.observe_payload(payload_item.received_ts);
                 let events =
                     probe.normalize_payload(&payload_item.payload, payload_item.received_ts)?;
+                let raw_only = probe.raw_only_events(&payload_item.payload)?;
                 stats.observe_events(&events);
                 for event in events {
                     raw_batch.push(raw_event_from_payload(&event, &payload_item.payload)?);
                     canonical_batch.push(event);
+                }
+                for event in raw_only {
+                    raw_batch.push(raw_event_from_raw_only(
+                        &event,
+                        &payload_item.payload,
+                        payload_item.received_ts,
+                    )?);
                 }
                 if raw_batch.len() >= batch_size || canonical_batch.len() >= batch_size {
                     flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
@@ -852,11 +865,30 @@ fn raw_event_from_payload(
     })
 }
 
+fn raw_event_from_raw_only(
+    event: &RawOnlySourceEvent,
+    payload: &str,
+    received_ts: OffsetDateTime,
+) -> Result<RawSourceEvent, CollectorError> {
+    let payload_json = serde_json::from_str::<Value>(payload)?;
+    Ok(RawSourceEvent {
+        source: event.source.as_str().to_owned(),
+        source_event_id: event.source_event_id.clone(),
+        source_quality: event.source_quality.to_owned(),
+        symbol: event.symbol.clone(),
+        exchange_ts: event.exchange_ts,
+        received_ts,
+        payload: payload_json,
+        payload_sha256: sha256_hex(payload.as_bytes()),
+    })
+}
+
 fn source_quality_as_str(source_quality: SourceQuality) -> &'static str {
     match source_quality {
         SourceQuality::AllEvents => "all_events",
         SourceQuality::SnapshotOnly => "snapshot_only",
         SourceQuality::Derived => "derived",
+        SourceQuality::WebsocketOnly => "websocket_only",
     }
 }
 
@@ -999,6 +1031,28 @@ mod tests {
         assert_eq!(raw.source_quality, "all_events");
         assert_eq!(raw.payload_sha256.len(), 64);
         assert_ne!(raw.payload_sha256, "0".repeat(64));
+    }
+
+    #[test]
+    fn builds_raw_only_event_without_canonical_notional() {
+        let event = RawOnlySourceEvent {
+            source: Source::Okx,
+            source_event_id: "okx:BTC-USDT-SWAP:1718750001000:long:sell:65000:100".to_owned(),
+            source_quality: "websocket_only",
+            symbol: "BTC-USDT-SWAP".to_owned(),
+            exchange_ts: OffsetDateTime::UNIX_EPOCH,
+        };
+        let received_ts = OffsetDateTime::UNIX_EPOCH + time::Duration::milliseconds(100);
+
+        let raw = raw_event_from_raw_only(&event, r#"{"fixture":true}"#, received_ts)
+            .expect("valid JSON payload must become raw-only event");
+
+        assert_eq!(raw.source, "okx");
+        assert_eq!(raw.source_quality, "websocket_only");
+        assert_eq!(raw.symbol, "BTC-USDT-SWAP");
+        assert_eq!(raw.exchange_ts, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(raw.received_ts, received_ts);
+        assert_eq!(raw.payload_sha256.len(), 64);
     }
 
     #[test]

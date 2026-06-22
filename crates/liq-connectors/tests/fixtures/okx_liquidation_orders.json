@@ -1,0 +1,23 @@
+{
+  "arg": {
+    "channel": "liquidation-orders",
+    "instType": "SWAP",
+    "instId": "BTC-USDT-SWAP"
+  },
+  "data": [
+    {
+      "instType": "SWAP",
+      "instId": "BTC-USDT-SWAP",
+      "uly": "BTC-USDT",
+      "details": [
+        {
+          "bkPx": "65000",
+          "posSide": "long",
+          "side": "sell",
+          "sz": "100",
+          "ts": "1718750001000"
+        }
+      ]
+    }
+  ]
+}

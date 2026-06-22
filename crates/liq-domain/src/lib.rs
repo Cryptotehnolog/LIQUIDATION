@@ -17,6 +17,7 @@ mod tests {
     fn source_has_stable_storage_identifier() {
         assert_eq!(Source::Bybit.as_str(), "bybit");
         assert_eq!(Source::Binance.as_str(), "binance");
+        assert_eq!(Source::Okx.as_str(), "okx");
     }
 
     #[test]
