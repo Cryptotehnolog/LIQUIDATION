@@ -22,6 +22,16 @@ New-Item -ItemType Directory -Force -Path $ScreenshotDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $OutLog, $ErrLog
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $ScreenshotDir "*.png")
 
+Push-Location $RepoRoot
+try {
+    cargo build -p liq-cli
+    if ($LASTEXITCODE -ne 0) {
+        throw "Dashboard binary build failed with exit code $LASTEXITCODE"
+    }
+} finally {
+    Pop-Location
+}
+
 $Args = @(
     "run", "-p", "liq-cli", "--",
     "collector", "dashboard",
