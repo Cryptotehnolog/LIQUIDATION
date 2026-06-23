@@ -20,6 +20,18 @@ quality = "websocket_only"
 symbols = ["BTC-USDT-SWAP"]
 max_reconnects_per_5min = 5
 
+[sources.polymarket]
+enabled = false
+quality = "websocket_only"
+symbols = []
+max_reconnects_per_5min = 5
+
+[sources.hyperliquid]
+enabled = false
+quality = "websocket_only"
+symbols = ["BTC"]
+max_reconnects_per_5min = 5
+
 [backfill]
 binance_enabled = false
 bybit_enabled = false

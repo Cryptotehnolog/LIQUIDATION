@@ -1,0 +1,9 @@
+{
+  "event_type": "last_trade_price",
+  "market": "0xmarket",
+  "asset_id": "123456789",
+  "timestamp": "1718750002000",
+  "price": "0.51",
+  "size": "12.5",
+  "side": "BUY"
+}

@@ -124,6 +124,22 @@ cargo run -p liq-cli -- strategy readiness --json
 - Hyperliquid hedge market-data probe;
 - Rust port of the baseline strategy.
 
+После market-data legs proof increment первые два blockers закрываются
+автоматически по фактическим rows в TimescaleDB:
+
+- `polymarket_live_probe`: есть хотя бы одна строка `market_quotes` или
+  `market_trades` с `venue = 'polymarket'` внутри readiness window;
+- `hyperliquid_market_data_probe`: есть и quote rows, и trade rows с
+  `venue = 'hyperliquid'` внутри readiness window.
+
+Локальная проверка:
+
+```powershell
+cargo run -p liq-cli -- collector probe --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --source polymarket --symbol <polymarket_asset_id> --max-messages 40 --min-messages 1 --read-timeout-seconds 60
+cargo run -p liq-cli -- collector probe --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --source hyperliquid --symbol BTC --max-messages 40 --min-messages 1 --read-timeout-seconds 60
+cargo run -p liq-cli -- strategy readiness --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --window-minutes 60 --json
+```
+
 ## Что улучшить или автоматизировать
 
 CLI gate уже добавлен:

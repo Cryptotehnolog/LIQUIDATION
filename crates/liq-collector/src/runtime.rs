@@ -7,7 +7,7 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
-use liq_domain::{LiquidationEvent, SourceQuality};
+use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade, SourceQuality};
 use liq_recorder::{
     records::{CollectorHealthRecord, RawSourceEvent},
     repository,
@@ -263,6 +263,27 @@ impl CollectorStats {
         for event in events {
             self.last_event_ts = Some(event.exchange_ts);
             let latency_ms = saturating_i128_to_i64(event.latency_ms());
+            self.last_latency_ms = Some(latency_ms);
+            self.max_latency_ms = self.max_latency_ms.max(latency_ms);
+        }
+    }
+
+    /// Observe market quote/trade events and update event/latency counters.
+    pub fn observe_market_data(&mut self, quotes: &[MarketQuote], trades: &[MarketTrade]) {
+        self.normalized_events += (quotes.len() + trades.len()) as u64;
+        for quote in quotes {
+            self.last_event_ts = Some(quote.exchange_ts);
+            let latency_ms = saturating_i128_to_i64(
+                (quote.received_ts - quote.exchange_ts).whole_milliseconds(),
+            );
+            self.last_latency_ms = Some(latency_ms);
+            self.max_latency_ms = self.max_latency_ms.max(latency_ms);
+        }
+        for trade in trades {
+            self.last_event_ts = Some(trade.exchange_ts);
+            let latency_ms = saturating_i128_to_i64(
+                (trade.received_ts - trade.exchange_ts).whole_milliseconds(),
+            );
             self.last_latency_ms = Some(latency_ms);
             self.max_latency_ms = self.max_latency_ms.max(latency_ms);
         }
@@ -572,7 +593,7 @@ async fn read_service_once(
     let (mut socket, _) = connect_async(&url).await.map_err(websocket_error)?;
     info!(url, "websocket connected");
 
-    if let Some(message) = probe.subscribe_message() {
+    for message in probe.subscribe_messages() {
         socket
             .send(Message::Text(message.into()))
             .await
@@ -661,7 +682,7 @@ async fn read_once(
     let (mut socket, _) = connect_async(&url).await.map_err(websocket_error)?;
     info!(url, "websocket connected");
 
-    if let Some(message) = probe.subscribe_message() {
+    for message in probe.subscribe_messages() {
         socket
             .send(Message::Text(message.into()))
             .await
@@ -741,7 +762,10 @@ async fn record_payloads(
         stats.observe_payload(received.received_ts);
         let events = probe.normalize_payload(&received.payload, received.received_ts)?;
         let raw_only = probe.raw_only_events(&received.payload)?;
+        let (market_quotes, market_trades) =
+            probe.normalize_market_payload(&received.payload, received.received_ts)?;
         stats.observe_events(&events);
+        stats.observe_market_data(&market_quotes, &market_trades);
         for event in events {
             let raw = raw_event_from_payload(&event, &received.payload)?;
             stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
@@ -750,6 +774,16 @@ async fn record_payloads(
         for event in raw_only {
             let raw = raw_event_from_raw_only(&event, &received.payload, received.received_ts)?;
             stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
+        }
+        for quote in market_quotes {
+            let raw = raw_event_from_market_quote(&quote, &received.payload)?;
+            stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
+            stats.canonical_inserted += repository::insert_market_quote(pool, &quote).await?;
+        }
+        for trade in market_trades {
+            let raw = raw_event_from_market_trade(&trade, &received.payload)?;
+            stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
+            stats.canonical_inserted += repository::insert_market_trade(pool, &trade).await?;
         }
     }
 
@@ -768,6 +802,8 @@ async fn record_payloads_batched(
     let mut stats = CollectorStats::default();
     let mut raw_batch = Vec::with_capacity(batch_size);
     let mut canonical_batch = Vec::with_capacity(batch_size);
+    let mut quote_batch = Vec::with_capacity(batch_size);
+    let mut trade_batch = Vec::with_capacity(batch_size);
     let mut last_health = Instant::now();
 
     loop {
@@ -777,7 +813,10 @@ async fn record_payloads_batched(
                 let events =
                     probe.normalize_payload(&payload_item.payload, payload_item.received_ts)?;
                 let raw_only = probe.raw_only_events(&payload_item.payload)?;
+                let (market_quotes, market_trades) = probe
+                    .normalize_market_payload(&payload_item.payload, payload_item.received_ts)?;
                 stats.observe_events(&events);
+                stats.observe_market_data(&market_quotes, &market_trades);
                 for event in events {
                     raw_batch.push(raw_event_from_payload(&event, &payload_item.payload)?);
                     canonical_batch.push(event);
@@ -789,23 +828,67 @@ async fn record_payloads_batched(
                         payload_item.received_ts,
                     )?);
                 }
-                if raw_batch.len() >= batch_size || canonical_batch.len() >= batch_size {
-                    flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+                for quote in market_quotes {
+                    raw_batch.push(raw_event_from_market_quote(&quote, &payload_item.payload)?);
+                    quote_batch.push(quote);
+                }
+                for trade in market_trades {
+                    raw_batch.push(raw_event_from_market_trade(&trade, &payload_item.payload)?);
+                    trade_batch.push(trade);
+                }
+                if raw_batch.len() >= batch_size
+                    || canonical_batch.len() >= batch_size
+                    || quote_batch.len() >= batch_size
+                    || trade_batch.len() >= batch_size
+                {
+                    flush_batches(
+                        pool,
+                        &mut raw_batch,
+                        &mut canonical_batch,
+                        &mut quote_batch,
+                        &mut trade_batch,
+                        &mut stats,
+                    )
+                    .await?;
                 }
             }
             Ok(None) => {
-                flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+                flush_batches(
+                    pool,
+                    &mut raw_batch,
+                    &mut canonical_batch,
+                    &mut quote_batch,
+                    &mut trade_batch,
+                    &mut stats,
+                )
+                .await?;
                 let reconnects_5m = reconnect_receiver.borrow().reconnects_5m;
                 write_health(pool, probe, &stats, "ok", reconnects_5m).await?;
                 return Ok(stats);
             }
             Err(_) => {
-                flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+                flush_batches(
+                    pool,
+                    &mut raw_batch,
+                    &mut canonical_batch,
+                    &mut quote_batch,
+                    &mut trade_batch,
+                    &mut stats,
+                )
+                .await?;
             }
         }
 
         if last_health.elapsed() >= health_interval {
-            flush_batches(pool, &mut raw_batch, &mut canonical_batch, &mut stats).await?;
+            flush_batches(
+                pool,
+                &mut raw_batch,
+                &mut canonical_batch,
+                &mut quote_batch,
+                &mut trade_batch,
+                &mut stats,
+            )
+            .await?;
             let reconnects_5m = reconnect_receiver.borrow().reconnects_5m;
             write_health(pool, probe, &stats, "ok", reconnects_5m).await?;
             last_health = Instant::now();
@@ -817,6 +900,8 @@ async fn flush_batches(
     pool: &PgPool,
     raw_batch: &mut Vec<RawSourceEvent>,
     canonical_batch: &mut Vec<LiquidationEvent>,
+    quote_batch: &mut Vec<MarketQuote>,
+    trade_batch: &mut Vec<MarketTrade>,
     stats: &mut CollectorStats,
 ) -> Result<(), CollectorError> {
     if !raw_batch.is_empty() {
@@ -827,6 +912,14 @@ async fn flush_batches(
         stats.canonical_inserted +=
             repository::insert_liquidation_events(pool, canonical_batch).await?;
         canonical_batch.clear();
+    }
+    if !quote_batch.is_empty() {
+        stats.canonical_inserted += repository::insert_market_quotes(pool, quote_batch).await?;
+        quote_batch.clear();
+    }
+    if !trade_batch.is_empty() {
+        stats.canonical_inserted += repository::insert_market_trades(pool, trade_batch).await?;
+        trade_batch.clear();
     }
     Ok(())
 }
@@ -878,6 +971,40 @@ fn raw_event_from_raw_only(
         symbol: event.symbol.clone(),
         exchange_ts: event.exchange_ts,
         received_ts,
+        payload: payload_json,
+        payload_sha256: sha256_hex(payload.as_bytes()),
+    })
+}
+
+fn raw_event_from_market_quote(
+    quote: &MarketQuote,
+    payload: &str,
+) -> Result<RawSourceEvent, CollectorError> {
+    let payload_json = serde_json::from_str::<Value>(payload)?;
+    Ok(RawSourceEvent {
+        source: quote.venue.as_str().to_owned(),
+        source_event_id: quote.source_event_id.clone(),
+        source_quality: "websocket_only".to_owned(),
+        symbol: quote.symbol.clone(),
+        exchange_ts: quote.exchange_ts,
+        received_ts: quote.received_ts,
+        payload: payload_json,
+        payload_sha256: sha256_hex(payload.as_bytes()),
+    })
+}
+
+fn raw_event_from_market_trade(
+    trade: &MarketTrade,
+    payload: &str,
+) -> Result<RawSourceEvent, CollectorError> {
+    let payload_json = serde_json::from_str::<Value>(payload)?;
+    Ok(RawSourceEvent {
+        source: trade.venue.as_str().to_owned(),
+        source_event_id: trade.source_event_id.clone(),
+        source_quality: "websocket_only".to_owned(),
+        symbol: trade.symbol.clone(),
+        exchange_ts: trade.exchange_ts,
+        received_ts: trade.received_ts,
         payload: payload_json,
         payload_sha256: sha256_hex(payload.as_bytes()),
     })

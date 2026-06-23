@@ -11,7 +11,7 @@ use liq_collector::{
 };
 use liq_connectors::okx::OkxInstrumentCache;
 use liq_recorder::{migrations, repository, schema};
-use liq_replay::{DryRunRequest, StrategyReadinessReport, validate_dry_run};
+use liq_replay::{DryRunRequest, MarketDataReadiness, StrategyReadinessReport, validate_dry_run};
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -155,7 +155,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Optional source id: bybit, binance, or okx.
+        /// Optional source id: bybit, binance, okx, polymarket, or hyperliquid.
         #[arg(long)]
         source: Option<String>,
         /// Maximum rows to print.
@@ -167,7 +167,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Optional source id: bybit, binance, or okx.
+        /// Optional source id: bybit, binance, okx, polymarket, or hyperliquid.
         #[arg(long)]
         source: Option<String>,
         /// Maximum rows to print in table mode. Ignored with `--json`.
@@ -222,6 +222,12 @@ enum CollectorCommand {
 enum StrategyCommand {
     /// Print fail-closed strategy readiness report.
     Readiness {
+        /// Optional Postgres connection URL. Defaults to `DATABASE_URL` when set.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: Option<String>,
+        /// Market-data evidence window in minutes when a database is configured.
+        #[arg(long, default_value_t = 60)]
+        window_minutes: i64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -245,16 +251,36 @@ async fn run() -> anyhow::Result<()> {
         Command::Db { command } => handle_db_command(command).await?,
         Command::Replay { command } => handle_replay_command(command)?,
         Command::Collector { command } => handle_collector_command(command).await?,
-        Command::Strategy { command } => handle_strategy_command(&command)?,
+        Command::Strategy { command } => handle_strategy_command(&command).await?,
     }
 
     Ok(())
 }
 
-fn handle_strategy_command(command: &StrategyCommand) -> anyhow::Result<()> {
+async fn handle_strategy_command(command: &StrategyCommand) -> anyhow::Result<()> {
     match command {
-        StrategyCommand::Readiness { json } => {
-            let report = StrategyReadinessReport::current_foundation();
+        StrategyCommand::Readiness {
+            database_url,
+            window_minutes,
+            json,
+        } => {
+            let report = if let Some(database_url) = database_url {
+                let pool = connect(database_url).await?;
+                let readiness = repository::market_data_readiness(
+                    &pool,
+                    repository::MetricsWindow::minutes((*window_minutes).max(1)),
+                )
+                .await
+                .context("failed to read market-data readiness")?;
+                StrategyReadinessReport::from_market_data(MarketDataReadiness {
+                    polymarket_quotes: readiness.polymarket_quotes,
+                    polymarket_trades: readiness.polymarket_trades,
+                    hyperliquid_quotes: readiness.hyperliquid_quotes,
+                    hyperliquid_trades: readiness.hyperliquid_trades,
+                })
+            } else {
+                StrategyReadinessReport::current_foundation()
+            };
             if *json {
                 println!(
                     "{}",

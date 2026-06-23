@@ -36,6 +36,10 @@ pub struct SourcesConfig {
     pub binance: SourceConfig,
     /// OKX source configuration.
     pub okx: SourceConfig,
+    /// Polymarket public CLOB market-data configuration.
+    pub polymarket: SourceConfig,
+    /// Hyperliquid public market-data configuration.
+    pub hyperliquid: SourceConfig,
 }
 
 /// Single market-data source configuration.
@@ -183,6 +187,8 @@ impl AppConfig {
         validate_source("sources.bybit", &self.sources.bybit)?;
         validate_source("sources.binance", &self.sources.binance)?;
         validate_source("sources.okx", &self.sources.okx)?;
+        validate_source("sources.polymarket", &self.sources.polymarket)?;
+        validate_source("sources.hyperliquid", &self.sources.hyperliquid)?;
 
         if self.backfill.okx_rest_enabled {
             return Err(ConfigError::DisabledByResearch {
@@ -205,6 +211,8 @@ impl AppConfig {
             "bybit" => self.sources.bybit.enabled,
             "binance" => self.sources.binance.enabled,
             "okx" => self.sources.okx.enabled,
+            "polymarket" => self.sources.polymarket.enabled,
+            "hyperliquid" => self.sources.hyperliquid.enabled,
             _ => false,
         }
     }
@@ -235,6 +243,18 @@ impl AppConfig {
                     symbols: vec!["BTC-USDT-SWAP".to_owned()],
                     max_reconnects_per_5min: 5,
                 },
+                polymarket: SourceConfig {
+                    enabled: false,
+                    quality: "websocket_only".to_owned(),
+                    symbols: Vec::new(),
+                    max_reconnects_per_5min: 5,
+                },
+                hyperliquid: SourceConfig {
+                    enabled: false,
+                    quality: "websocket_only".to_owned(),
+                    symbols: vec!["BTC".to_owned()],
+                    max_reconnects_per_5min: 5,
+                },
             },
             backfill: BackfillConfig {
                 binance_enabled: false,
@@ -259,7 +279,7 @@ impl AppConfig {
 }
 
 fn validate_source(field: &'static str, source: &SourceConfig) -> Result<(), ConfigError> {
-    if source.symbols.is_empty() {
+    if source.enabled && source.symbols.is_empty() {
         return Err(ConfigError::EmptyCollection { field });
     }
     validate_days(
@@ -335,5 +355,9 @@ mod tests {
         assert_eq!(cfg.sources.binance.quality, "snapshot_only");
         assert!(!cfg.sources.okx.enabled);
         assert_eq!(cfg.sources.okx.quality, "websocket_only");
+        assert!(!cfg.sources.polymarket.enabled);
+        assert!(cfg.sources.polymarket.symbols.is_empty());
+        assert!(!cfg.sources.hyperliquid.enabled);
+        assert_eq!(cfg.sources.hyperliquid.symbols, ["BTC"]);
     }
 }

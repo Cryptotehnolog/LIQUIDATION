@@ -1,5 +1,5 @@
 param(
-    [string[]]$Source = @("bybit", "binance", "okx")
+    [string[]]$Source = @("bybit", "binance", "okx", "polymarket", "hyperliquid")
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +44,7 @@ $sourceMatrix = @{
         role = "strategy_primary"
         signal = "participates_in_signals: true"
         docs = "bybit"
+        test_file = "crates/liq-connectors/tests/normalization.rs"
     }
     binance = @{
         "enum" = "Binance"
@@ -53,6 +54,7 @@ $sourceMatrix = @{
         role = "diagnostic_only"
         signal = "participates_in_signals: false"
         docs = "binance"
+        test_file = "crates/liq-connectors/tests/normalization.rs"
     }
     okx = @{
         "enum" = "Okx"
@@ -62,6 +64,27 @@ $sourceMatrix = @{
         role = "diagnostic_only"
         signal = "participates_in_signals: false"
         docs = "okx"
+        test_file = "crates/liq-connectors/tests/normalization.rs"
+    }
+    polymarket = @{
+        "enum" = "Polymarket"
+        module = "polymarket"
+        fixture = "crates/liq-connectors/tests/fixtures/polymarket_book.json"
+        quality = "websocket_only"
+        role = "market_data_leg"
+        signal = "participates_in_signals: false"
+        docs = "polymarket"
+        test_file = "crates/liq-connectors/tests/market_data.rs"
+    }
+    hyperliquid = @{
+        "enum" = "Hyperliquid"
+        module = "hyperliquid"
+        fixture = "crates/liq-connectors/tests/fixtures/hyperliquid_bbo.json"
+        quality = "websocket_only"
+        role = "hedge_market_data"
+        signal = "participates_in_signals: false"
+        docs = "hyperliquid"
+        test_file = "crates/liq-connectors/tests/market_data.rs"
     }
 }
 
@@ -80,7 +103,7 @@ foreach ($name in $Source) {
     Assert-Contains "config/default.toml" "[sources.$name]" "default.toml is missing [sources.$name]"
     Assert-Contains "crates/liq-connectors/src/lib.rs" "pub mod $module;" "liq-connectors is missing module $module"
     Assert-File ([string]$spec.fixture) "Connector fixture is missing for $name"
-    Assert-Contains "crates/liq-connectors/tests/normalization.rs" $module "normalization tests do not reference $module"
+    Assert-Contains ([string]$spec.test_file) $module "connector regression tests do not reference $module"
     Assert-Contains "crates/liq-collector/src/source.rs" $enum "collector source routing is missing $enum"
     Assert-Contains "crates/liq-recorder/src/repository.rs" "`"$name`"" "dashboard source policy is missing $name"
     Assert-Contains "crates/liq-recorder/src/repository.rs" ([string]$spec.quality) "dashboard source policy has wrong/missing quality for $name"

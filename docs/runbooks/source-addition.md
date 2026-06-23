@@ -25,6 +25,10 @@ normalizer test, source policy, dashboard visibility и CI guard.
   `coverage_role=diagnostic_only`, `participates_in_signals=false`.
 - `okx`: `source_quality=websocket_only`, `coverage_role=diagnostic_only`,
   `participates_in_signals=false`.
+- `polymarket`: `source_quality=websocket_only`,
+  `coverage_role=market_data_leg`, `participates_in_signals=false`.
+- `hyperliquid`: `source_quality=websocket_only`,
+  `coverage_role=hedge_market_data`, `participates_in_signals=false`.
 
 `okx` намеренно не участвует в сигналах по умолчанию: OKX
 `liquidation-orders` WebSocket дает liquidation details, но безопасный
@@ -137,6 +141,34 @@ cargo run -p liq-cli -- collector status --source okx --json --window-minutes 60
 
 Даже в canonical mode OKX остается `diagnostic_only` до overlap validation и
 ручного решения о signal policy.
+
+## Polymarket / Hyperliquid market-data legs
+
+`polymarket` и `hyperliquid` добавлены не как источники liquidation signal, а
+как обязательные legs для pre-strategy readiness:
+
+- Polymarket CLOB market channel дает public prediction-market quotes/trades.
+- Hyperliquid public market data дает hedge-side quotes/trades для paper hedge
+  simulation.
+- Оба источника по умолчанию disabled в `config/default.toml`.
+- `polymarket.symbols` может быть пустым, пока source disabled: реальный
+  `asset_id` зависит от выбранного Polymarket market/outcome и не должен быть
+  фальшивым default.
+- При включении любого source `config validate` требует непустой `symbols`.
+- `strategy readiness --database-url ... --json` закрывает:
+  - `polymarket_live_probe`, если в readiness window есть хотя бы один
+    `market_quotes` или `market_trades` row с `venue = 'polymarket'`;
+  - `hyperliquid_market_data_probe`, если есть и quote rows, и trade rows с
+    `venue = 'hyperliquid'`.
+
+Минимальные bounded probes:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector probe --source polymarket --symbol <polymarket_asset_id> --max-messages 40 --min-messages 1 --read-timeout-seconds 60
+cargo run -p liq-cli -- collector probe --source hyperliquid --symbol BTC --max-messages 40 --min-messages 1 --read-timeout-seconds 60
+cargo run -p liq-cli -- strategy readiness --database-url $env:DATABASE_URL --window-minutes 60 --json
+```
 
 Для overlap validation используйте read-only report:
 

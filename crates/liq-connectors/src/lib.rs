@@ -2,7 +2,9 @@
 
 pub mod binance;
 pub mod bybit;
+pub mod hyperliquid;
 pub mod okx;
+pub mod polymarket;
 
 use thiserror::Error;
 

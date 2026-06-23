@@ -229,3 +229,16 @@ pub struct SourceOverlapBucket {
     /// Diagnostic canonical rows in this bucket.
     pub diagnostic_canonical_events: i64,
 }
+
+/// Durable market-data evidence used by strategy readiness gates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketDataReadinessRecord {
+    /// Polymarket quote rows inside the readiness window.
+    pub polymarket_quotes: i64,
+    /// Polymarket trade rows inside the readiness window.
+    pub polymarket_trades: i64,
+    /// Hyperliquid quote rows inside the readiness window.
+    pub hyperliquid_quotes: i64,
+    /// Hyperliquid trade rows inside the readiness window.
+    pub hyperliquid_trades: i64,
+}

@@ -446,6 +446,29 @@ pub struct ReadinessItem {
     pub note: String,
 }
 
+/// Market-data evidence observed in durable storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketDataReadiness {
+    /// Polymarket quote rows inside the readiness window.
+    pub polymarket_quotes: i64,
+    /// Polymarket trade rows inside the readiness window.
+    pub polymarket_trades: i64,
+    /// Hyperliquid quote rows inside the readiness window.
+    pub hyperliquid_quotes: i64,
+    /// Hyperliquid trade rows inside the readiness window.
+    pub hyperliquid_trades: i64,
+}
+
+impl MarketDataReadiness {
+    fn has_polymarket_probe(self) -> bool {
+        self.polymarket_quotes > 0 || self.polymarket_trades > 0
+    }
+
+    fn has_hyperliquid_probe(self) -> bool {
+        self.hyperliquid_quotes > 0 && self.hyperliquid_trades > 0
+    }
+}
+
 impl StrategyReadinessReport {
     /// Current code-level pre-strategy readiness.
     #[must_use]
@@ -489,6 +512,39 @@ impl StrategyReadinessReport {
                 ),
             ],
         }
+    }
+
+    /// Build readiness report from observed market-data evidence.
+    #[must_use]
+    pub fn from_market_data(readiness: MarketDataReadiness) -> Self {
+        let mut report = Self::current_foundation();
+
+        if readiness.has_polymarket_probe() {
+            move_blocker_to_capability(
+                &mut report,
+                "polymarket_live_probe",
+                "Polymarket market-data rows exist in readiness window",
+            );
+        }
+        if readiness.has_hyperliquid_probe() {
+            move_blocker_to_capability(
+                &mut report,
+                "hyperliquid_market_data_probe",
+                "Hyperliquid quote and trade rows exist in readiness window",
+            );
+        }
+
+        report.ready_for_strategy = report.blockers.is_empty();
+        report
+    }
+}
+
+fn move_blocker_to_capability(report: &mut StrategyReadinessReport, id: &str, note: &str) {
+    if let Some(position) = report.blockers.iter().position(|item| item.id == id) {
+        let mut item = report.blockers.remove(position);
+        "ready".clone_into(&mut item.status);
+        note.clone_into(&mut item.note);
+        report.capabilities.push(item);
     }
 }
 
@@ -647,6 +703,77 @@ mod tests {
                 .blockers
                 .iter()
                 .any(|item| item.id == "polymarket_live_probe")
+        );
+    }
+
+    #[test]
+    fn readiness_report_closes_market_data_blockers_from_observed_rows() {
+        let report = StrategyReadinessReport::from_market_data(MarketDataReadiness {
+            polymarket_quotes: 1,
+            polymarket_trades: 1,
+            hyperliquid_quotes: 1,
+            hyperliquid_trades: 1,
+        });
+
+        assert!(!report.ready_for_strategy);
+        assert!(
+            report
+                .capabilities
+                .iter()
+                .any(|item| item.id == "polymarket_live_probe")
+        );
+        assert!(
+            report
+                .capabilities
+                .iter()
+                .any(|item| item.id == "hyperliquid_market_data_probe")
+        );
+        assert!(
+            report
+                .blockers
+                .iter()
+                .all(|item| item.id != "polymarket_live_probe")
+        );
+        assert!(
+            report
+                .blockers
+                .iter()
+                .all(|item| item.id != "hyperliquid_market_data_probe")
+        );
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|item| item.id == "baseline_strategy_port")
+        );
+    }
+
+    #[test]
+    fn readiness_report_closes_polymarket_probe_with_quote_evidence() {
+        let report = StrategyReadinessReport::from_market_data(MarketDataReadiness {
+            polymarket_quotes: 1,
+            polymarket_trades: 0,
+            hyperliquid_quotes: 0,
+            hyperliquid_trades: 0,
+        });
+
+        assert!(
+            report
+                .capabilities
+                .iter()
+                .any(|item| item.id == "polymarket_live_probe")
+        );
+        assert!(
+            report
+                .blockers
+                .iter()
+                .all(|item| item.id != "polymarket_live_probe")
+        );
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|item| item.id == "hyperliquid_market_data_probe")
         );
     }
 

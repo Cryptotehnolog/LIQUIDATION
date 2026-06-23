@@ -1,0 +1,14 @@
+{
+  "event_type": "book",
+  "market": "0xmarket",
+  "asset_id": "123456789",
+  "timestamp": "1718750001000",
+  "bids": [
+    { "price": "0.48", "size": "100" },
+    { "price": "0.47", "size": "90" }
+  ],
+  "asks": [
+    { "price": "0.52", "size": "80" },
+    { "price": "0.53", "size": "70" }
+  ]
+}

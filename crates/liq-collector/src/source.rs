@@ -1,7 +1,7 @@
 //! Source probe definitions and payload normalization routing.
 
-use liq_connectors::{ConnectorError, binance, bybit, okx};
-use liq_domain::{LiquidationEvent, Source};
+use liq_connectors::{ConnectorError, binance, bybit, hyperliquid, okx, polymarket};
+use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade, Source};
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -14,6 +14,10 @@ pub enum CollectorSource {
     Binance,
     /// OKX public liquidation-orders stream.
     Okx,
+    /// Polymarket CLOB public market-data stream.
+    Polymarket,
+    /// Hyperliquid public market-data stream.
+    Hyperliquid,
 }
 
 impl CollectorSource {
@@ -24,6 +28,8 @@ impl CollectorSource {
             "bybit" => Some(Self::Bybit),
             "binance" => Some(Self::Binance),
             "okx" => Some(Self::Okx),
+            "polymarket" => Some(Self::Polymarket),
+            "hyperliquid" => Some(Self::Hyperliquid),
             _ => None,
         }
     }
@@ -35,6 +41,8 @@ impl CollectorSource {
             Self::Bybit => Source::Bybit,
             Self::Binance => Source::Binance,
             Self::Okx => Source::Okx,
+            Self::Polymarket => Source::Polymarket,
+            Self::Hyperliquid => Source::Hyperliquid,
         }
     }
 }
@@ -78,6 +86,26 @@ impl SourceProbe {
         }
     }
 
+    /// Build a Polymarket CLOB market-data probe.
+    #[must_use]
+    pub fn polymarket(asset_id: impl Into<String>) -> Self {
+        Self {
+            source: CollectorSource::Polymarket,
+            symbol: asset_id.into(),
+            okx_instrument_cache: None,
+        }
+    }
+
+    /// Build a Hyperliquid market-data probe.
+    #[must_use]
+    pub fn hyperliquid(coin: impl Into<String>) -> Self {
+        Self {
+            source: CollectorSource::Hyperliquid,
+            symbol: coin.into().to_ascii_uppercase(),
+            okx_instrument_cache: None,
+        }
+    }
+
     /// Attach OKX instrument metadata required for canonical normalization.
     #[must_use]
     pub fn with_okx_instrument_cache(mut self, cache: okx::OkxInstrumentCache) -> Self {
@@ -92,6 +120,8 @@ impl SourceProbe {
             CollectorSource::Bybit => Self::bybit(symbol),
             CollectorSource::Binance => Self::binance(symbol),
             CollectorSource::Okx => Self::okx(symbol),
+            CollectorSource::Polymarket => Self::polymarket(symbol),
+            CollectorSource::Hyperliquid => Self::hyperliquid(symbol),
         }
     }
 
@@ -116,22 +146,46 @@ impl SourceProbe {
                 format!("wss://fstream.binance.com/ws/{}@forceOrder", self.symbol)
             }
             CollectorSource::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_owned(),
+            CollectorSource::Polymarket => {
+                "wss://ws-subscriptions-clob.polymarket.com/ws/market".to_owned()
+            }
+            CollectorSource::Hyperliquid => "wss://api.hyperliquid.xyz/ws".to_owned(),
         }
     }
 
     /// Return the subscription message when the endpoint requires one.
     #[must_use]
     pub fn subscribe_message(&self) -> Option<String> {
+        self.subscribe_messages().into_iter().next()
+    }
+
+    /// Return subscription messages when the endpoint requires them.
+    #[must_use]
+    pub fn subscribe_messages(&self) -> Vec<String> {
         match self.source {
-            CollectorSource::Bybit => Some(format!(
+            CollectorSource::Bybit => vec![format!(
                 r#"{{"op":"subscribe","args":["allLiquidation.{}"]}}"#,
                 self.symbol
-            )),
-            CollectorSource::Binance => None,
-            CollectorSource::Okx => Some(format!(
+            )],
+            CollectorSource::Binance => Vec::new(),
+            CollectorSource::Okx => vec![format!(
                 r#"{{"op":"subscribe","args":[{{"channel":"liquidation-orders","instType":"SWAP","instId":"{}"}}]}}"#,
                 self.symbol
-            )),
+            )],
+            CollectorSource::Polymarket => vec![format!(
+                r#"{{"assets_ids":["{}"],"type":"market"}}"#,
+                self.symbol
+            )],
+            CollectorSource::Hyperliquid => vec![
+                format!(
+                    r#"{{"method":"subscribe","subscription":{{"type":"bbo","coin":"{}"}}}}"#,
+                    self.symbol
+                ),
+                format!(
+                    r#"{{"method":"subscribe","subscription":{{"type":"trades","coin":"{}"}}}}"#,
+                    self.symbol
+                ),
+            ],
         }
     }
 
@@ -163,6 +217,32 @@ impl SourceProbe {
                     Err(error) => Err(error),
                 },
             ),
+            CollectorSource::Polymarket | CollectorSource::Hyperliquid => Ok(Vec::new()),
+        }
+    }
+
+    /// Normalize a raw text payload into canonical market quotes and trades.
+    ///
+    /// # Errors
+    ///
+    /// Returns a connector error when a market-data payload is malformed.
+    pub fn normalize_market_payload(
+        &self,
+        payload: &str,
+        received_ts: OffsetDateTime,
+    ) -> Result<(Vec<MarketQuote>, Vec<MarketTrade>), ConnectorError> {
+        match self.source {
+            CollectorSource::Polymarket => Ok((
+                polymarket::normalize_market_quotes(payload, received_ts)?,
+                polymarket::normalize_market_trades(payload, received_ts)?,
+            )),
+            CollectorSource::Hyperliquid => Ok((
+                hyperliquid::normalize_market_quotes(payload, received_ts)?,
+                hyperliquid::normalize_market_trades(payload, received_ts)?,
+            )),
+            CollectorSource::Bybit | CollectorSource::Binance | CollectorSource::Okx => {
+                Ok((Vec::new(), Vec::new()))
+            }
         }
     }
 
@@ -177,7 +257,10 @@ impl SourceProbe {
         payload: &str,
     ) -> Result<Vec<RawOnlySourceEvent>, ConnectorError> {
         match self.source {
-            CollectorSource::Bybit | CollectorSource::Binance => Ok(Vec::new()),
+            CollectorSource::Bybit
+            | CollectorSource::Binance
+            | CollectorSource::Polymarket
+            | CollectorSource::Hyperliquid => Ok(Vec::new()),
             CollectorSource::Okx if self.okx_instrument_cache.is_some() => {
                 if let Some(cache) = self.okx_instrument_cache.as_ref() {
                     okx::parse_liquidation_orders(payload).map(|items| {
@@ -287,6 +370,50 @@ mod tests {
         assert_eq!(raw[0].source, Source::Okx);
         assert_eq!(raw[0].source_quality, "websocket_only");
         assert_eq!(raw[0].symbol, "BTC-USDT-SWAP");
+    }
+
+    #[test]
+    fn builds_market_data_source_urls_and_subscriptions() {
+        let polymarket = SourceProbe::polymarket("123456789");
+        let hyperliquid = SourceProbe::hyperliquid("BTC");
+
+        assert_eq!(
+            polymarket.websocket_url(),
+            "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+        );
+        assert_eq!(hyperliquid.websocket_url(), "wss://api.hyperliquid.xyz/ws");
+        assert_eq!(polymarket.subscribe_messages().len(), 1);
+        assert_eq!(hyperliquid.subscribe_messages().len(), 2);
+    }
+
+    #[test]
+    fn routes_polymarket_payloads_to_market_data() {
+        let probe = SourceProbe::polymarket("123456789");
+
+        let (quotes, trades) = probe
+            .normalize_market_payload(
+                include_str!("../../liq-connectors/tests/fixtures/polymarket_book.json"),
+                OffsetDateTime::UNIX_EPOCH,
+            )
+            .expect("fixture should normalize");
+
+        assert_eq!(quotes.len(), 1);
+        assert!(trades.is_empty());
+    }
+
+    #[test]
+    fn routes_hyperliquid_payloads_to_market_data() {
+        let probe = SourceProbe::hyperliquid("BTC");
+
+        let (quotes, trades) = probe
+            .normalize_market_payload(
+                include_str!("../../liq-connectors/tests/fixtures/hyperliquid_trades.json"),
+                OffsetDateTime::UNIX_EPOCH,
+            )
+            .expect("fixture should normalize");
+
+        assert!(quotes.is_empty());
+        assert_eq!(trades.len(), 1);
     }
 
     #[test]

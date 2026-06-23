@@ -9,8 +9,9 @@ use time::OffsetDateTime;
 
 use crate::records::{
     CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHealthRecord,
-    CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal, RawSourceEvent,
-    SourceOverlapBucket, SourceOverlapReport, SourceOverlapSummary,
+    CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal,
+    MarketDataReadinessRecord, RawSourceEvent, SourceOverlapBucket, SourceOverlapReport,
+    SourceOverlapSummary,
 };
 
 /// Metrics aggregation window.
@@ -369,6 +370,83 @@ pub async fn insert_market_quote(pool: &PgPool, quote: &MarketQuote) -> Result<u
     Ok(result.rows_affected())
 }
 
+/// Insert several canonical market quotes in one statement.
+///
+/// Existing `(venue, source_event_id)` rows are left unchanged.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the insert.
+pub async fn insert_market_quotes(
+    pool: &PgPool,
+    quotes: &[MarketQuote],
+) -> Result<u64, sqlx::Error> {
+    if quotes.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+    let mut accepted = Vec::with_capacity(quotes.len());
+    for quote in quotes {
+        let key_result = sqlx::query(
+            r"
+            INSERT INTO market_quote_keys (venue, source_event_id)
+            VALUES ($1, $2)
+            ON CONFLICT (venue, source_event_id) DO NOTHING
+            ",
+        )
+        .bind(market_venue_as_str(quote.venue))
+        .bind(&quote.source_event_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if key_result.rows_affected() == 1 {
+            accepted.push(quote);
+        }
+    }
+
+    if accepted.is_empty() {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
+    let mut query = QueryBuilder::new(
+        r"
+        INSERT INTO market_quotes (
+            event_id,
+            venue,
+            source_event_id,
+            instrument_id,
+            symbol,
+            best_bid,
+            best_bid_size,
+            best_ask,
+            best_ask_size,
+            exchange_ts,
+            received_ts
+        )
+        ",
+    );
+
+    query.push_values(accepted, |mut row, quote| {
+        row.push_bind(quote.event_id)
+            .push_bind(market_venue_as_str(quote.venue))
+            .push_bind(&quote.source_event_id)
+            .push_bind(&quote.instrument_id)
+            .push_bind(&quote.symbol)
+            .push_bind(quote.best_bid)
+            .push_bind(quote.best_bid_size)
+            .push_bind(quote.best_ask)
+            .push_bind(quote.best_ask_size)
+            .push_bind(quote.exchange_ts)
+            .push_bind(quote.received_ts);
+    });
+
+    let result = query.build().execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
 /// Insert a canonical market trade.
 ///
 /// Existing `(venue, source_event_id)` rows are left unchanged.
@@ -427,6 +505,83 @@ pub async fn insert_market_trade(pool: &PgPool, trade: &MarketTrade) -> Result<u
     .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
+/// Insert several canonical market trades in one statement.
+///
+/// Existing `(venue, source_event_id)` rows are left unchanged.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the insert.
+pub async fn insert_market_trades(
+    pool: &PgPool,
+    trades: &[MarketTrade],
+) -> Result<u64, sqlx::Error> {
+    if trades.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+    let mut accepted = Vec::with_capacity(trades.len());
+    for trade in trades {
+        let key_result = sqlx::query(
+            r"
+            INSERT INTO market_trade_keys (venue, source_event_id)
+            VALUES ($1, $2)
+            ON CONFLICT (venue, source_event_id) DO NOTHING
+            ",
+        )
+        .bind(market_venue_as_str(trade.venue))
+        .bind(&trade.source_event_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if key_result.rows_affected() == 1 {
+            accepted.push(trade);
+        }
+    }
+
+    if accepted.is_empty() {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
+    let mut query = QueryBuilder::new(
+        r"
+        INSERT INTO market_trades (
+            event_id,
+            venue,
+            source_event_id,
+            instrument_id,
+            symbol,
+            side,
+            price,
+            quantity,
+            notional_usd,
+            exchange_ts,
+            received_ts
+        )
+        ",
+    );
+
+    query.push_values(accepted, |mut row, trade| {
+        row.push_bind(trade.event_id)
+            .push_bind(market_venue_as_str(trade.venue))
+            .push_bind(&trade.source_event_id)
+            .push_bind(&trade.instrument_id)
+            .push_bind(&trade.symbol)
+            .push_bind(trade_side_as_str(trade.side))
+            .push_bind(trade.price)
+            .push_bind(trade.quantity)
+            .push_bind(trade.notional_usd)
+            .push_bind(trade.exchange_ts)
+            .push_bind(trade.received_ts);
+    });
+
+    let result = query.build().execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(result.rows_affected())
 }
@@ -733,6 +888,57 @@ pub async fn source_overlap_report(
         primary,
         diagnostic,
         buckets,
+    })
+}
+
+/// Return market-data evidence for strategy readiness gates.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the readiness query.
+pub async fn market_data_readiness(
+    pool: &PgPool,
+    window: MetricsWindow,
+) -> Result<MarketDataReadinessRecord, sqlx::Error> {
+    let window_seconds = window.seconds().max(1);
+    let row = sqlx::query_as::<_, MarketDataReadinessRow>(
+        r"
+        SELECT
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM market_quotes
+                WHERE venue = 'polymarket'
+                  AND received_ts >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            ) AS polymarket_quotes,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM market_trades
+                WHERE venue = 'polymarket'
+                  AND received_ts >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            ) AS polymarket_trades,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM market_quotes
+                WHERE venue = 'hyperliquid'
+                  AND received_ts >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            ) AS hyperliquid_quotes,
+            (
+                SELECT COUNT(*)::BIGINT
+                FROM market_trades
+                WHERE venue = 'hyperliquid'
+                  AND received_ts >= NOW() - ($1::BIGINT * INTERVAL '1 second')
+            ) AS hyperliquid_trades
+        ",
+    )
+    .bind(window_seconds)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(MarketDataReadinessRecord {
+        polymarket_quotes: row.polymarket_quotes,
+        polymarket_trades: row.polymarket_trades,
+        hyperliquid_quotes: row.hyperliquid_quotes,
+        hyperliquid_trades: row.hyperliquid_trades,
     })
 }
 
@@ -1055,6 +1261,14 @@ struct SourceOverlapBucketRow {
     diagnostic_canonical_events: i64,
 }
 
+#[derive(sqlx::FromRow)]
+struct MarketDataReadinessRow {
+    polymarket_quotes: i64,
+    polymarket_trades: i64,
+    hyperliquid_quotes: i64,
+    hyperliquid_trades: i64,
+}
+
 impl From<SourceOverlapBucketRow> for SourceOverlapBucket {
     fn from(row: SourceOverlapBucketRow) -> Self {
         Self {
@@ -1110,6 +1324,16 @@ impl SourcePolicy {
             "okx" => Self {
                 source_quality: "websocket_only",
                 coverage_role: "diagnostic_only",
+                participates_in_signals: false,
+            },
+            "polymarket" => Self {
+                source_quality: "websocket_only",
+                coverage_role: "market_data_leg",
+                participates_in_signals: false,
+            },
+            "hyperliquid" => Self {
+                source_quality: "websocket_only",
+                coverage_role: "hedge_market_data",
                 participates_in_signals: false,
             },
             _ => Self {

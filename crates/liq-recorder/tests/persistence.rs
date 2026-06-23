@@ -294,6 +294,13 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             .await
             .expect("duplicate market trade insert must not fail");
         assert_eq!(duplicate, 0);
+
+        let readiness =
+            repository::market_data_readiness(&pool, repository::MetricsWindow::minutes(60))
+                .await
+                .expect("market-data readiness must be queryable");
+        assert!(readiness.polymarket_quotes >= 1);
+        assert!(readiness.hyperliquid_trades >= 1);
     });
 }
 
