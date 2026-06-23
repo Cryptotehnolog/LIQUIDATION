@@ -140,7 +140,7 @@ function Invoke-ApeRagJson {
         $params.WebSession = $Session
     }
     if ($null -ne $Body) {
-        $params.Body = ($Body | ConvertTo-Json -Depth 30 -Compress)
+        $params.Body = ConvertTo-ApeRagJsonBody -Body $Body
     }
 
     try {
@@ -169,6 +169,19 @@ function Invoke-ApeRagJson {
         }
         throw
     }
+}
+
+function ConvertTo-ApeRagJsonBody {
+    param($Body)
+
+    if ($Body -is [System.Array]) {
+        $items = foreach ($item in $Body) {
+            $item | ConvertTo-Json -Depth 30 -Compress
+        }
+        return "[" + ($items -join ",") + "]"
+    }
+
+    return ($Body | ConvertTo-Json -Depth 30 -Compress)
 }
 
 function New-ApeRagSession {

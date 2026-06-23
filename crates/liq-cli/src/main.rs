@@ -13,9 +13,10 @@ use liq_collector::{
 use liq_connectors::okx::OkxInstrumentCache;
 use liq_recorder::{migrations, records::PolymarketMarketRecord, repository, schema};
 use liq_replay::{
-    BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness, PaperReplayInput,
-    PaperReplayReport, StrategyReadinessExplanation, StrategyReadinessReport, run_paper_replay,
-    validate_dry_run,
+    BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness,
+    PaperReplayDataCounts, PaperReplayInput, PaperReplayPreflightInput, PaperReplayPreflightReport,
+    PaperReplayReport, StrategyReadinessExplanation, StrategyReadinessReport,
+    paper_replay_preflight, run_paper_replay, validate_dry_run,
 };
 use polymarket_markets::{
     PolymarketMarketFetchFilter, PolymarketMarketFetchRequest, fetch_polymarket_markets,
@@ -92,6 +93,8 @@ enum ReplayCommand {
     },
     /// Run deterministic paper replay over stored events.
     Run(Box<ReplayRunOptions>),
+    /// Check whether a stored window is good enough for a real paper replay.
+    Preflight(Box<ReplayRunOptions>),
     /// Manage Polymarket market metadata used by replay auto mode.
     Market {
         #[command(subcommand)]
@@ -164,6 +167,9 @@ struct ReplayRunOptions {
     /// Optional path to write the JSON replay report artifact.
     #[arg(long)]
     artifact_path: Option<PathBuf>,
+    /// Maximum allowed age after market end for real replay preflight.
+    #[arg(long, default_value_t = 15)]
+    market_stale_after_minutes: i64,
 }
 
 #[derive(Debug, Subcommand)]
@@ -282,7 +288,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit, binance, or okx.
+        /// Source id: bybit, binance, okx, polymarket, or hyperliquid.
         #[arg(long)]
         source: String,
         /// Exchange symbol, e.g. BTCUSDT.
@@ -309,7 +315,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit, binance, or okx. Repeat for multi-source runs.
+        /// Source id: bybit, binance, okx, polymarket, or hyperliquid. Repeat for multi-source runs.
         #[arg(long = "source", required = true)]
         source: Vec<String>,
         /// Exchange symbol, e.g. BTCUSDT.
@@ -641,32 +647,10 @@ async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
             println!("dry-run ok");
         }
         ReplayCommand::Run(options) => {
-            let report = run_replay_from_database(ReplayRunArgs {
-                strategy: options.strategy,
-                database_url: options.database_url,
-                market_id: options.market_id,
-                up_token_id: options.up_token_id,
-                down_token_id: options.down_token_id,
-                start_unix_ms: options.start_unix_ms,
-                end_unix_ms: options.end_unix_ms,
-                fill_model: options.fill_model,
-                hedge_notional_usd: options.hedge_notional_usd,
-                hedge_slippage_usd: options.hedge_slippage_usd,
-                funding_hours: options.funding_hours,
-                polymarket_maker_bps: options.polymarket_maker_bps,
-                polymarket_taker_bps: options.polymarket_taker_bps,
-                hyperliquid_maker_bps: options.hyperliquid_maker_bps,
-                hyperliquid_taker_bps: options.hyperliquid_taker_bps,
-                hyperliquid_funding_bps_per_hour: options.hyperliquid_funding_bps_per_hour,
-                latest_polymarket_market: options.latest_polymarket_market,
-                base_asset: options.base_asset,
-                market_type: options.market_type,
-            })
-            .await?;
-            if let Some(artifact_path) = options.artifact_path {
-                write_replay_artifact(&artifact_path, &report).await?;
-            }
-            print_replay_report(&report, options.json)?;
+            handle_replay_run(*options).await?;
+        }
+        ReplayCommand::Preflight(options) => {
+            handle_replay_preflight(*options).await?;
         }
         ReplayCommand::Market { command } => match command {
             ReplayMarketCommand::Upsert(options) => {
@@ -696,6 +680,55 @@ async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn handle_replay_run(options: ReplayRunOptions) -> anyhow::Result<()> {
+    let json = options.json;
+    let artifact_path = options.artifact_path.clone();
+    let report = run_replay_from_database(replay_options_to_args(options)).await?;
+    if let Some(artifact_path) = artifact_path {
+        write_replay_artifact(&artifact_path, &report).await?;
+    }
+    print_replay_report(&report, json)
+}
+
+async fn handle_replay_preflight(options: ReplayRunOptions) -> anyhow::Result<()> {
+    let json = options.json;
+    let report = preflight_replay_from_database(replay_options_to_args(options)).await?;
+    let ready_for_replay = report.ready_for_replay;
+    print_replay_preflight_report(&report, json)?;
+    if !ready_for_replay {
+        anyhow::bail!(
+            "paper replay preflight failed: {} blocker(s)",
+            report.blockers.len()
+        );
+    }
+    Ok(())
+}
+
+fn replay_options_to_args(options: ReplayRunOptions) -> ReplayRunArgs {
+    ReplayRunArgs {
+        strategy: options.strategy,
+        database_url: options.database_url,
+        market_id: options.market_id,
+        up_token_id: options.up_token_id,
+        down_token_id: options.down_token_id,
+        start_unix_ms: options.start_unix_ms,
+        end_unix_ms: options.end_unix_ms,
+        fill_model: options.fill_model,
+        hedge_notional_usd: options.hedge_notional_usd,
+        hedge_slippage_usd: options.hedge_slippage_usd,
+        funding_hours: options.funding_hours,
+        polymarket_maker_bps: options.polymarket_maker_bps,
+        polymarket_taker_bps: options.polymarket_taker_bps,
+        hyperliquid_maker_bps: options.hyperliquid_maker_bps,
+        hyperliquid_taker_bps: options.hyperliquid_taker_bps,
+        hyperliquid_funding_bps_per_hour: options.hyperliquid_funding_bps_per_hour,
+        latest_polymarket_market: options.latest_polymarket_market,
+        base_asset: options.base_asset,
+        market_type: options.market_type,
+        market_stale_after_minutes: options.market_stale_after_minutes,
+    }
+}
+
 struct ReplayRunArgs {
     strategy: String,
     database_url: String,
@@ -716,9 +749,52 @@ struct ReplayRunArgs {
     latest_polymarket_market: bool,
     base_asset: String,
     market_type: String,
+    market_stale_after_minutes: i64,
 }
 
 async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperReplayReport> {
+    let (market, data, fill_model, fee_schedule, preflight) =
+        load_replay_inputs_from_database(&args).await?;
+    if !preflight.ready_for_replay {
+        anyhow::bail!(
+            "paper replay preflight failed: {} blocker(s); run `liq replay preflight --json` for details",
+            preflight.blockers.len()
+        );
+    }
+
+    let input = PaperReplayInput {
+        market,
+        liquidations: data.liquidations,
+        polymarket_quotes: data.polymarket_quotes,
+        polymarket_trades: data.polymarket_trades,
+        hyperliquid_quotes: data.hyperliquid_quotes,
+        hyperliquid_trades: data.hyperliquid_trades,
+        fill_model,
+        fee_schedule,
+        hedge_notional_usd: args.hedge_notional_usd,
+        hedge_slippage_usd: args.hedge_slippage_usd,
+        funding_hours: args.funding_hours,
+    };
+    run_paper_replay(&input).context("paper replay failed")
+}
+
+async fn preflight_replay_from_database(
+    args: ReplayRunArgs,
+) -> anyhow::Result<PaperReplayPreflightReport> {
+    let (_market, _data, _fill_model, _fee_schedule, preflight) =
+        load_replay_inputs_from_database(&args).await?;
+    Ok(preflight)
+}
+
+async fn load_replay_inputs_from_database(
+    args: &ReplayRunArgs,
+) -> anyhow::Result<(
+    BaselineMarket,
+    liq_recorder::records::PaperReplayDataRecord,
+    FillModel,
+    FeeSchedule,
+    PaperReplayPreflightReport,
+)> {
     if args.strategy != "baseline" {
         anyhow::bail!(
             "unsupported replay strategy '{}'; supported: baseline",
@@ -726,7 +802,7 @@ async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperRe
         );
     }
     let pool = connect(&args.database_url).await?;
-    let market = resolve_replay_market(&pool, &args).await?;
+    let market = resolve_replay_market(&pool, args).await?;
 
     let request = DryRunRequest {
         sources: vec![
@@ -745,28 +821,35 @@ async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperRe
     let data = repository::paper_replay_data(&pool, start, end)
         .await
         .context("failed to read paper replay data")?;
-
-    let input = PaperReplayInput {
-        market,
-        liquidations: data.liquidations,
-        polymarket_quotes: data.polymarket_quotes,
-        polymarket_trades: data.polymarket_trades,
-        hyperliquid_quotes: data.hyperliquid_quotes,
-        hyperliquid_trades: data.hyperliquid_trades,
-        fill_model,
-        fee_schedule: FeeSchedule {
-            version: "cli_fee_schedule_v1".to_owned(),
-            polymarket_maker_bps: args.polymarket_maker_bps,
-            polymarket_taker_bps: args.polymarket_taker_bps,
-            hyperliquid_maker_bps: args.hyperliquid_maker_bps,
-            hyperliquid_taker_bps: args.hyperliquid_taker_bps,
-            hyperliquid_funding_bps_per_hour: args.hyperliquid_funding_bps_per_hour,
+    let fee_schedule = FeeSchedule {
+        version: "cli_fee_schedule_v1".to_owned(),
+        polymarket_maker_bps: args.polymarket_maker_bps,
+        polymarket_taker_bps: args.polymarket_taker_bps,
+        hyperliquid_maker_bps: args.hyperliquid_maker_bps,
+        hyperliquid_taker_bps: args.hyperliquid_taker_bps,
+        hyperliquid_funding_bps_per_hour: args.hyperliquid_funding_bps_per_hour,
+    };
+    let preflight = paper_replay_preflight(&PaperReplayPreflightInput {
+        market: market.clone(),
+        data_counts: PaperReplayDataCounts {
+            liquidations: data.liquidations.len(),
+            polymarket_quotes: data.polymarket_quotes.len(),
+            polymarket_trades: data.polymarket_trades.len(),
+            hyperliquid_quotes: data.hyperliquid_quotes.len(),
+            hyperliquid_trades: data.hyperliquid_trades.len(),
         },
-        hedge_notional_usd: args.hedge_notional_usd,
+        minimum_counts: PaperReplayDataCounts::real_run_minimums(),
+        fill_model,
+        fee_schedule: fee_schedule.clone(),
         hedge_slippage_usd: args.hedge_slippage_usd,
         funding_hours: args.funding_hours,
-    };
-    run_paper_replay(&input).context("paper replay failed")
+        now_unix_ms: Some(offset_to_unix_ms(OffsetDateTime::now_utc())?),
+        market_stale_after_ms: Some(args.market_stale_after_minutes.max(1) * 60 * 1_000),
+        require_trade_cross: true,
+        require_nonzero_cost_assumptions: true,
+    });
+
+    Ok((market, data, fill_model, fee_schedule, preflight))
 }
 
 async fn resolve_replay_market(
@@ -1043,6 +1126,35 @@ fn print_replay_report(report: &PaperReplayReport, json: bool) -> anyhow::Result
         println!("gross_pnl_usd: {}", report.gross_pnl_usd);
         println!("net_pnl_usd: {}", report.net_pnl_usd);
         println!("max_drawdown_usd: {}", report.max_drawdown_usd);
+    }
+    Ok(())
+}
+
+fn print_replay_preflight_report(
+    report: &PaperReplayPreflightReport,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(report)
+                .context("failed to serialize replay preflight report")?
+        );
+    } else {
+        println!("ready_for_replay: {}", report.ready_for_replay);
+        println!("market_id: {}", report.market.market_id);
+        println!(
+            "data_counts: liquidations={} polymarket_quotes={} polymarket_trades={} hyperliquid_quotes={} hyperliquid_trades={}",
+            report.data_counts.liquidations,
+            report.data_counts.polymarket_quotes,
+            report.data_counts.polymarket_trades,
+            report.data_counts.hyperliquid_quotes,
+            report.data_counts.hyperliquid_trades
+        );
+        println!("blockers:");
+        for item in &report.blockers {
+            println!("- {}: {} ({})", item.id, item.status, item.note);
+        }
     }
     Ok(())
 }

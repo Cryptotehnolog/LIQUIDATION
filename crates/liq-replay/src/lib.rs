@@ -793,6 +793,285 @@ pub struct PaperReplayReport {
     pub trades: Vec<PaperReplayTrade>,
 }
 
+/// Row counts available for one paper replay window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperReplayDataCounts {
+    /// Canonical liquidation events.
+    pub liquidations: usize,
+    /// Polymarket quote rows.
+    pub polymarket_quotes: usize,
+    /// Polymarket trade rows.
+    pub polymarket_trades: usize,
+    /// Hyperliquid quote rows.
+    pub hyperliquid_quotes: usize,
+    /// Hyperliquid trade rows.
+    pub hyperliquid_trades: usize,
+}
+
+impl PaperReplayDataCounts {
+    /// Minimum non-empty dataset for a first real paper replay.
+    #[must_use]
+    pub const fn real_run_minimums() -> Self {
+        Self {
+            liquidations: 1,
+            polymarket_quotes: 1,
+            polymarket_trades: 1,
+            hyperliquid_quotes: 1,
+            hyperliquid_trades: 1,
+        }
+    }
+}
+
+/// Inputs for first-real-run replay preflight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaperReplayPreflightInput {
+    /// Resolved Polymarket market window.
+    pub market: BaselineMarket,
+    /// Available stored rows for the replay window.
+    pub data_counts: PaperReplayDataCounts,
+    /// Required minimum stored rows for this preflight.
+    pub minimum_counts: PaperReplayDataCounts,
+    /// Requested Polymarket fill model.
+    pub fill_model: FillModel,
+    /// Fee and funding assumptions used by replay.
+    pub fee_schedule: FeeSchedule,
+    /// Hedge slippage penalty in USD.
+    pub hedge_slippage_usd: Decimal,
+    /// Funding duration charged per hedge fill.
+    pub funding_hours: Decimal,
+    /// Current wall-clock timestamp in milliseconds, when freshness should be checked.
+    pub now_unix_ms: Option<i64>,
+    /// Maximum allowed market age after `end_unix_ms`, in milliseconds.
+    pub market_stale_after_ms: Option<i64>,
+    /// Require conservative `trade_cross` fills.
+    pub require_trade_cross: bool,
+    /// Require at least one non-zero fee/funding/slippage assumption.
+    pub require_nonzero_cost_assumptions: bool,
+}
+
+/// Fail-closed preflight report for one real paper replay attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperReplayPreflightReport {
+    /// Whether the replay input is good enough for a first real paper replay.
+    pub ready_for_replay: bool,
+    /// Resolved market.
+    pub market: BaselineMarket,
+    /// Available stored rows.
+    pub data_counts: PaperReplayDataCounts,
+    /// Passing capabilities.
+    pub capabilities: Vec<ReadinessItem>,
+    /// Blocking issues.
+    pub blockers: Vec<ReadinessItem>,
+    /// Machine-readable condition details.
+    pub conditions: Vec<ReadinessCondition>,
+}
+
+/// Check whether a replay window is good enough to run as a real paper replay.
+#[must_use]
+pub fn paper_replay_preflight(input: &PaperReplayPreflightInput) -> PaperReplayPreflightReport {
+    let mut capabilities = Vec::new();
+    let mut blockers = Vec::new();
+    let mut conditions = Vec::new();
+
+    push_market_window_conditions(input, &mut capabilities, &mut blockers, &mut conditions);
+    push_replay_count_conditions(input, &mut capabilities, &mut blockers, &mut conditions);
+    push_replay_policy_conditions(input, &mut capabilities, &mut blockers, &mut conditions);
+
+    PaperReplayPreflightReport {
+        ready_for_replay: blockers.is_empty(),
+        market: input.market.clone(),
+        data_counts: input.data_counts,
+        capabilities,
+        blockers,
+        conditions,
+    }
+}
+
+fn push_market_window_conditions(
+    input: &PaperReplayPreflightInput,
+    capabilities: &mut Vec<ReadinessItem>,
+    blockers: &mut Vec<ReadinessItem>,
+    conditions: &mut Vec<ReadinessCondition>,
+) {
+    let duration_ms = input.market.end_unix_ms - input.market.start_unix_ms;
+    push_condition(
+        capabilities,
+        blockers,
+        conditions,
+        "market_window",
+        "end_unix_ms - start_unix_ms == 300000",
+        format!(
+            "start={} end={} duration_ms={duration_ms}",
+            input.market.start_unix_ms, input.market.end_unix_ms
+        ),
+        input.market.end_unix_ms > input.market.start_unix_ms && duration_ms == 300_000,
+    );
+
+    if let (Some(now_unix_ms), Some(stale_after_ms)) =
+        (input.now_unix_ms, input.market_stale_after_ms)
+    {
+        let age_ms = (now_unix_ms - input.market.end_unix_ms).max(0);
+        push_condition(
+            capabilities,
+            blockers,
+            conditions,
+            "market_freshness",
+            format!("market age <= {stale_after_ms} ms"),
+            format!("age_ms={age_ms}"),
+            age_ms <= stale_after_ms,
+        );
+    }
+}
+
+fn push_replay_count_conditions(
+    input: &PaperReplayPreflightInput,
+    capabilities: &mut Vec<ReadinessItem>,
+    blockers: &mut Vec<ReadinessItem>,
+    conditions: &mut Vec<ReadinessCondition>,
+) {
+    push_count_condition(
+        capabilities,
+        blockers,
+        conditions,
+        "liquidations",
+        input.data_counts.liquidations,
+        input.minimum_counts.liquidations,
+    );
+    push_count_condition(
+        capabilities,
+        blockers,
+        conditions,
+        "polymarket_quotes",
+        input.data_counts.polymarket_quotes,
+        input.minimum_counts.polymarket_quotes,
+    );
+    push_count_condition(
+        capabilities,
+        blockers,
+        conditions,
+        "polymarket_trades",
+        input.data_counts.polymarket_trades,
+        input.minimum_counts.polymarket_trades,
+    );
+    push_count_condition(
+        capabilities,
+        blockers,
+        conditions,
+        "hyperliquid_quotes",
+        input.data_counts.hyperliquid_quotes,
+        input.minimum_counts.hyperliquid_quotes,
+    );
+    push_count_condition(
+        capabilities,
+        blockers,
+        conditions,
+        "hyperliquid_trades",
+        input.data_counts.hyperliquid_trades,
+        input.minimum_counts.hyperliquid_trades,
+    );
+}
+
+fn push_replay_policy_conditions(
+    input: &PaperReplayPreflightInput,
+    capabilities: &mut Vec<ReadinessItem>,
+    blockers: &mut Vec<ReadinessItem>,
+    conditions: &mut Vec<ReadinessCondition>,
+) {
+    if input.require_trade_cross {
+        push_condition(
+            capabilities,
+            blockers,
+            conditions,
+            "fill_model",
+            "fill_model == trade_cross",
+            format!("{:?}", input.fill_model),
+            input.fill_model == FillModel::TradeCross,
+        );
+    }
+
+    if input.require_nonzero_cost_assumptions {
+        let has_cost = input.fee_schedule.polymarket_maker_bps > Decimal::ZERO
+            || input.fee_schedule.polymarket_taker_bps > Decimal::ZERO
+            || input.fee_schedule.hyperliquid_maker_bps > Decimal::ZERO
+            || input.fee_schedule.hyperliquid_taker_bps > Decimal::ZERO
+            || input.fee_schedule.hyperliquid_funding_bps_per_hour > Decimal::ZERO
+            || input.hedge_slippage_usd > Decimal::ZERO;
+        push_condition(
+            capabilities,
+            blockers,
+            conditions,
+            "cost_assumptions",
+            "at least one fee/funding/slippage assumption is non-zero",
+            format!(
+                "pm_maker_bps={} pm_taker_bps={} hl_maker_bps={} hl_taker_bps={} hl_funding_bps_per_hour={} hedge_slippage_usd={}",
+                input.fee_schedule.polymarket_maker_bps,
+                input.fee_schedule.polymarket_taker_bps,
+                input.fee_schedule.hyperliquid_maker_bps,
+                input.fee_schedule.hyperliquid_taker_bps,
+                input.fee_schedule.hyperliquid_funding_bps_per_hour,
+                input.hedge_slippage_usd
+            ),
+            has_cost,
+        );
+    }
+
+    if input.fee_schedule.hyperliquid_funding_bps_per_hour > Decimal::ZERO {
+        push_condition(
+            capabilities,
+            blockers,
+            conditions,
+            "funding_duration",
+            "funding_hours > 0 when Hyperliquid funding is non-zero",
+            format!("funding_hours={}", input.funding_hours),
+            input.funding_hours > Decimal::ZERO,
+        );
+    }
+}
+
+fn push_count_condition(
+    capabilities: &mut Vec<ReadinessItem>,
+    blockers: &mut Vec<ReadinessItem>,
+    conditions: &mut Vec<ReadinessCondition>,
+    id: &str,
+    observed: usize,
+    required: usize,
+) {
+    push_condition(
+        capabilities,
+        blockers,
+        conditions,
+        id,
+        format!("{id} >= {required}"),
+        observed.to_string(),
+        observed >= required,
+    );
+}
+
+fn push_condition(
+    capabilities: &mut Vec<ReadinessItem>,
+    blockers: &mut Vec<ReadinessItem>,
+    conditions: &mut Vec<ReadinessCondition>,
+    id: &str,
+    required: impl Into<String>,
+    observed: impl Into<String>,
+    passed: bool,
+) {
+    let required = required.into();
+    let observed = observed.into();
+    conditions.push(ReadinessCondition {
+        id: id.to_owned(),
+        required: required.clone(),
+        observed: observed.clone(),
+        passed,
+    });
+    let note = format!("required='{required}' observed='{observed}'");
+    if passed {
+        capabilities.push(ready(id, &note));
+    } else {
+        blockers.push(blocked(id, &note));
+    }
+}
+
 /// Prediction-market settlement coverage in a replay report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1749,6 +2028,73 @@ mod tests {
             report.trades[0].polymarket_fill,
             FillDecision::Filled { .. }
         ));
+    }
+
+    #[test]
+    fn paper_replay_preflight_blocks_empty_or_stale_real_run_inputs() {
+        let report = paper_replay_preflight(&PaperReplayPreflightInput {
+            market: baseline_market(),
+            data_counts: PaperReplayDataCounts {
+                liquidations: 0,
+                polymarket_quotes: 1,
+                polymarket_trades: 1,
+                hyperliquid_quotes: 1,
+                hyperliquid_trades: 1,
+            },
+            minimum_counts: PaperReplayDataCounts::real_run_minimums(),
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule {
+                hyperliquid_taker_bps: Decimal::new(5, 0),
+                hyperliquid_funding_bps_per_hour: Decimal::new(1, 0),
+                ..FeeSchedule::paper_v1()
+            },
+            hedge_slippage_usd: Decimal::new(10, 2),
+            funding_hours: Decimal::new(1, 0),
+            now_unix_ms: Some(20 * 60 * 1_000),
+            market_stale_after_ms: Some(5 * 60 * 1_000),
+            require_trade_cross: true,
+            require_nonzero_cost_assumptions: true,
+        });
+
+        assert!(!report.ready_for_replay);
+        assert!(report.blockers.iter().any(|item| item.id == "liquidations"));
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|item| item.id == "market_freshness")
+        );
+    }
+
+    #[test]
+    fn paper_replay_preflight_accepts_complete_real_run_inputs() {
+        let report = paper_replay_preflight(&PaperReplayPreflightInput {
+            market: baseline_market(),
+            data_counts: PaperReplayDataCounts {
+                liquidations: 2,
+                polymarket_quotes: 3,
+                polymarket_trades: 4,
+                hyperliquid_quotes: 5,
+                hyperliquid_trades: 6,
+            },
+            minimum_counts: PaperReplayDataCounts::real_run_minimums(),
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule {
+                hyperliquid_taker_bps: Decimal::new(5, 0),
+                hyperliquid_funding_bps_per_hour: Decimal::new(1, 0),
+                ..FeeSchedule::paper_v1()
+            },
+            hedge_slippage_usd: Decimal::new(10, 2),
+            funding_hours: Decimal::new(1, 0),
+            now_unix_ms: Some(6 * 60 * 1_000),
+            market_stale_after_ms: Some(5 * 60 * 1_000),
+            require_trade_cross: true,
+            require_nonzero_cost_assumptions: true,
+        });
+
+        assert!(report.ready_for_replay);
+        assert_eq!(report.blockers, Vec::new());
+        assert_eq!(report.data_counts.polymarket_trades, 4);
     }
 
     fn buy_order(limit_cents: i64) -> PaperOrder {

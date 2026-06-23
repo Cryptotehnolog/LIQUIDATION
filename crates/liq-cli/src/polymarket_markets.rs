@@ -90,6 +90,31 @@ pub async fn fetch_polymarket_markets(
         .user_agent("LIQUIDATION-dev/0.1")
         .build()
         .context("failed to build Polymarket metadata HTTP client")?;
+
+    let mut direct = Vec::new();
+    for url in direct_btc_five_minute_urls(
+        &request.endpoint_url,
+        &request.filter,
+        OffsetDateTime::now_utc(),
+    ) {
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("failed to fetch Polymarket metadata from {url}"))?
+            .error_for_status()
+            .with_context(|| format!("Polymarket metadata endpoint returned an error for {url}"))?;
+        let payload = response
+            .text()
+            .await
+            .context("failed to read Polymarket metadata response body")?;
+        direct.extend(parse_gamma_markets(&payload)?);
+    }
+    let selected = select_polymarket_markets(&direct, &request.filter)?;
+    if !selected.is_empty() {
+        return Ok(selected);
+    }
+
     let mut all = Vec::new();
     for page in 0..request.max_pages {
         let offset = u32::from(page) * u32::from(request.page_limit);
@@ -141,11 +166,9 @@ fn gamma_market_to_record(
         return Ok(None);
     }
 
-    let start_ts = parse_required_time(market.start_date.as_deref(), "startDate")?;
-    let end_ts = parse_required_time(market.end_date.as_deref(), "endDate")?;
-    if end_ts - start_ts != Duration::seconds(filter.window_seconds) {
+    let Some((start_ts, end_ts)) = market_window(market, filter.window_seconds)? else {
         return Ok(None);
-    }
+    };
 
     let outcomes = string_array(&market.outcomes).context("invalid outcomes")?;
     let token_ids = string_array(&market.clob_token_ids).context("invalid clobTokenIds")?;
@@ -208,6 +231,28 @@ fn parse_required_time(value: Option<&str>, field: &str) -> anyhow::Result<Offse
         .with_context(|| format!("invalid Polymarket {field}: {value}"))
 }
 
+fn market_window(
+    market: &GammaMarket,
+    window_seconds: i64,
+) -> anyhow::Result<Option<(OffsetDateTime, OffsetDateTime)>> {
+    if let Some(start_ts) = btc_updown_slug_start(&market.slug) {
+        let start_ts = OffsetDateTime::from_unix_timestamp(start_ts)
+            .with_context(|| format!("invalid Polymarket slug timestamp: {}", market.slug))?;
+        return Ok(Some((
+            start_ts,
+            start_ts + Duration::seconds(window_seconds),
+        )));
+    }
+
+    let start_ts = parse_required_time(market.start_date.as_deref(), "startDate")?;
+    let end_ts = parse_required_time(market.end_date.as_deref(), "endDate")?;
+    Ok((end_ts - start_ts == Duration::seconds(window_seconds)).then_some((start_ts, end_ts)))
+}
+
+fn btc_updown_slug_start(slug: &str) -> Option<i64> {
+    slug.strip_prefix("btc-updown-5m-")?.parse().ok()
+}
+
 fn string_array(value: &Value) -> anyhow::Result<Vec<String>> {
     match value {
         Value::Array(items) => items
@@ -228,6 +273,31 @@ fn string_array(value: &Value) -> anyhow::Result<Vec<String>> {
 fn paged_url(endpoint_url: &str, limit: u16, offset: u32) -> String {
     let separator = if endpoint_url.contains('?') { '&' } else { '?' };
     format!("{endpoint_url}{separator}limit={limit}&offset={offset}")
+}
+
+fn direct_btc_five_minute_urls(
+    endpoint_url: &str,
+    filter: &PolymarketMarketFetchFilter,
+    now: OffsetDateTime,
+) -> Vec<String> {
+    if filter.market_type != "btc_5m" || !filter.base_asset.eq_ignore_ascii_case("BTC") {
+        return Vec::new();
+    }
+    rolling_slug_starts(now, filter.window_seconds)
+        .into_iter()
+        .map(|start| direct_slug_url(endpoint_url, &format!("btc-updown-5m-{start}")))
+        .collect()
+}
+
+fn rolling_slug_starts(now: OffsetDateTime, window_seconds: i64) -> Vec<i64> {
+    let now = now.unix_timestamp();
+    let current = now - now.rem_euclid(window_seconds);
+    vec![current, current - window_seconds]
+}
+
+fn direct_slug_url(endpoint_url: &str, slug: &str) -> String {
+    let separator = if endpoint_url.contains('?') { '&' } else { '?' };
+    format!("{endpoint_url}{separator}slug={slug}")
 }
 
 #[cfg(test)]
@@ -282,6 +352,35 @@ mod tests {
     }
 
     #[test]
+    fn derives_btc_five_minute_window_from_current_slug_format() {
+        let payload = r#"
+        [{
+          "id": "2643539",
+          "question": "Bitcoin Up or Down - June 23, 4:05PM-4:10PM ET",
+          "slug": "btc-updown-5m-1782245100",
+          "startDate": "2026-06-22T20:13:34.038526Z",
+          "endDate": "2026-06-23T20:10:00Z",
+          "outcomes": "[\"Up\", \"Down\"]",
+          "clobTokenIds": "[\"up-token\", \"down-token\"]",
+          "active": true,
+          "closed": false,
+          "archived": false,
+          "enableOrderBook": true,
+          "acceptingOrders": true
+        }]
+        "#;
+
+        let markets = parse_gamma_markets(payload).expect("payload should parse");
+        let selected = select_polymarket_markets(&markets, &PolymarketMarketFetchFilter::default())
+            .expect("filter should pass");
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].market_id, "2643539");
+        assert_eq!(selected[0].start_ts.unix_timestamp(), 1_782_245_100);
+        assert_eq!(selected[0].end_ts.unix_timestamp(), 1_782_245_400);
+    }
+
+    #[test]
     fn rejects_incomplete_or_wrong_outcome_markets() {
         let payload = r#"
         [{
@@ -305,5 +404,23 @@ mod tests {
             .expect("filter should pass");
 
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn builds_direct_lookup_urls_for_current_btc_five_minute_slugs() {
+        let now = OffsetDateTime::from_unix_timestamp(1_782_245_455).expect("valid timestamp");
+        let urls = direct_btc_five_minute_urls(
+            "https://gamma-api.polymarket.com/markets",
+            &PolymarketMarketFetchFilter::default(),
+            now,
+        );
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://gamma-api.polymarket.com/markets?slug=btc-updown-5m-1782245400",
+                "https://gamma-api.polymarket.com/markets?slug=btc-updown-5m-1782245100",
+            ]
+        );
     }
 }

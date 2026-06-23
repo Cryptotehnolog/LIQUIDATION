@@ -41,6 +41,27 @@ if (Test-Path -LiteralPath $MarketArtifactPath) {
 
 $args = @(
     "run", "-p", "liq-cli", "--",
+    "replay", "preflight",
+    "--database-url", $DatabaseUrl,
+    "--strategy", "baseline",
+    "--latest-polymarket-market",
+    "--fill-model", "trade_cross",
+    "--hedge-notional-usd", "15",
+    "--hyperliquid-taker-bps", "5",
+    "--hyperliquid-funding-bps-per-hour", "1",
+    "--hedge-slippage-usd", "0.10",
+    "--funding-hours", "1",
+    "--market-stale-after-minutes", [string]$MarketStaleAfterMinutes,
+    "--json"
+)
+
+& cargo @args
+if ($LASTEXITCODE -ne 0) {
+    throw "liq replay preflight failed with exit code $LASTEXITCODE"
+}
+
+$args = @(
+    "run", "-p", "liq-cli", "--",
     "replay", "run",
     "--database-url", $DatabaseUrl,
     "--strategy", "baseline",
@@ -51,6 +72,7 @@ $args = @(
     "--hyperliquid-funding-bps-per-hour", "1",
     "--hedge-slippage-usd", "0.10",
     "--funding-hours", "1",
+    "--market-stale-after-minutes", [string]$MarketStaleAfterMinutes,
     "--artifact-path", $ArtifactPath,
     "--json"
 )

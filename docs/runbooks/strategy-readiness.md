@@ -231,6 +231,58 @@ cargo run -p liq-cli -- replay market list `
   --json
 ```
 
+Перед первым реальным paper replay обязательно запускать preflight:
+
+```powershell
+cargo run -p liq-cli -- replay preflight `
+  --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  --strategy baseline `
+  --latest-polymarket-market `
+  --fill-model trade_cross `
+  --hedge-notional-usd 15 `
+  --hyperliquid-taker-bps 5 `
+  --hyperliquid-funding-bps-per-hour 1 `
+  --hedge-slippage-usd 0.10 `
+  --funding-hours 1 `
+  --market-stale-after-minutes 15 `
+  --json
+```
+
+`replay preflight` возвращает non-zero exit code, если replay window нельзя
+считать качественным. Он блокирует:
+
+- stale Polymarket market metadata;
+- не-5-minute market window;
+- пустые liquidation rows;
+- пустые Polymarket quote/trade rows;
+- пустые Hyperliquid quote/trade rows;
+- optimistic `book_touch` вместо conservative `trade_cross`;
+- полностью нулевые cost assumptions;
+- non-zero Hyperliquid funding без положительного `funding-hours`.
+
+Для сбора одного свежего BTC 5-minute окна без ручного ввода market id и token
+id используем:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect-paper-replay-window.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MaxRuntimeSeconds 330 `
+  -RunReplay
+```
+
+Скрипт делает:
+
+- fetch/upsert свежего Polymarket BTC 5-minute market metadata;
+- ожидание следующего окна, если текущий рынок почти завершился;
+- параллельный read-only сбор Bybit/Binance/OKX liquidation feeds;
+- параллельный read-only сбор Polymarket UP/DOWN token market data;
+- параллельный read-only сбор Hyperliquid BTC market data;
+- `replay preflight` перед запуском `replay run`.
+
+Важно: если в окне нет liquidation events, preflight обязан упасть. Это не
+ошибка инфраструктуры, а корректный отказ от пустого strategy replay без
+signal source. В таком случае запускаем следующий window, а не снижаем gate.
+
 Команда:
 
 ```powershell
@@ -248,6 +300,7 @@ cargo run -p liq-cli -- replay run `
   --hyperliquid-funding-bps-per-hour 1 `
   --hedge-slippage-usd 0.10 `
   --funding-hours 1 `
+  --market-stale-after-minutes 15 `
   --json
 ```
 
@@ -262,6 +315,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-latest-polymarke
 
 Auto mode fail-closed:
 
+- `scripts/run-latest-polymarket-replay.ps1` сначала запускает
+  `replay preflight`; если есть blockers, replay не стартует и artifact не
+  создаётся;
 - нельзя смешивать `--latest-polymarket-market` с ручными
   `--market-id/--up-token-id/--down-token-id/--start-unix-ms/--end-unix-ms`;
 - если metadata для `base_asset + market_type` отсутствует, replay не
