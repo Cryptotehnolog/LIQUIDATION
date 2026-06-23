@@ -1,6 +1,9 @@
 //! Postgres persistence operations.
 
-use liq_domain::{LiquidationEvent, LiquidationSide, Source, SourceQuality};
+use liq_domain::{
+    LiquidationEvent, LiquidationSide, MarketQuote, MarketTrade, MarketVenue, Source,
+    SourceQuality, TradeSide,
+};
 use sqlx::{PgPool, QueryBuilder};
 use time::OffsetDateTime;
 
@@ -300,6 +303,130 @@ pub async fn insert_liquidation_events(
     });
 
     let result = query.build().execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
+/// Insert a canonical market quote.
+///
+/// Existing `(venue, source_event_id)` rows are left unchanged.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the insert.
+pub async fn insert_market_quote(pool: &PgPool, quote: &MarketQuote) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let key_result = sqlx::query(
+        r"
+        INSERT INTO market_quote_keys (venue, source_event_id)
+        VALUES ($1, $2)
+        ON CONFLICT (venue, source_event_id) DO NOTHING
+        ",
+    )
+    .bind(market_venue_as_str(quote.venue))
+    .bind(&quote.source_event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if key_result.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
+    let result = sqlx::query(
+        r"
+        INSERT INTO market_quotes (
+            event_id,
+            venue,
+            source_event_id,
+            instrument_id,
+            symbol,
+            best_bid,
+            best_bid_size,
+            best_ask,
+            best_ask_size,
+            exchange_ts,
+            received_ts
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ",
+    )
+    .bind(quote.event_id)
+    .bind(market_venue_as_str(quote.venue))
+    .bind(&quote.source_event_id)
+    .bind(&quote.instrument_id)
+    .bind(&quote.symbol)
+    .bind(quote.best_bid)
+    .bind(quote.best_bid_size)
+    .bind(quote.best_ask)
+    .bind(quote.best_ask_size)
+    .bind(quote.exchange_ts)
+    .bind(quote.received_ts)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
+/// Insert a canonical market trade.
+///
+/// Existing `(venue, source_event_id)` rows are left unchanged.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the insert.
+pub async fn insert_market_trade(pool: &PgPool, trade: &MarketTrade) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let key_result = sqlx::query(
+        r"
+        INSERT INTO market_trade_keys (venue, source_event_id)
+        VALUES ($1, $2)
+        ON CONFLICT (venue, source_event_id) DO NOTHING
+        ",
+    )
+    .bind(market_venue_as_str(trade.venue))
+    .bind(&trade.source_event_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if key_result.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
+    let result = sqlx::query(
+        r"
+        INSERT INTO market_trades (
+            event_id,
+            venue,
+            source_event_id,
+            instrument_id,
+            symbol,
+            side,
+            price,
+            quantity,
+            notional_usd,
+            exchange_ts,
+            received_ts
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ",
+    )
+    .bind(trade.event_id)
+    .bind(market_venue_as_str(trade.venue))
+    .bind(&trade.source_event_id)
+    .bind(&trade.instrument_id)
+    .bind(&trade.symbol)
+    .bind(trade_side_as_str(trade.side))
+    .bind(trade.price)
+    .bind(trade.quantity)
+    .bind(trade.notional_usd)
+    .bind(trade.exchange_ts)
+    .bind(trade.received_ts)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
     Ok(result.rows_affected())
 }
@@ -998,5 +1125,17 @@ fn liquidation_side_as_str(side: LiquidationSide) -> &'static str {
     match side {
         LiquidationSide::Long => "long",
         LiquidationSide::Short => "short",
+    }
+}
+
+fn market_venue_as_str(venue: MarketVenue) -> &'static str {
+    venue.as_str()
+}
+
+fn trade_side_as_str(side: TradeSide) -> &'static str {
+    match side {
+        TradeSide::Buy => "buy",
+        TradeSide::Sell => "sell",
+        TradeSide::Unknown => "unknown",
     }
 }

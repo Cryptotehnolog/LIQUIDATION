@@ -1,9 +1,11 @@
 //! Shared domain types for LIQUIDATION.
 
 pub mod liquidation;
+pub mod market;
 pub mod source;
 
 pub use liquidation::{LiquidationEvent, LiquidationSide};
+pub use market::{BookSide, MarketQuote, MarketTrade, MarketVenue, TradeSide};
 pub use source::{Source, SourceQuality};
 
 #[cfg(test)]
@@ -18,6 +20,8 @@ mod tests {
         assert_eq!(Source::Bybit.as_str(), "bybit");
         assert_eq!(Source::Binance.as_str(), "binance");
         assert_eq!(Source::Okx.as_str(), "okx");
+        assert_eq!(Source::Polymarket.as_str(), "polymarket");
+        assert_eq!(Source::Hyperliquid.as_str(), "hyperliquid");
     }
 
     #[test]

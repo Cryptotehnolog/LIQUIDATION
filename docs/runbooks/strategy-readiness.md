@@ -96,9 +96,37 @@
 
 Baseline strategy port из Python начинается только после этих foundations.
 
+## Current Code Gate
+
+Команда:
+
+```powershell
+cargo run -p liq-cli -- strategy readiness --json
+```
+
+показывает текущий fail-closed статус. После pre-strategy foundation increment
+в коде уже есть:
+
+- canonical `MarketQuote` / `MarketTrade` domain types for Polymarket and
+  Hyperliquid;
+- TimescaleDB tables and insert boundaries for `market_quotes` and
+  `market_trades`;
+- deterministic `ReplayInput` and `input_hash`;
+- `Strategy` trait skeleton;
+- MVP fill models: conservative `trade_cross` and diagnostic `book_touch`;
+- explicit fee/funding/slippage model for Polymarket + Hyperliquid;
+- paper-only safety gate that rejects live mode by default.
+
+Это не значит, что strategy уже можно запускать. Gate намеренно оставляет
+`ready_for_strategy = false`, пока не закрыты live-data blockers:
+
+- public Polymarket market-data probe;
+- Hyperliquid hedge market-data probe;
+- Rust port of the baseline strategy.
+
 ## Что улучшить или автоматизировать
 
-Добавить CLI gate:
+CLI gate уже добавлен:
 
 ```powershell
 cargo run -p liq-cli -- strategy readiness --json

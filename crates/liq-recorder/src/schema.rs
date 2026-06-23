@@ -73,6 +73,7 @@ pub async fn assert_schema_contract(pool: &PgPool) -> Result<Vec<SchemaViolation
     Ok(violations)
 }
 
+#[allow(clippy::too_many_lines)]
 fn expected_contracts() -> &'static [ColumnContract] {
     &[
         ColumnContract {
@@ -169,6 +170,54 @@ fn expected_contracts() -> &'static [ColumnContract] {
             table: "collector_health",
             column: "max_latency_ms",
             data_type: "bigint",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "market_quotes",
+            column: "venue",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "market_quotes",
+            column: "best_bid",
+            data_type: "numeric",
+            nullable: true,
+        },
+        ColumnContract {
+            table: "market_quotes",
+            column: "best_ask",
+            data_type: "numeric",
+            nullable: true,
+        },
+        ColumnContract {
+            table: "market_quote_keys",
+            column: "source_event_id",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "market_trades",
+            column: "venue",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "market_trades",
+            column: "price",
+            data_type: "numeric",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "market_trades",
+            column: "notional_usd",
+            data_type: "numeric",
+            nullable: true,
+        },
+        ColumnContract {
+            table: "market_trade_keys",
+            column: "source_event_id",
+            data_type: "text",
             nullable: false,
         },
     ]

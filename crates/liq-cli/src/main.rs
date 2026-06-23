@@ -11,7 +11,7 @@ use liq_collector::{
 };
 use liq_connectors::okx::OkxInstrumentCache;
 use liq_recorder::{migrations, repository, schema};
-use liq_replay::{DryRunRequest, validate_dry_run};
+use liq_replay::{DryRunRequest, StrategyReadinessReport, validate_dry_run};
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -42,6 +42,11 @@ enum Command {
     Collector {
         #[command(subcommand)]
         command: CollectorCommand,
+    },
+    /// Strategy readiness and safety commands.
+    Strategy {
+        #[command(subcommand)]
+        command: StrategyCommand,
     },
 }
 
@@ -213,6 +218,16 @@ enum CollectorCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum StrategyCommand {
+    /// Print fail-closed strategy readiness report.
+    Readiness {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -230,8 +245,35 @@ async fn run() -> anyhow::Result<()> {
         Command::Db { command } => handle_db_command(command).await?,
         Command::Replay { command } => handle_replay_command(command)?,
         Command::Collector { command } => handle_collector_command(command).await?,
+        Command::Strategy { command } => handle_strategy_command(&command)?,
     }
 
+    Ok(())
+}
+
+fn handle_strategy_command(command: &StrategyCommand) -> anyhow::Result<()> {
+    match command {
+        StrategyCommand::Readiness { json } => {
+            let report = StrategyReadinessReport::current_foundation();
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report)
+                        .context("failed to serialize strategy readiness report")?
+                );
+            } else {
+                println!("ready_for_strategy: {}", report.ready_for_strategy);
+                println!("capabilities:");
+                for item in &report.capabilities {
+                    println!("- {}: {} ({})", item.id, item.status, item.note);
+                }
+                println!("blockers:");
+                for item in &report.blockers {
+                    println!("- {}: {} ({})", item.id, item.status, item.note);
+                }
+            }
+        }
+    }
     Ok(())
 }
 

@@ -1,6 +1,9 @@
 //! Recorder persistence integration tests.
 
-use liq_domain::{LiquidationEvent, LiquidationSide, Source, SourceQuality};
+use liq_domain::{
+    LiquidationEvent, LiquidationSide, MarketQuote, MarketTrade, MarketVenue, Source,
+    SourceQuality, TradeSide,
+};
 use liq_recorder::{
     migrations,
     records::{CollectorHealthRecord, RawSourceEvent},
@@ -245,6 +248,52 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
         assert!(overlap.buckets.iter().any(
             |bucket| bucket.primary_canonical_events >= 1 && bucket.diagnostic_raw_events >= 1
         ));
+
+        let quote_source_event_id = format!("polymarket:quote:{suffix}");
+        let quote = MarketQuote {
+            event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, quote_source_event_id.as_bytes()),
+            venue: MarketVenue::Polymarket,
+            source_event_id: quote_source_event_id,
+            instrument_id: "pm-token-up".to_owned(),
+            symbol: "btc-up-jun-2026".to_owned(),
+            best_bid: Some(Decimal::new(49, 2)),
+            best_bid_size: Some(Decimal::new(100, 0)),
+            best_ask: Some(Decimal::new(51, 2)),
+            best_ask_size: Some(Decimal::new(80, 0)),
+            exchange_ts,
+            received_ts,
+        };
+        let inserted = repository::insert_market_quote(&pool, &quote)
+            .await
+            .expect("market quote insert must succeed");
+        assert_eq!(inserted, 1);
+        let duplicate = repository::insert_market_quote(&pool, &quote)
+            .await
+            .expect("duplicate market quote insert must not fail");
+        assert_eq!(duplicate, 0);
+
+        let trade_source_event_id = format!("hyperliquid:trade:{suffix}");
+        let trade = MarketTrade {
+            event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, trade_source_event_id.as_bytes()),
+            venue: MarketVenue::Hyperliquid,
+            source_event_id: trade_source_event_id,
+            instrument_id: "BTC".to_owned(),
+            symbol: "BTC-PERP".to_owned(),
+            side: TradeSide::Buy,
+            price: Decimal::new(6_500_000, 2),
+            quantity: Decimal::new(1, 2),
+            notional_usd: Some(Decimal::new(65_000, 2)),
+            exchange_ts,
+            received_ts,
+        };
+        let inserted = repository::insert_market_trade(&pool, &trade)
+            .await
+            .expect("market trade insert must succeed");
+        assert_eq!(inserted, 1);
+        let duplicate = repository::insert_market_trade(&pool, &trade)
+            .await
+            .expect("duplicate market trade insert must not fail");
+        assert_eq!(duplicate, 0);
     });
 }
 
