@@ -18,7 +18,7 @@ struct HyperliquidBboPayload {
 struct HyperliquidBboData {
     coin: String,
     time: i64,
-    bbo: Vec<HyperliquidBookLevel>,
+    bbo: Vec<Option<HyperliquidBookLevel>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,8 +58,20 @@ pub fn normalize_market_quotes(
         return Ok(Vec::new());
     }
     let parsed = serde_json::from_str::<HyperliquidBboPayload>(payload)?;
-    let bid = parsed.data.bbo.first().map(parse_level).transpose()?;
-    let ask = parsed.data.bbo.get(1).map(parse_level).transpose()?;
+    let bid = parsed
+        .data
+        .bbo
+        .first()
+        .and_then(Option::as_ref)
+        .map(parse_level)
+        .transpose()?;
+    let ask = parsed
+        .data
+        .bbo
+        .get(1)
+        .and_then(Option::as_ref)
+        .map(parse_level)
+        .transpose()?;
     let exchange_ts = timestamp_ms(parsed.data.time)?;
     let source_event_id = format!("hyperliquid:bbo:{}:{}", parsed.data.coin, parsed.data.time);
 

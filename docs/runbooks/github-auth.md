@@ -23,7 +23,8 @@ gh auth status
 - account: `Cryptotehnolog`;
 - active account: `true`;
 - protocol: `https`;
-- token scopes включают `repo` и `workflow`.
+- token scopes включают `repo`, `workflow` и, если нужен org-доступ,
+  `read:org`.
 
 Проверить доступ к репозиторию:
 
@@ -49,7 +50,9 @@ gh auth setup-git
 ```
 
 Эта команда настраивает Git использовать GitHub CLI credentials для GitHub. Она
-не требует logout и не должна ломать второй проект.
+не требует logout и обычно не ломает второй проект, но это глобальная настройка
+GitHub CLI/Git. Для Codex и этого репозитория предпочтительнее изолированный
+wrapper из раздела ниже.
 
 ## Проверка этого репозитория
 
@@ -137,8 +140,9 @@ cd D:\Liquidation\LIQUIDATION
 .\scripts\setup-project-gh-auth.ps1
 ```
 
-Скрипт попросит GitHub token скрытым вводом. Не передавайте token через аргументы
-командной строки и не вставляйте его в чат.
+Скрипт попросит GitHub token скрытым вводом. Не передавайте token через
+аргументы командной строки и не вставляйте его в чат. Для classic PAT нужны
+только scopes `repo`, `workflow`, `read:org`; `gist` не нужен.
 
 В интерфейсе GitHub classic token scope `read:org` находится внутри группы
 `admin:org`. Нужно отметить только подгалочку `read:org`, не всю группу

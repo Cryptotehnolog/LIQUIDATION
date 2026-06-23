@@ -600,6 +600,7 @@ async fn read_service_once(
             .map_err(websocket_error)?;
     }
 
+    let mut last_heartbeat = Instant::now();
     loop {
         if *shutdown.borrow() {
             return Ok(());
@@ -617,9 +618,14 @@ async fn read_service_once(
             return Ok(());
         }
 
-        let Some(message) = (match tokio::time::timeout(settings.read_timeout, socket.next()).await
-        {
+        let read_wait = read_wait_with_heartbeat(settings.read_timeout, probe, last_heartbeat);
+        let Some(message) = (match tokio::time::timeout(read_wait, socket.next()).await {
             Ok(message) => message,
+            Err(_) if heartbeat_due(probe, last_heartbeat) => {
+                send_heartbeat(&mut socket, probe).await?;
+                last_heartbeat = Instant::now();
+                continue;
+            }
             Err(_) => continue,
         }) else {
             return Ok(());
@@ -689,10 +695,17 @@ async fn read_once(
             .map_err(websocket_error)?;
     }
 
+    let mut last_heartbeat = Instant::now();
     while stats.received_messages < settings.max_messages as u64 {
-        let timeout_result = tokio::time::timeout(settings.read_timeout, socket.next()).await;
+        let read_wait = read_wait_with_heartbeat(settings.read_timeout, probe, last_heartbeat);
+        let timeout_result = tokio::time::timeout(read_wait, socket.next()).await;
         let Some(message) = (match timeout_result {
             Ok(message) => message,
+            Err(_) if heartbeat_due(probe, last_heartbeat) => {
+                send_heartbeat(&mut socket, probe).await?;
+                last_heartbeat = Instant::now();
+                continue;
+            }
             Err(_) if stats.received_messages >= settings.min_messages as u64 => return Ok(()),
             Err(_) => return Err(CollectorError::ReadTimeout(settings.read_timeout)),
         }) else {
@@ -715,6 +728,38 @@ async fn read_once(
         }
     }
 
+    Ok(())
+}
+
+fn read_wait_with_heartbeat(
+    read_timeout: Duration,
+    probe: &SourceProbe,
+    last_heartbeat: Instant,
+) -> Duration {
+    probe.heartbeat_interval().map_or(read_timeout, |interval| {
+        let until_heartbeat = interval
+            .checked_sub(last_heartbeat.elapsed())
+            .unwrap_or(Duration::ZERO);
+        until_heartbeat.min(read_timeout)
+    })
+}
+
+fn heartbeat_due(probe: &SourceProbe, last_heartbeat: Instant) -> bool {
+    probe
+        .heartbeat_interval()
+        .is_some_and(|interval| last_heartbeat.elapsed() >= interval)
+}
+
+async fn send_heartbeat<S>(socket: &mut S, probe: &SourceProbe) -> Result<(), CollectorError>
+where
+    S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    if let Some(message) = probe.heartbeat_message() {
+        socket
+            .send(Message::Text(message.into()))
+            .await
+            .map_err(websocket_error)?;
+    }
     Ok(())
 }
 

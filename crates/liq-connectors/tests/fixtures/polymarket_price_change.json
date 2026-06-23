@@ -1,0 +1,25 @@
+{
+  "event_type": "price_change",
+  "market": "0xmarket",
+  "timestamp": "1718750001000",
+  "price_changes": [
+    {
+      "asset_id": "123456789",
+      "price": "0.50",
+      "size": "200",
+      "side": "BUY",
+      "hash": "abc",
+      "best_bid": "0.50",
+      "best_ask": "0.53"
+    },
+    {
+      "asset_id": "987654321",
+      "price": "0.47",
+      "size": "100",
+      "side": "SELL",
+      "hash": "def",
+      "best_bid": "0.46",
+      "best_ask": "0.49"
+    }
+  ]
+}

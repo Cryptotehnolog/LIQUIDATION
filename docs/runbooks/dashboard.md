@@ -107,6 +107,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1 
 Dashboard читает replay report только как read-only artifact через endpoint
 `/api/replay/latest`. Он не запускает replay сам и не пишет в БД.
 
+Поле `net_unsettled_pnl_usd` на панели является cost/risk replay без финального
+Polymarket settlement. Если `settlement_status = unsettled`, это нельзя
+трактовать как полный исторический PnL стратегии.
+
 По умолчанию launcher ищет:
 
 - `.cache/replay/latest-polymarket-baseline.json` - последний replay report;

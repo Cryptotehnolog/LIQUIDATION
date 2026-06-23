@@ -69,3 +69,14 @@ git ls-remote origin HEAD
 
 Это безопаснее, чем logout/login, потому что не удаляет существующие
 credentials.
+
+Для project-scoped доступа Codex в этом репозитории используйте:
+
+```powershell
+cd D:\Liquidation\LIQUIDATION
+.\scripts\gh-project.ps1 auth status
+.\scripts\gh-project.ps1 repo view Cryptotehnolog/LIQUIDATION
+```
+
+`gh auth setup-git` не нужен для обычных GitHub API operations через
+`gh-project.ps1`.

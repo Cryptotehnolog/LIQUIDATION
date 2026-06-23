@@ -11,7 +11,11 @@ use liq_collector::{
     run_live_collectors, run_live_probe,
 };
 use liq_connectors::okx::OkxInstrumentCache;
-use liq_recorder::{migrations, records::PolymarketMarketRecord, repository, schema};
+use liq_recorder::{
+    migrations,
+    records::{PaperReplayDataRecord, PolymarketMarketRecord},
+    repository, schema,
+};
 use liq_replay::{
     BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness,
     PaperReplayDataCounts, PaperReplayInput, PaperReplayPreflightInput, PaperReplayPreflightReport,
@@ -801,6 +805,7 @@ async fn load_replay_inputs_from_database(
             args.strategy
         );
     }
+    validate_replay_numeric_args(args)?;
     let pool = connect(&args.database_url).await?;
     let market = resolve_replay_market(&pool, args).await?;
 
@@ -821,6 +826,7 @@ async fn load_replay_inputs_from_database(
     let data = repository::paper_replay_data(&pool, start, end)
         .await
         .context("failed to read paper replay data")?;
+    let data = filter_replay_data_for_market(data, &market);
     let fee_schedule = FeeSchedule {
         version: "cli_fee_schedule_v1".to_owned(),
         polymarket_maker_bps: args.polymarket_maker_bps,
@@ -831,13 +837,7 @@ async fn load_replay_inputs_from_database(
     };
     let preflight = paper_replay_preflight(&PaperReplayPreflightInput {
         market: market.clone(),
-        data_counts: PaperReplayDataCounts {
-            liquidations: data.liquidations.len(),
-            polymarket_quotes: data.polymarket_quotes.len(),
-            polymarket_trades: data.polymarket_trades.len(),
-            hyperliquid_quotes: data.hyperliquid_quotes.len(),
-            hyperliquid_trades: data.hyperliquid_trades.len(),
-        },
+        data_counts: paper_replay_data_counts(&data),
         minimum_counts: PaperReplayDataCounts::real_run_minimums(),
         fill_model,
         fee_schedule: fee_schedule.clone(),
@@ -850,6 +850,92 @@ async fn load_replay_inputs_from_database(
     });
 
     Ok((market, data, fill_model, fee_schedule, preflight))
+}
+
+fn validate_replay_numeric_args(args: &ReplayRunArgs) -> anyhow::Result<()> {
+    if args.hedge_notional_usd <= Decimal::ZERO {
+        anyhow::bail!("--hedge-notional-usd must be greater than zero");
+    }
+    if args.hedge_slippage_usd < Decimal::ZERO {
+        anyhow::bail!("--hedge-slippage-usd must be greater than or equal to zero");
+    }
+    if args.funding_hours < Decimal::ZERO {
+        anyhow::bail!("--funding-hours must be greater than or equal to zero");
+    }
+    for (name, value) in [
+        ("--polymarket-maker-bps", args.polymarket_maker_bps),
+        ("--polymarket-taker-bps", args.polymarket_taker_bps),
+        ("--hyperliquid-maker-bps", args.hyperliquid_maker_bps),
+        ("--hyperliquid-taker-bps", args.hyperliquid_taker_bps),
+        (
+            "--hyperliquid-funding-bps-per-hour",
+            args.hyperliquid_funding_bps_per_hour,
+        ),
+    ] {
+        if value < Decimal::ZERO {
+            anyhow::bail!("{name} must be greater than or equal to zero");
+        }
+    }
+    Ok(())
+}
+
+fn filter_replay_data_for_market(
+    data: PaperReplayDataRecord,
+    market: &BaselineMarket,
+) -> PaperReplayDataRecord {
+    let up_token = market.up_token_id.as_str();
+    let down_token = market.down_token_id.as_str();
+    PaperReplayDataRecord {
+        liquidations: data
+            .liquidations
+            .into_iter()
+            .filter(|event| is_btc_liquidation_symbol(&event.symbol))
+            .collect(),
+        polymarket_quotes: data
+            .polymarket_quotes
+            .into_iter()
+            .filter(|quote| quote.instrument_id == up_token || quote.instrument_id == down_token)
+            .collect(),
+        polymarket_trades: data
+            .polymarket_trades
+            .into_iter()
+            .filter(|trade| trade.instrument_id == up_token || trade.instrument_id == down_token)
+            .collect(),
+        hyperliquid_quotes: data
+            .hyperliquid_quotes
+            .into_iter()
+            .filter(|quote| is_hyperliquid_btc_instrument(&quote.instrument_id, &quote.symbol))
+            .collect(),
+        hyperliquid_trades: data
+            .hyperliquid_trades
+            .into_iter()
+            .filter(|trade| is_hyperliquid_btc_instrument(&trade.instrument_id, &trade.symbol))
+            .collect(),
+    }
+}
+
+fn paper_replay_data_counts(data: &PaperReplayDataRecord) -> PaperReplayDataCounts {
+    PaperReplayDataCounts {
+        liquidations: data.liquidations.len(),
+        polymarket_quotes: data.polymarket_quotes.len(),
+        polymarket_trades: data.polymarket_trades.len(),
+        hyperliquid_quotes: data.hyperliquid_quotes.len(),
+        hyperliquid_trades: data.hyperliquid_trades.len(),
+    }
+}
+
+fn is_btc_liquidation_symbol(symbol: &str) -> bool {
+    matches!(
+        symbol.to_ascii_uppercase().as_str(),
+        "BTCUSDT" | "BTC-USDT" | "BTC-USDT-SWAP"
+    )
+}
+
+fn is_hyperliquid_btc_instrument(instrument_id: &str, symbol: &str) -> bool {
+    instrument_id.eq_ignore_ascii_case("BTC")
+        || instrument_id.eq_ignore_ascii_case("BTC-PERP")
+        || symbol.eq_ignore_ascii_case("BTC")
+        || symbol.eq_ignore_ascii_case("BTC-PERP")
 }
 
 async fn resolve_replay_market(
@@ -1124,8 +1210,9 @@ fn print_replay_report(report: &PaperReplayReport, json: bool) -> anyhow::Result
         println!("hedge_fills: {}", report.hedge_fills);
         println!("unhedged_signals: {}", report.unhedged_signals);
         println!("gross_pnl_usd: {}", report.gross_pnl_usd);
-        println!("net_pnl_usd: {}", report.net_pnl_usd);
+        println!("net_unsettled_pnl_usd: {}", report.net_pnl_usd);
         println!("max_drawdown_usd: {}", report.max_drawdown_usd);
+        println!("settlement_status: {:?}", report.settlement_status);
     }
     Ok(())
 }

@@ -1,5 +1,7 @@
 //! Source probe definitions and payload normalization routing.
 
+use std::time::Duration;
+
 use liq_connectors::{ConnectorError, binance, bybit, hyperliquid, okx, polymarket};
 use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade, Source};
 use serde_json::Value;
@@ -173,7 +175,7 @@ impl SourceProbe {
                 self.symbol
             )],
             CollectorSource::Polymarket => vec![format!(
-                r#"{{"assets_ids":["{}"],"type":"market"}}"#,
+                r#"{{"assets_ids":["{}"],"type":"market","custom_feature_enabled":true}}"#,
                 self.symbol
             )],
             CollectorSource::Hyperliquid => vec![
@@ -186,6 +188,30 @@ impl SourceProbe {
                     self.symbol
                 ),
             ],
+        }
+    }
+
+    /// Return a source-specific heartbeat text payload.
+    #[must_use]
+    pub const fn heartbeat_message(&self) -> Option<&'static str> {
+        match self.source {
+            CollectorSource::Polymarket => Some("PING"),
+            CollectorSource::Bybit
+            | CollectorSource::Binance
+            | CollectorSource::Okx
+            | CollectorSource::Hyperliquid => None,
+        }
+    }
+
+    /// Return the maximum interval between source heartbeat messages.
+    #[must_use]
+    pub const fn heartbeat_interval(&self) -> Option<Duration> {
+        match self.source {
+            CollectorSource::Polymarket => Some(Duration::from_secs(10)),
+            CollectorSource::Bybit
+            | CollectorSource::Binance
+            | CollectorSource::Okx
+            | CollectorSource::Hyperliquid => None,
         }
     }
 
@@ -383,6 +409,12 @@ mod tests {
         );
         assert_eq!(hyperliquid.websocket_url(), "wss://api.hyperliquid.xyz/ws");
         assert_eq!(polymarket.subscribe_messages().len(), 1);
+        assert!(polymarket.subscribe_messages()[0].contains(r#""custom_feature_enabled":true"#));
+        assert_eq!(polymarket.heartbeat_message(), Some("PING"));
+        assert_eq!(
+            polymarket.heartbeat_interval(),
+            Some(Duration::from_secs(10))
+        );
         assert_eq!(hyperliquid.subscribe_messages().len(), 2);
     }
 

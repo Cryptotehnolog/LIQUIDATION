@@ -8,7 +8,7 @@ Set-Location $repoRoot
 
 Write-Host "Project GH_CONFIG_DIR: $env:GH_CONFIG_DIR"
 Write-Host "Use a GitHub token for Cryptotehnolog/LIQUIDATION."
-Write-Host "Required scopes for a classic PAT: repo, workflow, read:org, gist."
+Write-Host "Required scopes for a classic PAT: repo, workflow, read:org."
 Write-Host "The token will be stored only under ignored .cache/gh-cli for this repository."
 
 $secureToken = Read-Host "Paste GitHub token (hidden input)" -AsSecureString

@@ -77,15 +77,37 @@ while ($true) {
 
 $runtimeSeconds = [Math]::Min($MaxRuntimeSeconds, $secondsRemaining)
 Write-Output "Collecting paper replay window market_id=$($market.market_id) $($market.start_ts)..$($market.end_ts) runtime_seconds=$runtimeSeconds"
+$startUnixMs = ([DateTimeOffset]::Parse($market.start_ts)).ToUnixTimeMilliseconds()
+$endUnixMs = ([DateTimeOffset]::Parse($market.end_ts)).ToUnixTimeMilliseconds()
 
-if (-not (Test-Path $OkxInstrumentsFullPath)) {
+function Invoke-OkxInstrumentValidation {
     $okxFetchScript = Join-Path $PSScriptRoot "fetch-okx-instruments.ps1"
+    if (Test-Path $OkxInstrumentsFullPath) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $okxFetchScript `
+            -Symbol "BTC-USDT-SWAP" `
+            -InputPath $OkxInstrumentsFullPath `
+            -OutputPath $OkxInstrumentsFullPath | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "existing OKX instruments cache failed validation with exit code $LASTEXITCODE"
+        }
+        return
+    }
+
     & powershell -NoProfile -ExecutionPolicy Bypass -File $okxFetchScript `
         -Symbol "BTC-USDT-SWAP" `
         -OutputPath $OkxInstrumentsFullPath | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "fetch-okx-instruments.ps1 failed with exit code $LASTEXITCODE"
     }
+}
+
+Invoke-OkxInstrumentValidation
+
+$binaryPath = Join-Path $RepoRoot "target\debug\liq.exe"
+Write-Output "Building liq-cli once before parallel collector jobs..."
+& cargo build -p liq-cli
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo build -p liq-cli failed with exit code $LASTEXITCODE"
 }
 
 function Start-LiqCollectorJob {
@@ -95,18 +117,17 @@ function Start-LiqCollectorJob {
     )
 
     Start-Job -Name $Name -ScriptBlock {
-        param($RepoRoot, $CollectorArgs)
+        param($RepoRoot, $BinaryPath, $CollectorArgs)
         Set-Location $RepoRoot
-        & cargo @CollectorArgs
+        & $BinaryPath @CollectorArgs
         if ($LASTEXITCODE -ne 0) {
             throw "collector job failed with exit code $LASTEXITCODE"
         }
-    } -ArgumentList $RepoRoot, $CollectorArgs
+    } -ArgumentList $RepoRoot, $binaryPath, $CollectorArgs
 }
 
 $jobs = @()
 $jobs += Start-LiqCollectorJob -Name "liquidations" -CollectorArgs @(
-    "run", "-p", "liq-cli", "--",
     "collector", "run",
     "--database-url", $DatabaseUrl,
     "--source", "bybit",
@@ -117,7 +138,6 @@ $jobs += Start-LiqCollectorJob -Name "liquidations" -CollectorArgs @(
     "--health-interval-seconds", "15"
 )
 $jobs += Start-LiqCollectorJob -Name "okx-liquidations" -CollectorArgs @(
-    "run", "-p", "liq-cli", "--",
     "collector", "run",
     "--database-url", $DatabaseUrl,
     "--source", "okx",
@@ -128,7 +148,6 @@ $jobs += Start-LiqCollectorJob -Name "okx-liquidations" -CollectorArgs @(
     "--health-interval-seconds", "15"
 )
 $jobs += Start-LiqCollectorJob -Name "polymarket-up" -CollectorArgs @(
-    "run", "-p", "liq-cli", "--",
     "collector", "run",
     "--database-url", $DatabaseUrl,
     "--source", "polymarket",
@@ -138,7 +157,6 @@ $jobs += Start-LiqCollectorJob -Name "polymarket-up" -CollectorArgs @(
     "--health-interval-seconds", "15"
 )
 $jobs += Start-LiqCollectorJob -Name "polymarket-down" -CollectorArgs @(
-    "run", "-p", "liq-cli", "--",
     "collector", "run",
     "--database-url", $DatabaseUrl,
     "--source", "polymarket",
@@ -148,7 +166,6 @@ $jobs += Start-LiqCollectorJob -Name "polymarket-down" -CollectorArgs @(
     "--health-interval-seconds", "15"
 )
 $jobs += Start-LiqCollectorJob -Name "hyperliquid" -CollectorArgs @(
-    "run", "-p", "liq-cli", "--",
     "collector", "run",
     "--database-url", $DatabaseUrl,
     "--source", "hyperliquid",
@@ -173,27 +190,33 @@ finally {
 }
 
 Write-Output "Running paper replay preflight..."
-& cargo run -p liq-cli -- replay preflight `
-    --database-url $DatabaseUrl `
-    --strategy baseline `
-    --latest-polymarket-market `
-    --fill-model trade_cross `
-    --hedge-notional-usd 15 `
-    --hyperliquid-taker-bps 5 `
-    --hyperliquid-funding-bps-per-hour 1 `
-    --hedge-slippage-usd 0.10 `
-    --funding-hours 1 `
-    --market-stale-after-minutes 15 `
-    --json
+$replayArgs = @(
+    "--database-url", $DatabaseUrl,
+    "--strategy", "baseline",
+    "--market-id", [string]$market.market_id,
+    "--up-token-id", [string]$market.up_token_id,
+    "--down-token-id", [string]$market.down_token_id,
+    "--start-unix-ms", [string]$startUnixMs,
+    "--end-unix-ms", [string]$endUnixMs,
+    "--fill-model", "trade_cross",
+    "--hedge-notional-usd", "15",
+    "--hyperliquid-taker-bps", "5",
+    "--hyperliquid-funding-bps-per-hour", "1",
+    "--hedge-slippage-usd", "0.10",
+    "--funding-hours", "1",
+    "--market-stale-after-minutes", "15",
+    "--json"
+)
+
+& cargo run -p liq-cli -- replay preflight @replayArgs
 $preflightExit = $LASTEXITCODE
 
 if ($RunReplay -and $preflightExit -eq 0) {
-    $replayScript = Join-Path $PSScriptRoot "run-latest-polymarket-replay.ps1"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $replayScript `
-        -DatabaseUrl $DatabaseUrl `
-        -ArtifactPath ".cache/replay/latest-polymarket-baseline.json" `
-        -MarketArtifactPath $MarketArtifactPath `
-        -SkipFetch
+    $artifactPath = ".cache/replay/latest-polymarket-baseline.json"
+    if (Test-Path -LiteralPath $artifactPath) {
+        Remove-Item -LiteralPath $artifactPath -Force
+    }
+    & cargo run -p liq-cli -- replay run @replayArgs --artifact-path $artifactPath
     exit $LASTEXITCODE
 }
 

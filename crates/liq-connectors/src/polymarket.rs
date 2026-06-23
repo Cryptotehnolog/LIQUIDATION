@@ -32,6 +32,38 @@ struct PolymarketTradePayload {
     side: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct PolymarketPriceChangePayload {
+    market: String,
+    timestamp: String,
+    #[serde(default)]
+    price_changes: Vec<PolymarketPriceChange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolymarketPriceChange {
+    #[serde(rename = "asset_id")]
+    asset_id: String,
+    #[serde(default)]
+    best_bid: Option<String>,
+    #[serde(default)]
+    best_ask: Option<String>,
+    #[serde(default)]
+    hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolymarketBestBidAskPayload {
+    market: String,
+    #[serde(rename = "asset_id")]
+    asset_id: String,
+    timestamp: String,
+    #[serde(default)]
+    best_bid: Option<String>,
+    #[serde(default)]
+    best_ask: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct PolymarketBookLevel {
     price: String,
@@ -47,11 +79,19 @@ pub fn normalize_market_quotes(
     payload: &str,
     received_ts: OffsetDateTime,
 ) -> Result<Vec<MarketQuote>, ConnectorError> {
-    payload_values(payload)?
-        .into_iter()
-        .filter(|value| event_type(value) == Some("book"))
-        .map(|value| normalize_book_value(value, received_ts))
-        .collect()
+    let mut quotes = Vec::new();
+    for value in payload_values(payload)? {
+        match event_type(&value) {
+            Some("book") => quotes.push(normalize_book_value(value, received_ts)?),
+            Some("price_change") => {
+                quotes.extend(normalize_price_change_value(value, received_ts)?);
+            }
+            Some("best_bid_ask") => quotes.push(normalize_best_bid_ask_value(value, received_ts)?),
+            _ => {}
+        }
+    }
+
+    Ok(quotes)
 }
 
 /// Normalize Polymarket `last_trade_price` payloads into market trades.
@@ -81,7 +121,9 @@ fn payload_values(payload: &str) -> Result<Vec<Value>, ConnectorError> {
 fn event_type(value: &Value) -> Option<&'static str> {
     match value.get("event_type").and_then(Value::as_str) {
         Some("book") => Some("book"),
+        Some("price_change") => Some("price_change"),
         Some("last_trade_price") => Some("last_trade_price"),
+        Some("best_bid_ask") => Some("best_bid_ask"),
         _ => None,
     }
 }
@@ -109,6 +151,75 @@ fn normalize_book_value(
         best_bid_size: best_bid.as_ref().map(|level| level.1),
         best_ask: best_ask.as_ref().map(|level| level.0),
         best_ask_size: best_ask.as_ref().map(|level| level.1),
+        exchange_ts,
+        received_ts,
+    })
+}
+
+fn normalize_price_change_value(
+    value: Value,
+    received_ts: OffsetDateTime,
+) -> Result<Vec<MarketQuote>, ConnectorError> {
+    let parsed = serde_json::from_value::<PolymarketPriceChangePayload>(value)?;
+    let exchange_ts = timestamp_ms_from_str(&parsed.timestamp)?;
+    parsed
+        .price_changes
+        .into_iter()
+        .map(|change| {
+            let best_bid = parse_optional_decimal("best_bid", change.best_bid.as_deref())?;
+            let best_ask = parse_optional_decimal("best_ask", change.best_ask.as_deref())?;
+            let source_event_id = format!(
+                "polymarket:price_change:{}:{}:{}:{}:{}",
+                parsed.market,
+                change.asset_id,
+                parsed.timestamp,
+                change.hash,
+                quote_identity(best_bid, best_ask)
+            );
+
+            Ok(MarketQuote {
+                event_id: deterministic_event_id(&source_event_id),
+                venue: MarketVenue::Polymarket,
+                source_event_id,
+                instrument_id: change.asset_id,
+                symbol: parsed.market.clone(),
+                best_bid,
+                best_bid_size: None,
+                best_ask,
+                best_ask_size: None,
+                exchange_ts,
+                received_ts,
+            })
+        })
+        .collect()
+}
+
+fn normalize_best_bid_ask_value(
+    value: Value,
+    received_ts: OffsetDateTime,
+) -> Result<MarketQuote, ConnectorError> {
+    let parsed = serde_json::from_value::<PolymarketBestBidAskPayload>(value)?;
+    let best_bid = parse_optional_decimal("best_bid", parsed.best_bid.as_deref())?;
+    let best_ask = parse_optional_decimal("best_ask", parsed.best_ask.as_deref())?;
+    let exchange_ts = timestamp_ms_from_str(&parsed.timestamp)?;
+    let source_event_id = format!(
+        "polymarket:best_bid_ask:{}:{}:{}:{}",
+        parsed.market,
+        parsed.asset_id,
+        parsed.timestamp,
+        quote_identity(best_bid, best_ask)
+    );
+
+    Ok(MarketQuote {
+        event_id: deterministic_event_id(&source_event_id),
+        venue: MarketVenue::Polymarket,
+        source_event_id,
+        instrument_id: parsed.asset_id,
+        symbol: parsed.market,
+        best_bid,
+        best_bid_size: None,
+        best_ask,
+        best_ask_size: None,
         exchange_ts,
         received_ts,
     })
@@ -186,6 +297,24 @@ fn parse_decimal(field: &'static str, value: &str) -> Result<Decimal, ConnectorE
             field,
             value: value.to_owned(),
         })
+}
+
+fn parse_optional_decimal(
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<Option<Decimal>, ConnectorError> {
+    value
+        .filter(|item| !item.is_empty())
+        .map(|item| parse_decimal(field, item))
+        .transpose()
+}
+
+fn quote_identity(best_bid: Option<Decimal>, best_ask: Option<Decimal>) -> String {
+    format!(
+        "bid={}:ask={}",
+        best_bid.map_or_else(|| "null".to_owned(), |value| value.to_string()),
+        best_ask.map_or_else(|| "null".to_owned(), |value| value.to_string())
+    )
 }
 
 fn timestamp_ms_from_str(value: &str) -> Result<OffsetDateTime, ConnectorError> {

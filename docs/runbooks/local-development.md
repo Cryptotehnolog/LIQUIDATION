@@ -46,6 +46,7 @@ dry-run ok
 
 CI запускает:
 
+- `cargo audit`;
 - `cargo deny`;
 - `gitleaks`.
 

@@ -910,7 +910,18 @@ fn push_market_window_conditions(
     if let (Some(now_unix_ms), Some(stale_after_ms)) =
         (input.now_unix_ms, input.market_stale_after_ms)
     {
-        let age_ms = (now_unix_ms - input.market.end_unix_ms).max(0);
+        let market_closed = now_unix_ms >= input.market.end_unix_ms;
+        push_condition(
+            capabilities,
+            blockers,
+            conditions,
+            "market_closed",
+            "now_unix_ms >= end_unix_ms",
+            format!("now={now_unix_ms} end={}", input.market.end_unix_ms),
+            market_closed,
+        );
+
+        let age_ms = now_unix_ms - input.market.end_unix_ms;
         push_condition(
             capabilities,
             blockers,
@@ -918,7 +929,7 @@ fn push_market_window_conditions(
             "market_freshness",
             format!("market age <= {stale_after_ms} ms"),
             format!("age_ms={age_ms}"),
-            age_ms <= stale_after_ms,
+            market_closed && age_ms <= stale_after_ms,
         );
     }
 }
@@ -1266,6 +1277,7 @@ fn evaluate_hedge_fill(input: &PaperReplayInput, signal: &StrategySignal) -> Fil
     let Some(trade) = input
         .hyperliquid_trades
         .iter()
+        .filter(|trade| is_btc_hedge_trade(trade))
         .filter(|trade| market_trade_ts_ms(trade) >= signal.created_unix_ms)
         .filter(|trade| market_trade_ts_ms(trade) < signal.expires_unix_ms)
         .min_by_key(|trade| market_trade_ts_ms(trade))
@@ -1281,6 +1293,13 @@ fn evaluate_hedge_fill(input: &PaperReplayInput, signal: &StrategySignal) -> Fil
         unix_ms: market_trade_ts_ms(trade),
         model_version: "hyperliquid_market_trade_v1".to_owned(),
     }
+}
+
+fn is_btc_hedge_trade(trade: &MarketTrade) -> bool {
+    trade.instrument_id.eq_ignore_ascii_case("BTC")
+        || trade.instrument_id.eq_ignore_ascii_case("BTC-PERP")
+        || trade.symbol.eq_ignore_ascii_case("BTC")
+        || trade.symbol.eq_ignore_ascii_case("BTC-PERP")
 }
 
 fn build_paper_replay_report(
@@ -2095,6 +2114,98 @@ mod tests {
         assert!(report.ready_for_replay);
         assert_eq!(report.blockers, Vec::new());
         assert_eq!(report.data_counts.polymarket_trades, 4);
+    }
+
+    #[test]
+    fn paper_replay_preflight_blocks_unclosed_market_window() {
+        let report = paper_replay_preflight(&PaperReplayPreflightInput {
+            market: baseline_market(),
+            data_counts: PaperReplayDataCounts {
+                liquidations: 2,
+                polymarket_quotes: 3,
+                polymarket_trades: 4,
+                hyperliquid_quotes: 5,
+                hyperliquid_trades: 6,
+            },
+            minimum_counts: PaperReplayDataCounts::real_run_minimums(),
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule {
+                hyperliquid_taker_bps: Decimal::new(5, 0),
+                hyperliquid_funding_bps_per_hour: Decimal::new(1, 0),
+                ..FeeSchedule::paper_v1()
+            },
+            hedge_slippage_usd: Decimal::new(10, 2),
+            funding_hours: Decimal::new(1, 0),
+            now_unix_ms: Some(2 * 60 * 1_000),
+            market_stale_after_ms: Some(5 * 60 * 1_000),
+            require_trade_cross: true,
+            require_nonzero_cost_assumptions: true,
+        });
+
+        assert!(!report.ready_for_replay);
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|item| item.id == "market_closed")
+        );
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|item| item.id == "market_freshness")
+        );
+    }
+
+    #[test]
+    fn paper_replay_does_not_fill_hedge_with_non_btc_trade() {
+        let market = baseline_market();
+        let mut non_btc_trade = market_trade(
+            MarketVenue::Hyperliquid,
+            "ETH-PERP",
+            Decimal::new(3_500, 0),
+            Decimal::new(1, 2),
+            1_700,
+        );
+        non_btc_trade.symbol = "ETH-PERP".to_owned();
+        let input = PaperReplayInput {
+            market: market.clone(),
+            liquidations: vec![liquidation(
+                LiquidationSide::Long,
+                Decimal::new(25_000, 0),
+                1_500,
+            )],
+            polymarket_quotes: vec![polymarket_quote(
+                &market.down_token_id,
+                Decimal::new(50, 2),
+                1_000,
+            )],
+            polymarket_trades: vec![market_trade(
+                MarketVenue::Polymarket,
+                &market.down_token_id,
+                Decimal::new(35, 2),
+                Decimal::new(429, 1),
+                1_600,
+            )],
+            hyperliquid_quotes: vec![market_quote(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_100, 0),
+                1_400,
+            )],
+            hyperliquid_trades: vec![non_btc_trade],
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule::paper_v1(),
+            hedge_notional_usd: Decimal::new(15, 0),
+            hedge_slippage_usd: Decimal::new(10, 2),
+            funding_hours: Decimal::new(1, 0),
+        };
+
+        let report = run_paper_replay(&input).expect("paper replay must run");
+
+        assert_eq!(report.hedge_attempts, 1);
+        assert_eq!(report.hedge_fills, 0);
+        assert_eq!(report.unhedged_signals, 1);
     }
 
     fn buy_order(limit_cents: i64) -> PaperOrder {

@@ -61,6 +61,43 @@ fn normalizes_polymarket_last_trade_price_to_trade() {
 }
 
 #[test]
+fn normalizes_polymarket_price_change_to_top_of_book_quotes() {
+    let quotes = polymarket::normalize_market_quotes(
+        include_str!("fixtures/polymarket_price_change.json"),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .expect("fixture must normalize");
+
+    assert_eq!(quotes.len(), 2);
+    assert_eq!(quotes[0].venue, MarketVenue::Polymarket);
+    assert_eq!(quotes[0].instrument_id, "123456789");
+    assert_eq!(quotes[0].best_bid, Some(Decimal::new(50, 2)));
+    assert_eq!(quotes[0].best_bid_size, None);
+    assert_eq!(quotes[0].best_ask, Some(Decimal::new(53, 2)));
+    assert_eq!(quotes[0].best_ask_size, None);
+    assert_eq!(quotes[1].instrument_id, "987654321");
+    assert_eq!(quotes[1].best_bid, Some(Decimal::new(46, 2)));
+    assert_eq!(quotes[1].best_ask, Some(Decimal::new(49, 2)));
+}
+
+#[test]
+fn normalizes_polymarket_best_bid_ask_custom_feature_payload() {
+    let quotes = polymarket::normalize_market_quotes(
+        include_str!("fixtures/polymarket_best_bid_ask.json"),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .expect("fixture must normalize");
+
+    assert_eq!(quotes.len(), 1);
+    let quote = &quotes[0];
+    assert_eq!(quote.instrument_id, "123456789");
+    assert_eq!(quote.best_bid, Some(Decimal::new(49, 2)));
+    assert_eq!(quote.best_ask, Some(Decimal::new(52, 2)));
+    assert_eq!(quote.best_bid_size, None);
+    assert_eq!(quote.best_ask_size, None);
+}
+
+#[test]
 fn normalizes_hyperliquid_bbo_to_hedge_quote() {
     let quotes = hyperliquid::normalize_market_quotes(
         include_str!("fixtures/hyperliquid_bbo.json"),
@@ -75,6 +112,22 @@ fn normalizes_hyperliquid_bbo_to_hedge_quote() {
     assert_eq!(quote.symbol, "BTC-PERP");
     assert_eq!(quote.best_bid, Some(Decimal::new(650_000, 1)));
     assert_eq!(quote.best_ask, Some(Decimal::new(650_010, 1)));
+}
+
+#[test]
+fn normalizes_hyperliquid_nullable_bbo_side() {
+    let quotes = hyperliquid::normalize_market_quotes(
+        include_str!("fixtures/hyperliquid_bbo_nullable.json"),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .expect("fixture must normalize");
+
+    assert_eq!(quotes.len(), 1);
+    let quote = &quotes[0];
+    assert_eq!(quote.best_bid, None);
+    assert_eq!(quote.best_bid_size, None);
+    assert_eq!(quote.best_ask, Some(Decimal::new(650_020, 1)));
+    assert_eq!(quote.best_ask_size, Some(Decimal::new(2, 2)));
 }
 
 #[test]

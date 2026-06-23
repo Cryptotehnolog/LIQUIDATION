@@ -4,7 +4,8 @@ param(
     [string]$MarketArtifactPath = ".cache/replay/latest-polymarket-market.json",
     [int]$MarketStaleAfterMinutes = 15,
     [string]$FetchFixturePath,
-    [switch]$FetchMetadataFirst
+    [switch]$FetchMetadataFirst,
+    [switch]$SkipFetch
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,7 +14,7 @@ if (-not $DatabaseUrl) {
     throw "DatabaseUrl or DATABASE_URL is required"
 }
 
-if ($FetchMetadataFirst) {
+if ($FetchMetadataFirst -and -not $SkipFetch) {
     $fetchScript = Join-Path $PSScriptRoot "fetch-polymarket-markets.ps1"
     $fetchArgs = @{
         DatabaseUrl = $DatabaseUrl
@@ -27,6 +28,10 @@ if ($FetchMetadataFirst) {
     if ($LASTEXITCODE -ne 0) {
         throw "fetch-polymarket-markets.ps1 failed with exit code $LASTEXITCODE"
     }
+}
+
+if (Test-Path -LiteralPath $ArtifactPath) {
+    Remove-Item -LiteralPath $ArtifactPath -Force
 }
 
 if (Test-Path -LiteralPath $MarketArtifactPath) {

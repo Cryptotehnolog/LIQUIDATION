@@ -309,7 +309,7 @@ Auto mode по последнему известному рынку:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-latest-polymarket-replay.ps1 `
   -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
-  -ArtifactPath ".cache/replay/latest-baseline.json" `
+  -ArtifactPath ".cache/replay/latest-polymarket-baseline.json" `
   -FetchMetadataFirst
 ```
 
@@ -318,6 +318,12 @@ Auto mode fail-closed:
 - `scripts/run-latest-polymarket-replay.ps1` сначала запускает
   `replay preflight`; если есть blockers, replay не стартует и artifact не
   создаётся;
+- если preflight или replay падает, старый replay artifact удаляется до запуска,
+  чтобы dashboard не показывал stale success;
+- `scripts/collect-paper-replay-window.ps1 -RunReplay` после выбора market
+  запускает preflight/replay по pinned `market_id`, `up_token_id`,
+  `down_token_id`, `start_unix_ms` и `end_unix_ms`; он не проверяет другой
+  "latest" market в конце окна;
 - нельзя смешивать `--latest-polymarket-market` с ручными
   `--market-id/--up-token-id/--down-token-id/--start-unix-ms/--end-unix-ms`;
 - если metadata для `base_asset + market_type` отсутствует, replay не
@@ -339,9 +345,10 @@ Auto mode fail-closed:
 - проверяет Polymarket entry через выбранный fill model:
   `trade_cross` по умолчанию, `book_touch` только diagnostic;
 - после Polymarket fill пытается смоделировать Hyperliquid hedge по первой
-  recorded trade внутри hedge window;
-- считает `gross_pnl_usd`, `fees`, `funding`, `slippage`, `net_pnl_usd`,
-  `max_drawdown_usd`, `fill counts` и `unhedged_signals`.
+  recorded BTC hedge trade внутри hedge window;
+- считает `gross_pnl_usd`, `fees`, `funding`, `slippage`,
+  `net_unsettled_pnl_usd`, `max_drawdown_usd`, `fill counts` и
+  `unhedged_signals`.
 
 Важное ограничение: `settlement_status = unsettled`. MVP paper replay не
 моделирует финальное settlement Polymarket outcome, потому что в текущей схеме
@@ -361,6 +368,6 @@ replay config, baseline strategy и safety mode готовы. Если хотя 
 condition не закрыт в текущем readiness window, strategy run должен быть
 запрещен.
 
-Следующая автоматизация: добавить dashboard panel для latest replay artifact и
-отдельный warning, если `polymarket_markets` stale или scheduled replay workflow
-несколько запусков подряд пропущен из-за отсутствующего `REPLAY_DATABASE_URL`.
+Следующая автоматизация: trend comparator для scheduled replay artifacts и
+отдельный warning, если scheduled replay workflow несколько запусков подряд
+пропущен из-за отсутствующего `REPLAY_DATABASE_URL`.

@@ -29,6 +29,9 @@ jobs:
       - name: Polymarket metadata freshness guard
         shell: pwsh
         run: ./scripts/test-polymarket-metadata-freshness.ps1
+      - name: replay operator scripts guard
+        shell: pwsh
+        run: ./scripts/test-replay-scripts.ps1
       - name: api docs changelog guard
         shell: pwsh
         run: ./scripts/test-api-docs-changelog.ps1

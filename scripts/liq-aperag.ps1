@@ -312,7 +312,7 @@ function Get-IngestFiles {
     param([Parameter(Mandatory = $true)][string]$DocsPath)
 
     $allowedExtensions = @(".md", ".txt")
-    git ls-files --cached --others --exclude-standard -- $DocsPath |
+    git ls-files -- $DocsPath |
         Where-Object { Test-Path -LiteralPath $_ } |
         Where-Object { $allowedExtensions -contains ([System.IO.Path]::GetExtension($_).ToLowerInvariant()) } |
         Where-Object { $_ -notmatch '(^|/)(secrets?|credentials?|cookies?|private|keys?|auth)(/|$)' } |

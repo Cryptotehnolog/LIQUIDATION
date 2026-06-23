@@ -545,7 +545,8 @@
         ["market window", windowText],
         ["signals", valueOrDash(report.signal_count)],
         ["fill rate", fillRate],
-        ["net PnL", valueOrDash(report.net_pnl_usd)],
+        ["settlement", valueOrDash(report.settlement_status)],
+        ["net unsettled PnL", valueOrDash(report.net_pnl_usd)],
         ["warning", valueOrDash(replay?.warning)]
       ];
       for (const [label, value] of rows) {
