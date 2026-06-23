@@ -192,6 +192,25 @@ if (-not $ghPath) {
 } else {
     $checks.Add((New-Check "gh_executable" "ok" "GitHub CLI найден" $ghPath))
 
+    $projectGhPath = Join-Path "scripts" "gh-project.ps1"
+    if (Test-Path $projectGhPath) {
+        $projectGhUser = Invoke-Captured "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $projectGhPath, "api", "user", "--jq", ".login")
+        if ($projectGhUser.exit_code -eq 0) {
+            $checks.Add((New-Check "gh_project_api_user" "ok" "project-local GitHub API token работает" (Redact-Output $projectGhUser.stdout)))
+        } else {
+            $checks.Add((New-Check "gh_project_api_user" "warn" "project-local GitHub API token не работает; запустите scripts/setup-project-gh-auth.ps1" (Redact-Output ($projectGhUser.stdout + "`n" + $projectGhUser.stderr))))
+        }
+
+        $projectGhRepo = Invoke-Captured "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $projectGhPath, "repo", "view", $Repo, "--json", "nameWithOwner,visibility,url")
+        if ($projectGhRepo.exit_code -eq 0) {
+            $checks.Add((New-Check "gh_project_repo_view" "ok" "project-local GitHub API может читать $Repo" (Redact-Output $projectGhRepo.stdout)))
+        } else {
+            $checks.Add((New-Check "gh_project_repo_view" "warn" "project-local GitHub API не подтвердил доступ к $Repo" (Redact-Output ($projectGhRepo.stdout + "`n" + $projectGhRepo.stderr))))
+        }
+    } else {
+        $checks.Add((New-Check "gh_project_wrapper" "skip" "scripts/gh-project.ps1 не найден"))
+    }
+
     $ghStatus = Invoke-Captured $ghPath @("auth", "status")
     if ($ghStatus.exit_code -eq 0) {
         $checks.Add((New-Check "gh_auth_status" "ok" "gh auth status успешен" (Redact-Output ($ghStatus.stdout + "`n" + $ghStatus.stderr))))

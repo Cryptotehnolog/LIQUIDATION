@@ -116,3 +116,43 @@ PowerShell работает. В таком случае:
 
 Codex может продолжать делать локальные изменения и коммиты, а сетевые GitHub
 операции выполнять через обычный PowerShell.
+
+## Изолированная авторизация для Codex
+
+Если обычный PowerShell работает, но Codex получает `HTTP 401`, не надо чинить
+это через `gh auth logout` или удаление глобальных credentials. Для этого
+репозитория используется отдельный каталог GitHub CLI:
+
+```text
+D:\Liquidation\LIQUIDATION\.cache\gh-cli
+```
+
+`.cache/` находится в `.gitignore`, поэтому project-scoped credential не должен
+попасть в репозиторий.
+
+Настроить изолированный доступ:
+
+```powershell
+cd D:\Liquidation\LIQUIDATION
+.\scripts\setup-project-gh-auth.ps1
+```
+
+Скрипт попросит GitHub token скрытым вводом. Не передавайте token через аргументы
+командной строки и не вставляйте его в чат.
+
+В интерфейсе GitHub classic token scope `read:org` находится внутри группы
+`admin:org`. Нужно отметить только подгалочку `read:org`, не всю группу
+`admin:org`.
+
+Проверить доступ через изолированный wrapper:
+
+```powershell
+.\scripts\gh-project.ps1 auth status
+.\scripts\gh-project.ps1 api user --jq ".login"
+.\scripts\gh-project.ps1 repo view Cryptotehnolog/LIQUIDATION --json nameWithOwner,visibility,url
+.\scripts\gh-project.ps1 run list --repo Cryptotehnolog/LIQUIDATION --limit 3
+```
+
+Для Codex authenticated GitHub access считается рабочим только если проходят
+`gh api user` и `gh repo view`. Успешный `gh run list` сам по себе недостаточен:
+часть read-only операций может выглядеть рабочей даже при сломанном API token.
