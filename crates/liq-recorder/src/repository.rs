@@ -10,8 +10,8 @@ use time::OffsetDateTime;
 use crate::records::{
     CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHealthRecord,
     CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal,
-    MarketDataReadinessRecord, PaperReplayDataRecord, RawSourceEvent, SourceOverlapBucket,
-    SourceOverlapReport, SourceOverlapSummary,
+    MarketDataReadinessRecord, PaperReplayDataRecord, PolymarketMarketRecord, RawSourceEvent,
+    SourceOverlapBucket, SourceOverlapReport, SourceOverlapSummary,
 };
 
 /// Metrics aggregation window.
@@ -992,6 +992,143 @@ pub async fn paper_replay_data(
     })
 }
 
+/// Upsert one Polymarket market metadata record.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the upsert.
+pub async fn upsert_polymarket_market(
+    pool: &PgPool,
+    market: &PolymarketMarketRecord,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r"
+        INSERT INTO polymarket_markets (
+            market_id,
+            slug,
+            title,
+            base_asset,
+            market_type,
+            up_token_id,
+            down_token_id,
+            start_ts,
+            end_ts,
+            status,
+            source,
+            raw_payload
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT (market_id) DO UPDATE SET
+            slug = EXCLUDED.slug,
+            title = EXCLUDED.title,
+            base_asset = EXCLUDED.base_asset,
+            market_type = EXCLUDED.market_type,
+            up_token_id = EXCLUDED.up_token_id,
+            down_token_id = EXCLUDED.down_token_id,
+            start_ts = EXCLUDED.start_ts,
+            end_ts = EXCLUDED.end_ts,
+            status = EXCLUDED.status,
+            source = EXCLUDED.source,
+            raw_payload = EXCLUDED.raw_payload,
+            updated_at = now()
+        ",
+    )
+    .bind(&market.market_id)
+    .bind(&market.slug)
+    .bind(&market.title)
+    .bind(&market.base_asset)
+    .bind(&market.market_type)
+    .bind(&market.up_token_id)
+    .bind(&market.down_token_id)
+    .bind(market.start_ts)
+    .bind(market.end_ts)
+    .bind(&market.status)
+    .bind(&market.source)
+    .bind(&market.raw_payload)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+/// Return the latest known Polymarket market for a base asset and market type.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the query.
+pub async fn latest_polymarket_market(
+    pool: &PgPool,
+    base_asset: &str,
+    market_type: &str,
+) -> Result<Option<PolymarketMarketRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PolymarketMarketRow>(
+        r"
+        SELECT
+            market_id,
+            slug,
+            title,
+            base_asset,
+            market_type,
+            up_token_id,
+            down_token_id,
+            start_ts,
+            end_ts,
+            status,
+            source,
+            raw_payload
+        FROM polymarket_markets
+        WHERE base_asset = $1 AND market_type = $2
+        ORDER BY start_ts DESC, end_ts DESC, market_id ASC
+        LIMIT 1
+        ",
+    )
+    .bind(base_asset)
+    .bind(market_type)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.map(PolymarketMarketRecord::from))
+}
+
+/// List recent Polymarket markets for a base asset and market type.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the query.
+pub async fn list_polymarket_markets(
+    pool: &PgPool,
+    base_asset: &str,
+    market_type: &str,
+    limit: i64,
+) -> Result<Vec<PolymarketMarketRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PolymarketMarketRow>(
+        r"
+        SELECT
+            market_id,
+            slug,
+            title,
+            base_asset,
+            market_type,
+            up_token_id,
+            down_token_id,
+            start_ts,
+            end_ts,
+            status,
+            source,
+            raw_payload
+        FROM polymarket_markets
+        WHERE base_asset = $1 AND market_type = $2
+        ORDER BY start_ts DESC, end_ts DESC, market_id ASC
+        LIMIT $3
+        ",
+    )
+    .bind(base_asset)
+    .bind(market_type)
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await
+    .map(|rows| rows.into_iter().map(PolymarketMarketRecord::from).collect())
+}
+
 async fn market_quotes_for_venue(
     pool: &PgPool,
     venue: MarketVenue,
@@ -1383,6 +1520,41 @@ struct MarketDataReadinessRow {
     polymarket_trades: i64,
     hyperliquid_quotes: i64,
     hyperliquid_trades: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct PolymarketMarketRow {
+    market_id: String,
+    slug: Option<String>,
+    title: Option<String>,
+    base_asset: String,
+    market_type: String,
+    up_token_id: String,
+    down_token_id: String,
+    start_ts: OffsetDateTime,
+    end_ts: OffsetDateTime,
+    status: String,
+    source: String,
+    raw_payload: serde_json::Value,
+}
+
+impl From<PolymarketMarketRow> for PolymarketMarketRecord {
+    fn from(row: PolymarketMarketRow) -> Self {
+        Self {
+            market_id: row.market_id,
+            slug: row.slug,
+            title: row.title,
+            base_asset: row.base_asset,
+            market_type: row.market_type,
+            up_token_id: row.up_token_id,
+            down_token_id: row.down_token_id,
+            start_ts: row.start_ts,
+            end_ts: row.end_ts,
+            status: row.status,
+            source: row.source,
+            raw_payload: row.raw_payload,
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]

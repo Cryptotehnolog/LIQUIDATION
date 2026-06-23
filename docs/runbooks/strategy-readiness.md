@@ -161,6 +161,38 @@ cargo run -p liq-cli -- strategy readiness explain --database-url "postgres://li
 
 ## Paper Replay Run
 
+Перед replay нужно сохранить metadata выбранного BTC 5-minute рынка Polymarket.
+Это отдельная таблица `polymarket_markets`; она нужна, чтобы оператор не
+передавал `market_id`, `up_token_id`, `down_token_id` руками при каждом run.
+
+Пример upsert metadata:
+
+```powershell
+cargo run -p liq-cli -- replay market upsert `
+  --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  --market-id "<polymarket-market-id-or-slug>" `
+  --slug "<optional-polymarket-slug>" `
+  --title "<optional-question-title>" `
+  --base-asset BTC `
+  --market-type btc_5m `
+  --up-token-id "<polymarket-up-token-id>" `
+  --down-token-id "<polymarket-down-token-id>" `
+  --start-unix-ms <start_ms> `
+  --end-unix-ms <end_ms> `
+  --status open `
+  --source manual
+```
+
+Проверить последние рынки:
+
+```powershell
+cargo run -p liq-cli -- replay market list `
+  --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  --base-asset BTC `
+  --market-type btc_5m `
+  --json
+```
+
 Команда:
 
 ```powershell
@@ -181,12 +213,40 @@ cargo run -p liq-cli -- replay run `
   --json
 ```
 
+Auto mode по последнему известному рынку:
+
+```powershell
+cargo run -p liq-cli -- replay run `
+  --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  --strategy baseline `
+  --latest-polymarket-market `
+  --base-asset BTC `
+  --market-type btc_5m `
+  --fill-model trade_cross `
+  --hedge-notional-usd 15 `
+  --hyperliquid-taker-bps 5 `
+  --hyperliquid-funding-bps-per-hour 1 `
+  --hedge-slippage-usd 0.10 `
+  --funding-hours 1 `
+  --artifact-path ".cache/replay/latest-baseline.json" `
+  --json
+```
+
+Auto mode fail-closed:
+
+- нельзя смешивать `--latest-polymarket-market` с ручными
+  `--market-id/--up-token-id/--down-token-id/--start-unix-ms/--end-unix-ms`;
+- если metadata для `base_asset + market_type` отсутствует, replay не
+  запускается;
+- artifact является JSON contract для dashboard/CI и не требует парсинга
+  консольного вывода.
+
 Что делает команда:
 
 - читает `liquidation_events`, `market_quotes`, `market_trades` из TimescaleDB
   за указанный interval;
-- строит active `BaselineMarket` из явно переданных `market_id`,
-  `up_token_id`, `down_token_id`;
+- строит active `BaselineMarket` из явно переданных полей или из последней
+  строки `polymarket_markets`;
 - прогоняет `BaselineStinkBidStrategy`;
 - проверяет Polymarket entry через выбранный fill model:
   `trade_cross` по умолчанию, `book_touch` только diagnostic;
@@ -213,6 +273,6 @@ replay config, baseline strategy и safety mode готовы. Если хотя 
 condition не закрыт в текущем readiness window, strategy run должен быть
 запрещен.
 
-Следующая автоматизация: добавить market metadata store для Polymarket 5-minute
-BTC рынков, чтобы `market_id`, `up_token_id`, `down_token_id` не передавались
-вручную в `replay run`.
+Следующая автоматизация: добавить safe fetcher Polymarket BTC 5-minute markets
+из public API с schema validation и dry-run mode, чтобы `replay market upsert`
+не оставался ручной командой.

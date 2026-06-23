@@ -258,3 +258,34 @@ pub struct PaperReplayDataRecord {
     /// Hyperliquid trade rows.
     pub hyperliquid_trades: Vec<MarketTrade>,
 }
+
+/// Polymarket BTC market metadata needed to build baseline replay windows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolymarketMarketRecord {
+    /// Polymarket market id or slug-like stable id.
+    pub market_id: String,
+    /// Human-readable slug when available.
+    pub slug: Option<String>,
+    /// Human-readable title/question when available.
+    pub title: Option<String>,
+    /// Base asset, e.g. `BTC`.
+    pub base_asset: String,
+    /// Market type, e.g. `btc_5m`.
+    pub market_type: String,
+    /// Outcome token id for UP.
+    pub up_token_id: String,
+    /// Outcome token id for DOWN.
+    pub down_token_id: String,
+    /// Inclusive market start timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub start_ts: OffsetDateTime,
+    /// Exclusive market end timestamp.
+    #[serde(with = "time::serde::rfc3339")]
+    pub end_ts: OffsetDateTime,
+    /// Market status, e.g. `open`, `closed`, `resolved`.
+    pub status: String,
+    /// Metadata source, e.g. `manual`, `fixture`, or API name.
+    pub source: String,
+    /// Raw source payload for audit/debug.
+    pub raw_payload: Value,
+}

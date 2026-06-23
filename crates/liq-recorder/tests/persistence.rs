@@ -6,7 +6,7 @@ use liq_domain::{
 };
 use liq_recorder::{
     migrations,
-    records::{CollectorHealthRecord, RawSourceEvent},
+    records::{CollectorHealthRecord, PolymarketMarketRecord, RawSourceEvent},
     repository, schema,
 };
 use rust_decimal::Decimal;
@@ -379,6 +379,33 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
                 .iter()
                 .any(|row| row.source_event_id == trade.source_event_id)
         );
+
+        let market = PolymarketMarketRecord {
+            market_id: format!("btc-5m-{suffix}"),
+            slug: Some(format!("btc-updown-{suffix}")),
+            title: Some("BTC Up or Down - 5m fixture".to_owned()),
+            base_asset: "BTC".to_owned(),
+            market_type: "btc_5m".to_owned(),
+            up_token_id: "pm-token-up".to_owned(),
+            down_token_id: "pm-token-down".to_owned(),
+            start_ts: received_ts - time::Duration::minutes(5),
+            end_ts: received_ts,
+            status: "closed".to_owned(),
+            source: "fixture".to_owned(),
+            raw_payload: json!({"fixture": suffix}),
+        };
+        let inserted = repository::upsert_polymarket_market(&pool, &market)
+            .await
+            .expect("polymarket market metadata upsert must succeed");
+        assert_eq!(inserted, 1);
+
+        let latest = repository::latest_polymarket_market(&pool, "BTC", "btc_5m")
+            .await
+            .expect("latest market metadata must be queryable")
+            .expect("latest market metadata must exist");
+        assert_eq!(latest.market_id, market.market_id);
+        assert_eq!(latest.up_token_id, "pm-token-up");
+        assert_eq!(latest.down_token_id, "pm-token-down");
     });
 }
 

@@ -220,5 +220,29 @@ fn expected_contracts() -> &'static [ColumnContract] {
             data_type: "text",
             nullable: false,
         },
+        ColumnContract {
+            table: "polymarket_markets",
+            column: "market_id",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "polymarket_markets",
+            column: "up_token_id",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "polymarket_markets",
+            column: "down_token_id",
+            data_type: "text",
+            nullable: false,
+        },
+        ColumnContract {
+            table: "polymarket_markets",
+            column: "raw_payload",
+            data_type: "jsonb",
+            nullable: false,
+        },
     ]
 }

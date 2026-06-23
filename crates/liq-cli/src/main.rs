@@ -10,7 +10,7 @@ use liq_collector::{
     run_live_collectors, run_live_probe,
 };
 use liq_connectors::okx::OkxInstrumentCache;
-use liq_recorder::{migrations, repository, schema};
+use liq_recorder::{migrations, records::PolymarketMarketRecord, repository, schema};
 use liq_replay::{
     BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness, PaperReplayInput,
     PaperReplayReport, StrategyReadinessExplanation, StrategyReadinessReport, run_paper_replay,
@@ -87,6 +87,11 @@ enum ReplayCommand {
     },
     /// Run deterministic paper replay over stored events.
     Run(Box<ReplayRunOptions>),
+    /// Manage Polymarket market metadata used by replay auto mode.
+    Market {
+        #[command(subcommand)]
+        command: ReplayMarketCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -97,21 +102,30 @@ struct ReplayRunOptions {
     /// Postgres connection URL. Defaults to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
-    /// Active Polymarket market id or slug.
+    /// Active Polymarket market id or slug. Required unless `--latest-polymarket-market` is set.
     #[arg(long)]
-    market_id: String,
-    /// Polymarket UP outcome token id.
+    market_id: Option<String>,
+    /// Polymarket UP outcome token id. Required unless `--latest-polymarket-market` is set.
     #[arg(long)]
-    up_token_id: String,
-    /// Polymarket DOWN outcome token id.
+    up_token_id: Option<String>,
+    /// Polymarket DOWN outcome token id. Required unless `--latest-polymarket-market` is set.
     #[arg(long)]
-    down_token_id: String,
-    /// Inclusive replay start timestamp in milliseconds.
+    down_token_id: Option<String>,
+    /// Inclusive replay start timestamp in milliseconds. Required unless `--latest-polymarket-market` is set.
     #[arg(long)]
-    start_unix_ms: i64,
-    /// Exclusive replay end timestamp in milliseconds.
+    start_unix_ms: Option<i64>,
+    /// Exclusive replay end timestamp in milliseconds. Required unless `--latest-polymarket-market` is set.
     #[arg(long)]
-    end_unix_ms: i64,
+    end_unix_ms: Option<i64>,
+    /// Use the latest known Polymarket market metadata from durable storage.
+    #[arg(long)]
+    latest_polymarket_market: bool,
+    /// Base asset used when resolving `--latest-polymarket-market`.
+    #[arg(long, default_value = "BTC")]
+    base_asset: String,
+    /// Market type used when resolving `--latest-polymarket-market`.
+    #[arg(long, default_value = "btc_5m")]
+    market_type: String,
     /// Polymarket entry fill model: `trade_cross` or `book_touch`.
     #[arg(long, default_value = "trade_cross")]
     fill_model: String,
@@ -142,6 +156,73 @@ struct ReplayRunOptions {
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
+    /// Optional path to write the JSON replay report artifact.
+    #[arg(long)]
+    artifact_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum ReplayMarketCommand {
+    /// Upsert one Polymarket market metadata row.
+    Upsert(Box<ReplayMarketUpsertOptions>),
+    /// List recent Polymarket markets.
+    List {
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        /// Base asset.
+        #[arg(long, default_value = "BTC")]
+        base_asset: String,
+        /// Market type.
+        #[arg(long, default_value = "btc_5m")]
+        market_type: String,
+        /// Maximum rows to print.
+        #[arg(long, default_value_t = 10)]
+        limit: i64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+struct ReplayMarketUpsertOptions {
+    /// Postgres connection URL. Defaults to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+    /// Polymarket market id.
+    #[arg(long)]
+    market_id: String,
+    /// Optional market slug.
+    #[arg(long)]
+    slug: Option<String>,
+    /// Optional market title/question.
+    #[arg(long)]
+    title: Option<String>,
+    /// Base asset.
+    #[arg(long, default_value = "BTC")]
+    base_asset: String,
+    /// Market type.
+    #[arg(long, default_value = "btc_5m")]
+    market_type: String,
+    /// Polymarket UP outcome token id.
+    #[arg(long)]
+    up_token_id: String,
+    /// Polymarket DOWN outcome token id.
+    #[arg(long)]
+    down_token_id: String,
+    /// Inclusive market start timestamp in milliseconds.
+    #[arg(long)]
+    start_unix_ms: i64,
+    /// Exclusive market end timestamp in milliseconds.
+    #[arg(long)]
+    end_unix_ms: i64,
+    /// Market status.
+    #[arg(long, default_value = "open")]
+    status: String,
+    /// Metadata source.
+    #[arg(long, default_value = "manual")]
+    source: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -518,10 +599,37 @@ async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
                 hyperliquid_maker_bps: options.hyperliquid_maker_bps,
                 hyperliquid_taker_bps: options.hyperliquid_taker_bps,
                 hyperliquid_funding_bps_per_hour: options.hyperliquid_funding_bps_per_hour,
+                latest_polymarket_market: options.latest_polymarket_market,
+                base_asset: options.base_asset,
+                market_type: options.market_type,
             })
             .await?;
+            if let Some(artifact_path) = options.artifact_path {
+                write_replay_artifact(&artifact_path, &report).await?;
+            }
             print_replay_report(&report, options.json)?;
         }
+        ReplayCommand::Market { command } => match command {
+            ReplayMarketCommand::Upsert(options) => {
+                upsert_polymarket_market_from_cli(*options).await?;
+            }
+            ReplayMarketCommand::List {
+                database_url,
+                base_asset,
+                market_type,
+                limit,
+                json,
+            } => {
+                list_polymarket_markets_from_cli(
+                    &database_url,
+                    &base_asset,
+                    &market_type,
+                    limit,
+                    json,
+                )
+                .await?;
+            }
+        },
     }
     Ok(())
 }
@@ -529,11 +637,11 @@ async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
 struct ReplayRunArgs {
     strategy: String,
     database_url: String,
-    market_id: String,
-    up_token_id: String,
-    down_token_id: String,
-    start_unix_ms: i64,
-    end_unix_ms: i64,
+    market_id: Option<String>,
+    up_token_id: Option<String>,
+    down_token_id: Option<String>,
+    start_unix_ms: Option<i64>,
+    end_unix_ms: Option<i64>,
     fill_model: String,
     hedge_notional_usd: Decimal,
     hedge_slippage_usd: Decimal,
@@ -543,6 +651,9 @@ struct ReplayRunArgs {
     hyperliquid_maker_bps: Decimal,
     hyperliquid_taker_bps: Decimal,
     hyperliquid_funding_bps_per_hour: Decimal,
+    latest_polymarket_market: bool,
+    base_asset: String,
+    market_type: String,
 }
 
 async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperReplayReport> {
@@ -552,33 +663,29 @@ async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperRe
             args.strategy
         );
     }
+    let pool = connect(&args.database_url).await?;
+    let market = resolve_replay_market(&pool, &args).await?;
+
     let request = DryRunRequest {
         sources: vec![
             "bybit".to_owned(),
             "polymarket".to_owned(),
             "hyperliquid".to_owned(),
         ],
-        start_unix_ms: args.start_unix_ms,
-        end_unix_ms: args.end_unix_ms,
+        start_unix_ms: market.start_unix_ms,
+        end_unix_ms: market.end_unix_ms,
     };
     validate_dry_run(&request).context("replay run validation failed")?;
 
     let fill_model = parse_fill_model(&args.fill_model)?;
-    let start = offset_from_unix_ms(args.start_unix_ms)?;
-    let end = offset_from_unix_ms(args.end_unix_ms)?;
-    let pool = connect(&args.database_url).await?;
+    let start = offset_from_unix_ms(market.start_unix_ms)?;
+    let end = offset_from_unix_ms(market.end_unix_ms)?;
     let data = repository::paper_replay_data(&pool, start, end)
         .await
         .context("failed to read paper replay data")?;
 
     let input = PaperReplayInput {
-        market: BaselineMarket {
-            market_id: args.market_id,
-            up_token_id: args.up_token_id,
-            down_token_id: args.down_token_id,
-            start_unix_ms: args.start_unix_ms,
-            end_unix_ms: args.end_unix_ms,
-        },
+        market,
         liquidations: data.liquidations,
         polymarket_quotes: data.polymarket_quotes,
         polymarket_trades: data.polymarket_trades,
@@ -600,6 +707,150 @@ async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperRe
     run_paper_replay(&input).context("paper replay failed")
 }
 
+async fn resolve_replay_market(
+    pool: &sqlx::PgPool,
+    args: &ReplayRunArgs,
+) -> anyhow::Result<BaselineMarket> {
+    if args.latest_polymarket_market {
+        if args.market_id.is_some()
+            || args.up_token_id.is_some()
+            || args.down_token_id.is_some()
+            || args.start_unix_ms.is_some()
+            || args.end_unix_ms.is_some()
+        {
+            anyhow::bail!(
+                "--latest-polymarket-market cannot be combined with manual market/token/time arguments"
+            );
+        }
+        let market = repository::latest_polymarket_market(
+            pool,
+            &args.base_asset,
+            &args.market_type,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to read latest Polymarket metadata for base_asset={} market_type={}",
+                args.base_asset, args.market_type
+            )
+        })?
+        .with_context(|| {
+            format!(
+                "no Polymarket market metadata found for base_asset={} market_type={}",
+                args.base_asset, args.market_type
+            )
+        })?;
+        return Ok(BaselineMarket {
+            market_id: market.market_id,
+            up_token_id: market.up_token_id,
+            down_token_id: market.down_token_id,
+            start_unix_ms: offset_to_unix_ms(market.start_ts)?,
+            end_unix_ms: offset_to_unix_ms(market.end_ts)?,
+        });
+    }
+
+    Ok(BaselineMarket {
+        market_id: required_replay_arg(args.market_id.clone(), "--market-id")?,
+        up_token_id: required_replay_arg(args.up_token_id.clone(), "--up-token-id")?,
+        down_token_id: required_replay_arg(args.down_token_id.clone(), "--down-token-id")?,
+        start_unix_ms: required_replay_arg(args.start_unix_ms, "--start-unix-ms")?,
+        end_unix_ms: required_replay_arg(args.end_unix_ms, "--end-unix-ms")?,
+    })
+}
+
+fn required_replay_arg<T>(value: Option<T>, name: &str) -> anyhow::Result<T> {
+    value.with_context(|| {
+        format!("missing required replay argument {name}; pass it explicitly or use --latest-polymarket-market")
+    })
+}
+
+async fn upsert_polymarket_market_from_cli(
+    options: ReplayMarketUpsertOptions,
+) -> anyhow::Result<()> {
+    let start_ts = offset_from_unix_ms(options.start_unix_ms)?;
+    let end_ts = offset_from_unix_ms(options.end_unix_ms)?;
+    let pool = connect(&options.database_url).await?;
+    let market = PolymarketMarketRecord {
+        market_id: options.market_id,
+        slug: options.slug,
+        title: options.title,
+        base_asset: options.base_asset,
+        market_type: options.market_type,
+        up_token_id: options.up_token_id,
+        down_token_id: options.down_token_id,
+        start_ts,
+        end_ts,
+        status: options.status,
+        source: options.source,
+        raw_payload: serde_json::json!({"source": "liq-cli"}),
+    };
+    repository::upsert_polymarket_market(&pool, &market)
+        .await
+        .context("failed to upsert Polymarket market metadata")?;
+    println!("polymarket market metadata upsert ok: {}", market.market_id);
+    Ok(())
+}
+
+async fn list_polymarket_markets_from_cli(
+    database_url: &str,
+    base_asset: &str,
+    market_type: &str,
+    limit: i64,
+    json: bool,
+) -> anyhow::Result<()> {
+    let pool = connect(database_url).await?;
+    let markets = repository::list_polymarket_markets(&pool, base_asset, market_type, limit)
+        .await
+        .context("failed to list Polymarket market metadata")?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&markets)
+                .context("failed to serialize Polymarket market metadata")?
+        );
+    } else {
+        for market in markets {
+            println!(
+                "{} {} {}..{} up={} down={} status={} source={}",
+                market.market_id,
+                market.base_asset,
+                market.start_ts.format(&Rfc3339)?,
+                market.end_ts.format(&Rfc3339)?,
+                market.up_token_id,
+                market.down_token_id,
+                market.status,
+                market.source
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn write_replay_artifact(
+    artifact_path: &PathBuf,
+    report: &PaperReplayReport,
+) -> anyhow::Result<()> {
+    if let Some(parent) = artifact_path.parent() {
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "failed to create replay artifact directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    let payload =
+        serde_json::to_vec_pretty(report).context("failed to serialize replay artifact")?;
+    tokio::fs::write(artifact_path, payload)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to write replay artifact {}",
+                artifact_path.display()
+            )
+        })?;
+    Ok(())
+}
+
 fn parse_fill_model(value: &str) -> anyhow::Result<FillModel> {
     match value {
         "trade_cross" => Ok(FillModel::TradeCross),
@@ -611,6 +862,11 @@ fn parse_fill_model(value: &str) -> anyhow::Result<FillModel> {
 fn offset_from_unix_ms(unix_ms: i64) -> anyhow::Result<OffsetDateTime> {
     OffsetDateTime::from_unix_timestamp_nanos(i128::from(unix_ms) * 1_000_000)
         .with_context(|| format!("invalid unix millisecond timestamp: {unix_ms}"))
+}
+
+fn offset_to_unix_ms(timestamp: OffsetDateTime) -> anyhow::Result<i64> {
+    i64::try_from(timestamp.unix_timestamp_nanos() / 1_000_000)
+        .context("timestamp cannot be represented as unix milliseconds")
 }
 
 fn print_replay_report(report: &PaperReplayReport, json: bool) -> anyhow::Result<()> {
