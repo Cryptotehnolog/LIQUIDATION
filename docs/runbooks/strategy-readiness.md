@@ -165,6 +165,44 @@ cargo run -p liq-cli -- strategy readiness explain --database-url "postgres://li
 Это отдельная таблица `polymarket_markets`; она нужна, чтобы оператор не
 передавал `market_id`, `up_token_id`, `down_token_id` руками при каждом run.
 
+Рекомендуемый путь - safe fetcher из Polymarket Gamma API:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-polymarket-markets.ps1 `
+  -OutputPath ".cache/polymarket/selected-markets.json" `
+  -Json
+```
+
+По умолчанию это dry-run: команда скачивает metadata, валидирует:
+
+- `market_id`;
+- `up_token_id`;
+- `down_token_id`;
+- `startDate/endDate`;
+- ровно 5-minute window для `btc_5m`;
+- текстовый фильтр `bitcoin` + `up or down`;
+- outcomes `Up` и `Down`.
+
+Запись в TimescaleDB разрешена только через явный `-Apply`. Скрипт сначала
+делает dry-run и только после успешной валидации запускает apply:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-polymarket-markets.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -Apply `
+  -Json
+```
+
+Если Gamma API меняет выдачу или нужный рынок не попадает в default endpoint,
+разрешено передать explicit endpoint/query:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-polymarket-markets.ps1 `
+  -EndpointUrl "https://gamma-api.polymarket.com/markets?active=true&closed=false" `
+  -OutputPath ".cache/polymarket/selected-markets.json" `
+  -Json
+```
+
 Пример upsert metadata:
 
 ```powershell
@@ -216,20 +254,10 @@ cargo run -p liq-cli -- replay run `
 Auto mode по последнему известному рынку:
 
 ```powershell
-cargo run -p liq-cli -- replay run `
-  --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
-  --strategy baseline `
-  --latest-polymarket-market `
-  --base-asset BTC `
-  --market-type btc_5m `
-  --fill-model trade_cross `
-  --hedge-notional-usd 15 `
-  --hyperliquid-taker-bps 5 `
-  --hyperliquid-funding-bps-per-hour 1 `
-  --hedge-slippage-usd 0.10 `
-  --funding-hours 1 `
-  --artifact-path ".cache/replay/latest-baseline.json" `
-  --json
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-latest-polymarket-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -ArtifactPath ".cache/replay/latest-baseline.json" `
+  -FetchMetadataFirst
 ```
 
 Auto mode fail-closed:
@@ -240,6 +268,10 @@ Auto mode fail-closed:
   запускается;
 - artifact является JSON contract для dashboard/CI и не требует парсинга
   консольного вывода.
+- scheduled GitHub workflow `Replay Artifact` запускается каждые 6 часов, но
+  делает реальный replay только если в GitHub secrets задан
+  `REPLAY_DATABASE_URL`. Без этого secret workflow честно пропускает runtime
+  replay, чтобы не создавать пустой псевдо-отчёт.
 
 Что делает команда:
 
@@ -273,6 +305,6 @@ replay config, baseline strategy и safety mode готовы. Если хотя 
 condition не закрыт в текущем readiness window, strategy run должен быть
 запрещен.
 
-Следующая автоматизация: добавить safe fetcher Polymarket BTC 5-minute markets
-из public API с schema validation и dry-run mode, чтобы `replay market upsert`
-не оставался ручной командой.
+Следующая автоматизация: добавить dashboard panel для latest replay artifact и
+отдельный warning, если `polymarket_markets` stale или scheduled replay workflow
+несколько запусков подряд пропущен из-за отсутствующего `REPLAY_DATABASE_URL`.

@@ -1,0 +1,30 @@
+[
+  {
+    "id": "btc-5m-fixture",
+    "question": "Bitcoin Up or Down - June 23, 1:00PM-1:05PM ET",
+    "slug": "bitcoin-up-or-down-june-23-1pm-et",
+    "startDate": "2026-06-23T17:00:00Z",
+    "endDate": "2026-06-23T17:05:00Z",
+    "outcomes": "[\"Up\", \"Down\"]",
+    "clobTokenIds": "[\"up-token\", \"down-token\"]",
+    "active": true,
+    "closed": false,
+    "archived": false,
+    "enableOrderBook": true,
+    "acceptingOrders": true
+  },
+  {
+    "id": "btc-15m-fixture",
+    "question": "Bitcoin Up or Down - June 23, 1:00PM-1:15PM ET",
+    "slug": "bitcoin-up-or-down-june-23-15m-et",
+    "startDate": "2026-06-23T17:00:00Z",
+    "endDate": "2026-06-23T17:15:00Z",
+    "outcomes": "[\"Up\", \"Down\"]",
+    "clobTokenIds": "[\"slow-up-token\", \"slow-down-token\"]",
+    "active": true,
+    "closed": false,
+    "archived": false,
+    "enableOrderBook": true,
+    "acceptingOrders": true
+  }
+]

@@ -1,6 +1,7 @@
 //! LIQUIDATION operator CLI.
 
 mod dashboard;
+mod polymarket_markets;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
@@ -15,6 +16,10 @@ use liq_replay::{
     BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness, PaperReplayInput,
     PaperReplayReport, StrategyReadinessExplanation, StrategyReadinessReport, run_paper_replay,
     validate_dry_run,
+};
+use polymarket_markets::{
+    PolymarketMarketFetchFilter, PolymarketMarketFetchRequest, fetch_polymarket_markets,
+    selected_markets_from_payload,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
@@ -165,6 +170,8 @@ struct ReplayRunOptions {
 enum ReplayMarketCommand {
     /// Upsert one Polymarket market metadata row.
     Upsert(Box<ReplayMarketUpsertOptions>),
+    /// Fetch BTC 5-minute market metadata from Polymarket Gamma API.
+    Fetch(Box<ReplayMarketFetchOptions>),
     /// List recent Polymarket markets.
     List {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
@@ -223,6 +230,49 @@ struct ReplayMarketUpsertOptions {
     /// Metadata source.
     #[arg(long, default_value = "manual")]
     source: String,
+}
+
+#[derive(Debug, Args)]
+struct ReplayMarketFetchOptions {
+    /// Postgres connection URL. Required when `--apply` is set. Defaults to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: Option<String>,
+    /// Polymarket Gamma markets endpoint. Query parameters are preserved.
+    #[arg(long, default_value = "https://gamma-api.polymarket.com/markets")]
+    endpoint_url: String,
+    /// Read Gamma payload from a local fixture instead of the network.
+    #[arg(long)]
+    fixture_path: Option<PathBuf>,
+    /// Base asset.
+    #[arg(long, default_value = "BTC")]
+    base_asset: String,
+    /// Market type.
+    #[arg(long, default_value = "btc_5m")]
+    market_type: String,
+    /// Required text fragment in question or slug. Repeat for multiple terms.
+    #[arg(long = "match-term")]
+    match_terms: Vec<String>,
+    /// Required market window length in seconds.
+    #[arg(long, default_value_t = 300)]
+    window_seconds: i64,
+    /// Gamma page size.
+    #[arg(long, default_value_t = 100)]
+    page_limit: u16,
+    /// Maximum Gamma pages to scan.
+    #[arg(long, default_value_t = 20)]
+    max_pages: u16,
+    /// Upsert selected metadata into `TimescaleDB`. Without this flag the command is dry-run only.
+    #[arg(long)]
+    apply: bool,
+    /// Keep all matching markets instead of only the latest by start timestamp.
+    #[arg(long)]
+    all_matches: bool,
+    /// Optional JSON artifact path for selected metadata.
+    #[arg(long)]
+    output_path: Option<PathBuf>,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -613,6 +663,9 @@ async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
             ReplayMarketCommand::Upsert(options) => {
                 upsert_polymarket_market_from_cli(*options).await?;
             }
+            ReplayMarketCommand::Fetch(options) => {
+                fetch_polymarket_markets_from_cli(*options).await?;
+            }
             ReplayMarketCommand::List {
                 database_url,
                 base_asset,
@@ -826,28 +879,125 @@ async fn list_polymarket_markets_from_cli(
     Ok(())
 }
 
+async fn fetch_polymarket_markets_from_cli(
+    options: ReplayMarketFetchOptions,
+) -> anyhow::Result<()> {
+    if options.page_limit == 0 {
+        anyhow::bail!("--page-limit must be greater than zero");
+    }
+    if options.max_pages == 0 {
+        anyhow::bail!("--max-pages must be greater than zero");
+    }
+    if options.window_seconds <= 0 {
+        anyhow::bail!("--window-seconds must be greater than zero");
+    }
+
+    let match_terms = if options.match_terms.is_empty() {
+        PolymarketMarketFetchFilter::default().match_terms
+    } else {
+        options.match_terms
+    };
+    let filter = PolymarketMarketFetchFilter {
+        base_asset: options.base_asset,
+        market_type: options.market_type,
+        match_terms,
+        window_seconds: options.window_seconds,
+        latest_only: !options.all_matches,
+    };
+    let markets = if let Some(fixture_path) = options.fixture_path.as_ref() {
+        let payload = tokio::fs::read_to_string(fixture_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to read Polymarket metadata fixture {}",
+                    fixture_path.display()
+                )
+            })?;
+        selected_markets_from_payload(&payload, &filter)?
+    } else {
+        fetch_polymarket_markets(&PolymarketMarketFetchRequest {
+            endpoint_url: options.endpoint_url,
+            page_limit: options.page_limit,
+            max_pages: options.max_pages,
+            filter,
+        })
+        .await?
+    };
+
+    if markets.is_empty() {
+        anyhow::bail!("no valid Polymarket BTC 5-minute markets matched the fetch filter");
+    }
+
+    if let Some(output_path) = options.output_path.as_ref() {
+        write_json_artifact(output_path, &markets).await?;
+    }
+
+    if options.apply {
+        let database_url = options
+            .database_url
+            .as_deref()
+            .context("--database-url or DATABASE_URL is required when --apply is set")?;
+        let pool = connect(database_url).await?;
+        for market in &markets {
+            repository::upsert_polymarket_market(&pool, market)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to upsert Polymarket market metadata {}",
+                        market.market_id
+                    )
+                })?;
+        }
+    }
+
+    if options.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&markets)
+                .context("failed to serialize Polymarket market fetch result")?
+        );
+    } else {
+        let mode = if options.apply { "applied" } else { "dry-run" };
+        println!("polymarket market fetch {mode}: {} selected", markets.len());
+        for market in markets {
+            println!(
+                "{} {}..{} up={} down={} status={} source={}",
+                market.market_id,
+                market.start_ts.format(&Rfc3339)?,
+                market.end_ts.format(&Rfc3339)?,
+                market.up_token_id,
+                market.down_token_id,
+                market.status,
+                market.source
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn write_replay_artifact(
     artifact_path: &PathBuf,
     report: &PaperReplayReport,
 ) -> anyhow::Result<()> {
+    write_json_artifact(artifact_path, report).await
+}
+
+async fn write_json_artifact<T>(artifact_path: &PathBuf, value: &T) -> anyhow::Result<()>
+where
+    T: serde::Serialize,
+{
     if let Some(parent) = artifact_path.parent() {
         tokio::fs::create_dir_all(parent).await.with_context(|| {
             format!(
-                "failed to create replay artifact directory {}",
+                "failed to create JSON artifact directory {}",
                 parent.display()
             )
         })?;
     }
-    let payload =
-        serde_json::to_vec_pretty(report).context("failed to serialize replay artifact")?;
+    let payload = serde_json::to_vec_pretty(value).context("failed to serialize JSON artifact")?;
     tokio::fs::write(artifact_path, payload)
         .await
-        .with_context(|| {
-            format!(
-                "failed to write replay artifact {}",
-                artifact_path.display()
-            )
-        })?;
+        .with_context(|| format!("failed to write JSON artifact {}", artifact_path.display()))?;
     Ok(())
 }
 

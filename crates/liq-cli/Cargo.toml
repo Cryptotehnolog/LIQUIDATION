@@ -14,6 +14,7 @@ liq-collector = { path = "../liq-collector", version = "0.1.0" }
 liq-connectors = { path = "../liq-connectors", version = "0.1.0" }
 liq-recorder = { path = "../liq-recorder", version = "0.1.0" }
 liq-replay = { path = "../liq-replay", version = "0.1.0" }
+reqwest.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true

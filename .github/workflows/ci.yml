@@ -23,6 +23,9 @@ jobs:
       - name: market data history report guard
         shell: pwsh
         run: ./scripts/test-market-data-report-history.ps1
+      - name: Polymarket market fetcher guard
+        shell: pwsh
+        run: ./scripts/test-polymarket-market-fetcher.ps1
       - name: api docs changelog guard
         shell: pwsh
         run: ./scripts/test-api-docs-changelog.ps1

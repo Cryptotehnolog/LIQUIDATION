@@ -1,0 +1,40 @@
+name: Replay Artifact
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+jobs:
+  latest-polymarket-replay:
+    runs-on: ubuntu-latest
+    env:
+      REPLAY_DATABASE_URL: ${{ secrets.REPLAY_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: check runtime database secret
+        id: db
+        shell: pwsh
+        run: |
+          if (-not $env:REPLAY_DATABASE_URL) {
+            "skip=true" >> $env:GITHUB_OUTPUT
+            Write-Output "REPLAY_DATABASE_URL is not configured; replay artifact run skipped."
+          } else {
+            "skip=false" >> $env:GITHUB_OUTPUT
+          }
+      - name: fetch metadata and run latest replay
+        if: steps.db.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          ./scripts/run-latest-polymarket-replay.ps1 `
+            -DatabaseUrl $env:REPLAY_DATABASE_URL `
+            -ArtifactPath ".cache/replay/latest-polymarket-baseline.json" `
+            -FetchMetadataFirst
+      - name: upload replay artifact
+        if: steps.db.outputs.skip != 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: latest-polymarket-baseline-replay
+          path: .cache/replay/latest-polymarket-baseline.json
+          if-no-files-found: error
