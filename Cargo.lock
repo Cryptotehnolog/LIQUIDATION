@@ -999,6 +999,7 @@ dependencies = [
  "liq-connectors",
  "liq-recorder",
  "liq-replay",
+ "rust_decimal",
  "serde",
  "serde_json",
  "sqlx",

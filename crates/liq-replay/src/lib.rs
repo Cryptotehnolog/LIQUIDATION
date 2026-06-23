@@ -1,6 +1,6 @@
 //! Deterministic paper replay foundation.
 
-use liq_domain::{LiquidationEvent, LiquidationSide, MarketQuote, MarketVenue};
+use liq_domain::{LiquidationEvent, LiquidationSide, MarketQuote, MarketTrade, MarketVenue};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -727,6 +727,407 @@ fn calculate_polymarket_shares(dollar_amount: Decimal, price: Decimal) -> Option
     }
 }
 
+/// Input dataset for one deterministic paper replay run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaperReplayInput {
+    /// Active Polymarket market metadata.
+    pub market: BaselineMarket,
+    /// Canonical liquidation events used by the baseline signal.
+    pub liquidations: Vec<LiquidationEvent>,
+    /// Polymarket top-of-book quotes.
+    pub polymarket_quotes: Vec<MarketQuote>,
+    /// Polymarket trades used by conservative fill models.
+    pub polymarket_trades: Vec<MarketTrade>,
+    /// Hyperliquid top-of-book quotes used as hedge evidence.
+    pub hyperliquid_quotes: Vec<MarketQuote>,
+    /// Hyperliquid trades used as hedge execution evidence.
+    pub hyperliquid_trades: Vec<MarketTrade>,
+    /// Polymarket entry fill model.
+    pub fill_model: FillModel,
+    /// Fee and funding assumptions.
+    pub fee_schedule: FeeSchedule,
+    /// Paper hedge notional in USD for each filled Polymarket signal.
+    pub hedge_notional_usd: Decimal,
+    /// Conservative hedge slippage penalty per hedge fill.
+    pub hedge_slippage_usd: Decimal,
+    /// Funding duration charged per hedge fill.
+    pub funding_hours: Decimal,
+}
+
+/// Paper replay report with `PnL` and risk diagnostics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaperReplayReport {
+    /// Stable strategy version.
+    pub strategy_version: String,
+    /// Fill model version used for Polymarket entries.
+    pub fill_model_version: String,
+    /// Fee schedule version.
+    pub fee_schedule_version: String,
+    /// Number of strategy signals emitted.
+    pub signal_count: u64,
+    /// Number of Polymarket paper orders created.
+    pub polymarket_orders: u64,
+    /// Number of Polymarket fills supported by recorded data.
+    pub polymarket_fills: u64,
+    /// Number of Hyperliquid hedge attempts after filled Polymarket entries.
+    pub hedge_attempts: u64,
+    /// Number of Hyperliquid hedge fills supported by recorded data.
+    pub hedge_fills: u64,
+    /// Filled Polymarket entries without a filled hedge.
+    pub unhedged_signals: u64,
+    /// Gross realized `PnL` in USD. Settlement is not modelled in v1.
+    pub gross_pnl_usd: Decimal,
+    /// Total exchange fees in USD.
+    pub total_fees_usd: Decimal,
+    /// Total funding cost in USD.
+    pub total_funding_usd: Decimal,
+    /// Total slippage penalty in USD.
+    pub total_slippage_usd: Decimal,
+    /// Net `PnL` after fees, funding, and slippage.
+    pub net_pnl_usd: Decimal,
+    /// Maximum drawdown over the replay equity curve.
+    pub max_drawdown_usd: Decimal,
+    /// Settlement status for prediction-market outcome valuation.
+    pub settlement_status: PaperSettlementStatus,
+    /// Per-signal diagnostics.
+    pub trades: Vec<PaperReplayTrade>,
+}
+
+/// Prediction-market settlement coverage in a replay report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaperSettlementStatus {
+    /// Outcome settlement is not included in this replay.
+    Unsettled,
+}
+
+/// One paper trade diagnostic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaperReplayTrade {
+    /// Strategy signal.
+    pub signal: StrategySignal,
+    /// Prediction-market outcome.
+    pub outcome: Option<PredictionOutcome>,
+    /// Polymarket fill decision.
+    pub polymarket_fill: FillDecision,
+    /// Hyperliquid hedge fill decision, when a hedge was attempted.
+    pub hedge_fill: Option<FillDecision>,
+    /// Fees charged to this trade.
+    pub fee_usd: Decimal,
+    /// Funding charged to this trade.
+    pub funding_usd: Decimal,
+    /// Slippage charged to this trade.
+    pub slippage_usd: Decimal,
+    /// Net `PnL` contribution after costs.
+    pub net_pnl_usd: Decimal,
+    /// Whether the filled Polymarket leg has no filled hedge.
+    pub unhedged: bool,
+}
+
+/// Paper replay execution error.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PaperReplayError {
+    /// Live trading is not allowed by the paper replay runner.
+    #[error(transparent)]
+    SafetyGate(#[from] SafetyGateError),
+}
+
+/// Run one deterministic baseline paper replay.
+///
+/// # Errors
+///
+/// Returns an error when the paper-only safety gate rejects execution.
+pub fn run_paper_replay(input: &PaperReplayInput) -> Result<PaperReplayReport, PaperReplayError> {
+    PaperOnlyGate::paper_only().ensure_allowed(TradingMode::Paper)?;
+
+    let mut strategy = BaselineStinkBidStrategy::new(BaselineStrategyConfig::default());
+    let strategy_version = strategy.version().to_owned();
+    let _ = strategy.on_event(&BaselineEvent::MarketOpened(input.market.clone()));
+
+    let mut events = baseline_replay_events(input);
+    events.sort_by_key(BaselineReplayEvent::sort_key);
+
+    let mut trades = Vec::new();
+    for event in events {
+        let signals = match event {
+            BaselineReplayEvent::Quote(quote) => {
+                strategy.on_event(&BaselineEvent::PolymarketQuote(quote))
+            }
+            BaselineReplayEvent::Liquidation(liquidation) => {
+                strategy.on_event(&BaselineEvent::Liquidation(liquidation.clone()))
+            }
+        };
+
+        trades.extend(
+            signals
+                .into_iter()
+                .map(|signal| evaluate_paper_signal(input, signal)),
+        );
+    }
+
+    Ok(build_paper_replay_report(
+        strategy_version,
+        input.fill_model.version().to_owned(),
+        input.fee_schedule.version.clone(),
+        trades,
+    ))
+}
+
+#[derive(Debug, Clone)]
+enum BaselineReplayEvent<'a> {
+    Quote(MarketQuote),
+    Liquidation(&'a LiquidationEvent),
+}
+
+impl BaselineReplayEvent<'_> {
+    fn sort_key(&self) -> (i64, u8) {
+        match self {
+            Self::Quote(quote) => (market_quote_ts_ms(quote), 0),
+            Self::Liquidation(event) => (event_ts_ms(event), 1),
+        }
+    }
+}
+
+fn baseline_replay_events(input: &PaperReplayInput) -> Vec<BaselineReplayEvent<'_>> {
+    let mut events = Vec::with_capacity(input.polymarket_quotes.len() + input.liquidations.len());
+    events.extend(
+        input
+            .polymarket_quotes
+            .iter()
+            .cloned()
+            .map(BaselineReplayEvent::Quote),
+    );
+    events.extend(
+        input
+            .liquidations
+            .iter()
+            .map(BaselineReplayEvent::Liquidation),
+    );
+    events
+}
+
+fn evaluate_paper_signal(input: &PaperReplayInput, signal: StrategySignal) -> PaperReplayTrade {
+    let polymarket_order = PaperOrder {
+        order_id: format!("{}:polymarket", signal.signal_id),
+        side: signal.side,
+        limit_price: signal.limit_price,
+        quantity: signal.quantity,
+        created_unix_ms: signal.created_unix_ms,
+        expires_unix_ms: signal.expires_unix_ms,
+    };
+    let polymarket_trades =
+        observed_trades_for_instrument(&input.polymarket_trades, &signal.symbol);
+    let polymarket_books = observed_books_for_instrument(&input.polymarket_quotes, &signal.symbol);
+    let polymarket_fill = evaluate_fill(
+        &polymarket_order,
+        input.fill_model,
+        &polymarket_trades,
+        &polymarket_books,
+    );
+
+    let polymarket_cost = if let FillDecision::Filled {
+        price, quantity, ..
+    } = &polymarket_fill
+    {
+        calculate_execution_cost(
+            &input.fee_schedule,
+            &ExecutionCostInput {
+                venue: FeeVenue::Polymarket,
+                role: LiquidityRole::Maker,
+                notional_usd: *price * *quantity,
+                slippage_usd: Decimal::ZERO,
+                funding_hours: Decimal::ZERO,
+            },
+        )
+    } else {
+        zero_execution_cost()
+    };
+
+    let hedge_fill = if matches!(polymarket_fill, FillDecision::Filled { .. }) {
+        Some(evaluate_hedge_fill(input, &signal))
+    } else {
+        None
+    };
+    let hedge_cost = if matches!(hedge_fill, Some(FillDecision::Filled { .. })) {
+        calculate_execution_cost(
+            &input.fee_schedule,
+            &ExecutionCostInput {
+                venue: FeeVenue::Hyperliquid,
+                role: LiquidityRole::Taker,
+                notional_usd: input.hedge_notional_usd,
+                slippage_usd: input.hedge_slippage_usd,
+                funding_hours: input.funding_hours,
+            },
+        )
+    } else {
+        zero_execution_cost()
+    };
+
+    let fee_usd = polymarket_cost.fee_usd + hedge_cost.fee_usd;
+    let funding_usd = polymarket_cost.funding_usd + hedge_cost.funding_usd;
+    let slippage_usd = polymarket_cost.slippage_usd + hedge_cost.slippage_usd;
+    let net_pnl_usd = -(fee_usd + funding_usd + slippage_usd);
+    let unhedged = matches!(polymarket_fill, FillDecision::Filled { .. })
+        && !matches!(hedge_fill, Some(FillDecision::Filled { .. }));
+
+    PaperReplayTrade {
+        outcome: signal.outcome,
+        signal,
+        polymarket_fill,
+        hedge_fill,
+        fee_usd,
+        funding_usd,
+        slippage_usd,
+        net_pnl_usd,
+        unhedged,
+    }
+}
+
+fn evaluate_hedge_fill(input: &PaperReplayInput, signal: &StrategySignal) -> FillDecision {
+    let Some(trade) = input
+        .hyperliquid_trades
+        .iter()
+        .filter(|trade| market_trade_ts_ms(trade) >= signal.created_unix_ms)
+        .filter(|trade| market_trade_ts_ms(trade) < signal.expires_unix_ms)
+        .min_by_key(|trade| market_trade_ts_ms(trade))
+    else {
+        return FillDecision::NotFilled {
+            reason: "no recorded Hyperliquid trade available inside hedge window".to_owned(),
+        };
+    };
+
+    FillDecision::Filled {
+        price: trade.price,
+        quantity: trade.quantity,
+        unix_ms: market_trade_ts_ms(trade),
+        model_version: "hyperliquid_market_trade_v1".to_owned(),
+    }
+}
+
+fn build_paper_replay_report(
+    strategy_version: String,
+    fill_model_version: String,
+    fee_schedule_version: String,
+    trades: Vec<PaperReplayTrade>,
+) -> PaperReplayReport {
+    let signal_count = usize_to_u64(trades.len());
+    let polymarket_orders = signal_count;
+    let polymarket_fills = usize_to_u64(
+        trades
+            .iter()
+            .filter(|trade| matches!(trade.polymarket_fill, FillDecision::Filled { .. }))
+            .count(),
+    );
+    let hedge_attempts = usize_to_u64(
+        trades
+            .iter()
+            .filter(|trade| trade.hedge_fill.is_some())
+            .count(),
+    );
+    let hedge_fills = usize_to_u64(
+        trades
+            .iter()
+            .filter(|trade| matches!(trade.hedge_fill, Some(FillDecision::Filled { .. })))
+            .count(),
+    );
+    let unhedged_signals = usize_to_u64(trades.iter().filter(|trade| trade.unhedged).count());
+    let total_fees_usd = trades.iter().map(|trade| trade.fee_usd).sum();
+    let total_funding_usd = trades.iter().map(|trade| trade.funding_usd).sum();
+    let total_slippage_usd = trades.iter().map(|trade| trade.slippage_usd).sum();
+    let gross_pnl_usd = Decimal::ZERO;
+    let net_pnl_usd = gross_pnl_usd - total_fees_usd - total_funding_usd - total_slippage_usd;
+    let max_drawdown_usd = max_drawdown(trades.iter().map(|trade| trade.net_pnl_usd));
+
+    PaperReplayReport {
+        strategy_version,
+        fill_model_version,
+        fee_schedule_version,
+        signal_count,
+        polymarket_orders,
+        polymarket_fills,
+        hedge_attempts,
+        hedge_fills,
+        unhedged_signals,
+        gross_pnl_usd,
+        total_fees_usd,
+        total_funding_usd,
+        total_slippage_usd,
+        net_pnl_usd,
+        max_drawdown_usd,
+        settlement_status: PaperSettlementStatus::Unsettled,
+        trades,
+    }
+}
+
+fn observed_trades_for_instrument(
+    trades: &[MarketTrade],
+    instrument_id: &str,
+) -> Vec<ObservedTrade> {
+    trades
+        .iter()
+        .filter(|trade| trade.instrument_id == instrument_id)
+        .map(|trade| ObservedTrade {
+            unix_ms: market_trade_ts_ms(trade),
+            price: trade.price,
+            quantity: trade.quantity,
+        })
+        .collect()
+}
+
+fn observed_books_for_instrument(quotes: &[MarketQuote], instrument_id: &str) -> Vec<ObservedBook> {
+    quotes
+        .iter()
+        .filter(|quote| quote.instrument_id == instrument_id)
+        .map(|quote| ObservedBook {
+            unix_ms: market_quote_ts_ms(quote),
+            best_bid: quote.best_bid,
+            best_ask: quote.best_ask,
+        })
+        .collect()
+}
+
+fn zero_execution_cost() -> ExecutionCost {
+    ExecutionCost {
+        fee_usd: Decimal::ZERO,
+        funding_usd: Decimal::ZERO,
+        slippage_usd: Decimal::ZERO,
+        total_usd: Decimal::ZERO,
+    }
+}
+
+fn max_drawdown(changes: impl IntoIterator<Item = Decimal>) -> Decimal {
+    let mut equity = Decimal::ZERO;
+    let mut peak = Decimal::ZERO;
+    let mut drawdown = Decimal::ZERO;
+    for change in changes {
+        equity += change;
+        peak = peak.max(equity);
+        drawdown = drawdown.max(peak - equity);
+    }
+    drawdown
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn market_quote_ts_ms(quote: &MarketQuote) -> i64 {
+    timestamp_ms(quote.received_ts.unix_timestamp_nanos())
+}
+
+fn market_trade_ts_ms(trade: &MarketTrade) -> i64 {
+    timestamp_ms(trade.received_ts.unix_timestamp_nanos())
+}
+
+fn timestamp_ms(nanos: i128) -> i64 {
+    let millis = nanos / 1_000_000;
+    match i64::try_from(millis) {
+        Ok(value) => value,
+        Err(_) if millis.is_negative() => i64::MIN,
+        Err(_) => i64::MAX,
+    }
+}
+
 /// Replay inputs included in deterministic hashing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplayInput {
@@ -1280,6 +1681,76 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn paper_replay_runs_baseline_and_reports_net_pnl_and_risk() {
+        let market = baseline_market();
+        let input = PaperReplayInput {
+            market: market.clone(),
+            liquidations: vec![liquidation(
+                LiquidationSide::Long,
+                Decimal::new(25_000, 0),
+                1_500,
+            )],
+            polymarket_quotes: vec![polymarket_quote(
+                &market.down_token_id,
+                Decimal::new(50, 2),
+                1_000,
+            )],
+            polymarket_trades: vec![market_trade(
+                MarketVenue::Polymarket,
+                &market.down_token_id,
+                Decimal::new(35, 2),
+                Decimal::new(429, 1),
+                1_600,
+            )],
+            hyperliquid_quotes: vec![market_quote(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_100, 0),
+                1_400,
+            )],
+            hyperliquid_trades: vec![market_trade(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_120, 0),
+                Decimal::new(1, 4),
+                1_700,
+            )],
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule {
+                hyperliquid_taker_bps: Decimal::new(5, 0),
+                hyperliquid_funding_bps_per_hour: Decimal::new(1, 0),
+                ..FeeSchedule::paper_v1()
+            },
+            hedge_notional_usd: Decimal::new(15, 0),
+            hedge_slippage_usd: Decimal::new(10, 2),
+            funding_hours: Decimal::new(1, 0),
+        };
+
+        let report = run_paper_replay(&input).expect("paper replay must run");
+
+        assert_eq!(report.strategy_version, "baseline_stink_bid_v1");
+        assert_eq!(report.signal_count, 1);
+        assert_eq!(report.polymarket_orders, 1);
+        assert_eq!(report.polymarket_fills, 1);
+        assert_eq!(report.hedge_attempts, 1);
+        assert_eq!(report.hedge_fills, 1);
+        assert_eq!(report.unhedged_signals, 0);
+        assert_eq!(report.gross_pnl_usd, Decimal::ZERO);
+        assert_eq!(report.total_fees_usd, Decimal::new(75, 4));
+        assert_eq!(report.total_funding_usd, Decimal::new(15, 4));
+        assert_eq!(report.total_slippage_usd, Decimal::new(10, 2));
+        assert_eq!(report.net_pnl_usd, Decimal::new(-1090, 4));
+        assert_eq!(report.max_drawdown_usd, Decimal::new(1090, 4));
+        assert_eq!(report.settlement_status, PaperSettlementStatus::Unsettled);
+        assert_eq!(report.trades.len(), 1);
+        assert_eq!(report.trades[0].outcome, Some(PredictionOutcome::Down));
+        assert!(matches!(
+            report.trades[0].polymarket_fill,
+            FillDecision::Filled { .. }
+        ));
+    }
+
     fn buy_order(limit_cents: i64) -> PaperOrder {
         PaperOrder {
             order_id: "order-1".to_owned(),
@@ -1318,16 +1789,49 @@ mod tests {
         best_ask: Decimal,
         unix_ms: i64,
     ) -> liq_domain::MarketQuote {
+        market_quote(MarketVenue::Polymarket, token_id, best_ask, unix_ms)
+    }
+
+    fn market_quote(
+        venue: MarketVenue,
+        instrument_id: &str,
+        best_ask: Decimal,
+        unix_ms: i64,
+    ) -> liq_domain::MarketQuote {
         liq_domain::MarketQuote {
             event_id: uuid::Uuid::nil(),
-            venue: liq_domain::MarketVenue::Polymarket,
-            source_event_id: format!("quote:{token_id}:{unix_ms}"),
-            instrument_id: token_id.to_owned(),
+            venue,
+            source_event_id: format!("quote:{instrument_id}:{unix_ms}"),
+            instrument_id: instrument_id.to_owned(),
             symbol: "btc-updown".to_owned(),
             best_bid: Some(best_ask - Decimal::new(1, 2)),
             best_bid_size: Some(Decimal::new(10, 0)),
             best_ask: Some(best_ask),
             best_ask_size: Some(Decimal::new(10, 0)),
+            exchange_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
+                .expect("fixture timestamp"),
+            received_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
+                .expect("fixture timestamp"),
+        }
+    }
+
+    fn market_trade(
+        venue: MarketVenue,
+        instrument_id: &str,
+        price: Decimal,
+        quantity: Decimal,
+        unix_ms: i64,
+    ) -> liq_domain::MarketTrade {
+        liq_domain::MarketTrade {
+            event_id: uuid::Uuid::nil(),
+            venue,
+            source_event_id: format!("trade:{instrument_id}:{unix_ms}"),
+            instrument_id: instrument_id.to_owned(),
+            symbol: "BTC".to_owned(),
+            side: liq_domain::TradeSide::Buy,
+            price,
+            quantity,
+            notional_usd: Some(price * quantity),
             exchange_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
                 .expect("fixture timestamp"),
             received_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)

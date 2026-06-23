@@ -272,6 +272,44 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             .expect("duplicate market quote insert must not fail");
         assert_eq!(duplicate, 0);
 
+        let pm_trade_source_event_id = format!("polymarket:trade:{suffix}");
+        let pm_trade = MarketTrade {
+            event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, pm_trade_source_event_id.as_bytes()),
+            venue: MarketVenue::Polymarket,
+            source_event_id: pm_trade_source_event_id,
+            instrument_id: "pm-token-up".to_owned(),
+            symbol: "btc-up-jun-2026".to_owned(),
+            side: TradeSide::Buy,
+            price: Decimal::new(50, 2),
+            quantity: Decimal::new(20, 0),
+            notional_usd: Some(Decimal::new(10, 0)),
+            exchange_ts,
+            received_ts,
+        };
+        let inserted = repository::insert_market_trade(&pool, &pm_trade)
+            .await
+            .expect("polymarket market trade insert must succeed");
+        assert_eq!(inserted, 1);
+
+        let hyper_quote_source_event_id = format!("hyperliquid:quote:{suffix}");
+        let hyper_quote = MarketQuote {
+            event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, hyper_quote_source_event_id.as_bytes()),
+            venue: MarketVenue::Hyperliquid,
+            source_event_id: hyper_quote_source_event_id,
+            instrument_id: "BTC".to_owned(),
+            symbol: "BTC-PERP".to_owned(),
+            best_bid: Some(Decimal::new(6_499_000, 2)),
+            best_bid_size: Some(Decimal::new(5, 0)),
+            best_ask: Some(Decimal::new(6_501_000, 2)),
+            best_ask_size: Some(Decimal::new(5, 0)),
+            exchange_ts,
+            received_ts,
+        };
+        let inserted = repository::insert_market_quote(&pool, &hyper_quote)
+            .await
+            .expect("hyperliquid market quote insert must succeed");
+        assert_eq!(inserted, 1);
+
         let trade_source_event_id = format!("hyperliquid:trade:{suffix}");
         let trade = MarketTrade {
             event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, trade_source_event_id.as_bytes()),
@@ -300,7 +338,47 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
                 .await
                 .expect("market-data readiness must be queryable");
         assert!(readiness.polymarket_quotes >= 1);
+        assert!(readiness.polymarket_trades >= 1);
+        assert!(readiness.hyperliquid_quotes >= 1);
         assert!(readiness.hyperliquid_trades >= 1);
+
+        let replay_data = repository::paper_replay_data(
+            &pool,
+            received_ts - time::Duration::seconds(1),
+            received_ts + time::Duration::seconds(1),
+        )
+        .await
+        .expect("paper replay data must be queryable");
+        assert!(
+            replay_data
+                .liquidations
+                .iter()
+                .any(|row| row.source_event_id == canonical.source_event_id)
+        );
+        assert!(
+            replay_data
+                .polymarket_quotes
+                .iter()
+                .any(|row| row.source_event_id == quote.source_event_id)
+        );
+        assert!(
+            replay_data
+                .polymarket_trades
+                .iter()
+                .any(|row| row.source_event_id == pm_trade.source_event_id)
+        );
+        assert!(
+            replay_data
+                .hyperliquid_quotes
+                .iter()
+                .any(|row| row.source_event_id == hyper_quote.source_event_id)
+        );
+        assert!(
+            replay_data
+                .hyperliquid_trades
+                .iter()
+                .any(|row| row.source_event_id == trade.source_event_id)
+        );
     });
 }
 

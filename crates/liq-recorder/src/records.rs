@@ -1,5 +1,6 @@
 //! Recorder input and read-model records.
 
+use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -241,4 +242,19 @@ pub struct MarketDataReadinessRecord {
     pub hyperliquid_quotes: i64,
     /// Hyperliquid trade rows inside the readiness window.
     pub hyperliquid_trades: i64,
+}
+
+/// Stored data required by one paper replay run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaperReplayDataRecord {
+    /// Canonical liquidation events.
+    pub liquidations: Vec<LiquidationEvent>,
+    /// Polymarket quote rows.
+    pub polymarket_quotes: Vec<MarketQuote>,
+    /// Polymarket trade rows.
+    pub polymarket_trades: Vec<MarketTrade>,
+    /// Hyperliquid quote rows.
+    pub hyperliquid_quotes: Vec<MarketQuote>,
+    /// Hyperliquid trade rows.
+    pub hyperliquid_trades: Vec<MarketTrade>,
 }

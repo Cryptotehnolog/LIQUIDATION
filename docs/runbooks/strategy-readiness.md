@@ -83,18 +83,18 @@
 Сейчас он не является blocker для pre-strategy increment.
 Подробная карточка задачи находится в `docs/backlog/deferred-ideas.md`.
 
-## Следующий Pre-Strategy Increment
+## Выполненные Pre-Strategy Increments
 
-Правильный следующий инкремент:
+Уже реализовано:
 
-1. Polymarket public market-data connector.
+1. Polymarket public market-data connector и bounded probe.
 2. Polymarket recorder schema/tests for market quotes/trades.
-3. Bounded Polymarket live probe without credentials.
-4. Hyperliquid market-data connector for hedge simulation.
-5. Fee/funding config with dated assumptions.
-6. Replay harness skeleton with `Strategy` trait and `input_hash`.
-
-Baseline strategy port из Python начинается только после этих foundations.
+3. Hyperliquid market-data connector for hedge simulation.
+4. Fee/funding/slippage model with versioned assumptions.
+5. Replay harness foundation with `Strategy` trait and `input_hash`.
+6. Baseline strategy port из Python в Rust.
+7. Paper replay runner поверх сохранённых liquidation + Polymarket +
+   Hyperliquid rows.
 
 ## Current Code Gate
 
@@ -130,8 +130,8 @@ cargo run -p liq-cli -- strategy readiness --json
   `StrategySignal`.
 
 Это не значит, что strategy можно запускать по stale данным. Gate намеренно
-оставляет `ready_for_strategy = false`, пока не закрыты актуальные live-data
-conditions:
+оставляет `ready_for_strategy = false`, если не закрыты актуальные live-data
+conditions внутри выбранного окна:
 
 - public Polymarket market-data probe;
 - Hyperliquid hedge market-data probe;
@@ -159,6 +159,47 @@ cargo run -p liq-cli -- strategy readiness explain --database-url "postgres://li
 `polymarket_quotes > 0 OR polymarket_trades > 0` и observed
 `quotes=N trades=M`.
 
+## Paper Replay Run
+
+Команда:
+
+```powershell
+cargo run -p liq-cli -- replay run `
+  --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  --strategy baseline `
+  --market-id "<polymarket-market-id-or-slug>" `
+  --up-token-id "<polymarket-up-token-id>" `
+  --down-token-id "<polymarket-down-token-id>" `
+  --start-unix-ms <start_ms> `
+  --end-unix-ms <end_ms> `
+  --fill-model trade_cross `
+  --hedge-notional-usd 15 `
+  --hyperliquid-taker-bps 5 `
+  --hyperliquid-funding-bps-per-hour 1 `
+  --hedge-slippage-usd 0.10 `
+  --funding-hours 1 `
+  --json
+```
+
+Что делает команда:
+
+- читает `liquidation_events`, `market_quotes`, `market_trades` из TimescaleDB
+  за указанный interval;
+- строит active `BaselineMarket` из явно переданных `market_id`,
+  `up_token_id`, `down_token_id`;
+- прогоняет `BaselineStinkBidStrategy`;
+- проверяет Polymarket entry через выбранный fill model:
+  `trade_cross` по умолчанию, `book_touch` только diagnostic;
+- после Polymarket fill пытается смоделировать Hyperliquid hedge по первой
+  recorded trade внутри hedge window;
+- считает `gross_pnl_usd`, `fees`, `funding`, `slippage`, `net_pnl_usd`,
+  `max_drawdown_usd`, `fill counts` и `unhedged_signals`.
+
+Важное ограничение: `settlement_status = unsettled`. MVP paper replay не
+моделирует финальное settlement Polymarket outcome, потому что в текущей схеме
+нет outcome-resolution feed. Поэтому этот отчёт доказывает execution/cost/risk
+часть стратегии, но ещё не является полным историческим PnL по экспирации.
+
 ## Что улучшить или автоматизировать
 
 CLI gate уже добавлен:
@@ -171,3 +212,7 @@ cargo run -p liq-cli -- strategy readiness --json
 replay config, baseline strategy и safety mode готовы. Если хотя бы один
 condition не закрыт в текущем readiness window, strategy run должен быть
 запрещен.
+
+Следующая автоматизация: добавить market metadata store для Polymarket 5-minute
+BTC рынков, чтобы `market_id`, `up_token_id`, `down_token_id` не передавались
+вручную в `replay run`.

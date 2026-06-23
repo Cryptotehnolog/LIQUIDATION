@@ -10,8 +10,8 @@ use time::OffsetDateTime;
 use crate::records::{
     CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHealthRecord,
     CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal,
-    MarketDataReadinessRecord, RawSourceEvent, SourceOverlapBucket, SourceOverlapReport,
-    SourceOverlapSummary,
+    MarketDataReadinessRecord, PaperReplayDataRecord, RawSourceEvent, SourceOverlapBucket,
+    SourceOverlapReport, SourceOverlapSummary,
 };
 
 /// Metrics aggregation window.
@@ -942,6 +942,122 @@ pub async fn market_data_readiness(
     })
 }
 
+/// Load all persisted rows needed for one paper replay run.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects one of the replay queries.
+pub async fn paper_replay_data(
+    pool: &PgPool,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+) -> Result<PaperReplayDataRecord, sqlx::Error> {
+    let liquidations = sqlx::query_as::<_, LiquidationReplayRow>(
+        r"
+        SELECT
+            event_id,
+            source,
+            source_event_id,
+            source_quality,
+            symbol,
+            side,
+            price,
+            quantity,
+            notional_usd,
+            exchange_ts,
+            received_ts
+        FROM liquidation_events
+        WHERE received_ts >= $1 AND received_ts < $2
+        ORDER BY received_ts ASC, source ASC, source_event_id ASC
+        ",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(LiquidationEvent::try_from)
+    .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PaperReplayDataRecord {
+        liquidations,
+        polymarket_quotes: market_quotes_for_venue(pool, MarketVenue::Polymarket, start, end)
+            .await?,
+        polymarket_trades: market_trades_for_venue(pool, MarketVenue::Polymarket, start, end)
+            .await?,
+        hyperliquid_quotes: market_quotes_for_venue(pool, MarketVenue::Hyperliquid, start, end)
+            .await?,
+        hyperliquid_trades: market_trades_for_venue(pool, MarketVenue::Hyperliquid, start, end)
+            .await?,
+    })
+}
+
+async fn market_quotes_for_venue(
+    pool: &PgPool,
+    venue: MarketVenue,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+) -> Result<Vec<MarketQuote>, sqlx::Error> {
+    sqlx::query_as::<_, MarketQuoteReplayRow>(
+        r"
+        SELECT
+            event_id,
+            venue,
+            source_event_id,
+            instrument_id,
+            symbol,
+            best_bid,
+            best_bid_size,
+            best_ask,
+            best_ask_size,
+            exchange_ts,
+            received_ts
+        FROM market_quotes
+        WHERE venue = $1 AND received_ts >= $2 AND received_ts < $3
+        ORDER BY received_ts ASC, instrument_id ASC, source_event_id ASC
+        ",
+    )
+    .bind(market_venue_as_str(venue))
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await
+    .and_then(|rows| rows.into_iter().map(MarketQuote::try_from).collect())
+}
+
+async fn market_trades_for_venue(
+    pool: &PgPool,
+    venue: MarketVenue,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+) -> Result<Vec<MarketTrade>, sqlx::Error> {
+    sqlx::query_as::<_, MarketTradeReplayRow>(
+        r"
+        SELECT
+            event_id,
+            venue,
+            source_event_id,
+            instrument_id,
+            symbol,
+            side,
+            price,
+            quantity,
+            notional_usd,
+            exchange_ts,
+            received_ts
+        FROM market_trades
+        WHERE venue = $1 AND received_ts >= $2 AND received_ts < $3
+        ORDER BY received_ts ASC, instrument_id ASC, source_event_id ASC
+        ",
+    )
+    .bind(market_venue_as_str(venue))
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await
+    .and_then(|rows| rows.into_iter().map(MarketTrade::try_from).collect())
+}
+
 async fn source_overlap_summary(
     pool: &PgPool,
     source: &str,
@@ -1269,6 +1385,111 @@ struct MarketDataReadinessRow {
     hyperliquid_trades: i64,
 }
 
+#[derive(sqlx::FromRow)]
+struct LiquidationReplayRow {
+    event_id: uuid::Uuid,
+    source: String,
+    source_event_id: String,
+    source_quality: String,
+    symbol: String,
+    side: String,
+    price: rust_decimal::Decimal,
+    quantity: rust_decimal::Decimal,
+    notional_usd: rust_decimal::Decimal,
+    exchange_ts: OffsetDateTime,
+    received_ts: OffsetDateTime,
+}
+
+impl TryFrom<LiquidationReplayRow> for LiquidationEvent {
+    type Error = sqlx::Error;
+
+    fn try_from(row: LiquidationReplayRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            event_id: row.event_id,
+            source: parse_source(&row.source)?,
+            source_event_id: row.source_event_id,
+            source_quality: parse_source_quality(&row.source_quality)?,
+            symbol: row.symbol,
+            side: parse_liquidation_side(&row.side)?,
+            price: row.price,
+            quantity: row.quantity,
+            notional_usd: row.notional_usd,
+            exchange_ts: row.exchange_ts,
+            received_ts: row.received_ts,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct MarketQuoteReplayRow {
+    event_id: uuid::Uuid,
+    venue: String,
+    source_event_id: String,
+    instrument_id: String,
+    symbol: String,
+    best_bid: Option<rust_decimal::Decimal>,
+    best_bid_size: Option<rust_decimal::Decimal>,
+    best_ask: Option<rust_decimal::Decimal>,
+    best_ask_size: Option<rust_decimal::Decimal>,
+    exchange_ts: OffsetDateTime,
+    received_ts: OffsetDateTime,
+}
+
+impl TryFrom<MarketQuoteReplayRow> for MarketQuote {
+    type Error = sqlx::Error;
+
+    fn try_from(row: MarketQuoteReplayRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            event_id: row.event_id,
+            venue: parse_market_venue(&row.venue)?,
+            source_event_id: row.source_event_id,
+            instrument_id: row.instrument_id,
+            symbol: row.symbol,
+            best_bid: row.best_bid,
+            best_bid_size: row.best_bid_size,
+            best_ask: row.best_ask,
+            best_ask_size: row.best_ask_size,
+            exchange_ts: row.exchange_ts,
+            received_ts: row.received_ts,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct MarketTradeReplayRow {
+    event_id: uuid::Uuid,
+    venue: String,
+    source_event_id: String,
+    instrument_id: String,
+    symbol: String,
+    side: String,
+    price: rust_decimal::Decimal,
+    quantity: rust_decimal::Decimal,
+    notional_usd: Option<rust_decimal::Decimal>,
+    exchange_ts: OffsetDateTime,
+    received_ts: OffsetDateTime,
+}
+
+impl TryFrom<MarketTradeReplayRow> for MarketTrade {
+    type Error = sqlx::Error;
+
+    fn try_from(row: MarketTradeReplayRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            event_id: row.event_id,
+            venue: parse_market_venue(&row.venue)?,
+            source_event_id: row.source_event_id,
+            instrument_id: row.instrument_id,
+            symbol: row.symbol,
+            side: parse_trade_side(&row.side)?,
+            price: row.price,
+            quantity: row.quantity,
+            notional_usd: row.notional_usd,
+            exchange_ts: row.exchange_ts,
+            received_ts: row.received_ts,
+        })
+    }
+}
+
 impl From<SourceOverlapBucketRow> for SourceOverlapBucket {
     fn from(row: SourceOverlapBucketRow) -> Self {
         Self {
@@ -1287,6 +1508,62 @@ fn split_symbols_csv(symbols: &str) -> Vec<String> {
     }
 
     symbols.split(',').map(str::to_owned).collect()
+}
+
+fn parse_source(value: &str) -> Result<Source, sqlx::Error> {
+    match value {
+        "bybit" => Ok(Source::Bybit),
+        "binance" => Ok(Source::Binance),
+        "okx" => Ok(Source::Okx),
+        "polymarket" => Ok(Source::Polymarket),
+        "hyperliquid" => Ok(Source::Hyperliquid),
+        _ => Err(storage_decode_error("source", value)),
+    }
+}
+
+fn parse_source_quality(value: &str) -> Result<SourceQuality, sqlx::Error> {
+    match value {
+        "all_events" => Ok(SourceQuality::AllEvents),
+        "snapshot_only" => Ok(SourceQuality::SnapshotOnly),
+        "derived" => Ok(SourceQuality::Derived),
+        "websocket_only" => Ok(SourceQuality::WebsocketOnly),
+        _ => Err(storage_decode_error("source_quality", value)),
+    }
+}
+
+fn parse_liquidation_side(value: &str) -> Result<LiquidationSide, sqlx::Error> {
+    match value {
+        "long" => Ok(LiquidationSide::Long),
+        "short" => Ok(LiquidationSide::Short),
+        _ => Err(storage_decode_error("liquidation_side", value)),
+    }
+}
+
+fn parse_market_venue(value: &str) -> Result<MarketVenue, sqlx::Error> {
+    match value {
+        "polymarket" => Ok(MarketVenue::Polymarket),
+        "hyperliquid" => Ok(MarketVenue::Hyperliquid),
+        _ => Err(storage_decode_error("market_venue", value)),
+    }
+}
+
+fn parse_trade_side(value: &str) -> Result<TradeSide, sqlx::Error> {
+    match value {
+        "buy" => Ok(TradeSide::Buy),
+        "sell" => Ok(TradeSide::Sell),
+        "unknown" => Ok(TradeSide::Unknown),
+        _ => Err(storage_decode_error("trade_side", value)),
+    }
+}
+
+fn storage_decode_error(column: &'static str, value: &str) -> sqlx::Error {
+    sqlx::Error::ColumnDecode {
+        index: column.to_owned(),
+        source: Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("unsupported {column} value '{value}'"),
+        )),
+    }
 }
 
 fn source_as_str(source: Source) -> &'static str {

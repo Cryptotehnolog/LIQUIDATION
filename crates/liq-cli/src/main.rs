@@ -3,7 +3,7 @@
 mod dashboard;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use dashboard::DashboardArgs;
 use liq_collector::{
     CollectorRunSettings, CollectorSettings, CollectorSource, SourceProbe, run_live_collector,
@@ -12,9 +12,11 @@ use liq_collector::{
 use liq_connectors::okx::OkxInstrumentCache;
 use liq_recorder::{migrations, repository, schema};
 use liq_replay::{
-    DryRunRequest, MarketDataReadiness, StrategyReadinessExplanation, StrategyReadinessReport,
+    BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness, PaperReplayInput,
+    PaperReplayReport, StrategyReadinessExplanation, StrategyReadinessReport, run_paper_replay,
     validate_dry_run,
 };
+use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -83,6 +85,63 @@ enum ReplayCommand {
         #[arg(long)]
         end_unix_ms: i64,
     },
+    /// Run deterministic paper replay over stored events.
+    Run(Box<ReplayRunOptions>),
+}
+
+#[derive(Debug, Args)]
+struct ReplayRunOptions {
+    /// Strategy id. MVP supports `baseline`.
+    #[arg(long, default_value = "baseline")]
+    strategy: String,
+    /// Postgres connection URL. Defaults to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+    /// Active Polymarket market id or slug.
+    #[arg(long)]
+    market_id: String,
+    /// Polymarket UP outcome token id.
+    #[arg(long)]
+    up_token_id: String,
+    /// Polymarket DOWN outcome token id.
+    #[arg(long)]
+    down_token_id: String,
+    /// Inclusive replay start timestamp in milliseconds.
+    #[arg(long)]
+    start_unix_ms: i64,
+    /// Exclusive replay end timestamp in milliseconds.
+    #[arg(long)]
+    end_unix_ms: i64,
+    /// Polymarket entry fill model: `trade_cross` or `book_touch`.
+    #[arg(long, default_value = "trade_cross")]
+    fill_model: String,
+    /// Paper hedge notional in USD for each filled Polymarket signal.
+    #[arg(long, default_value = "15")]
+    hedge_notional_usd: Decimal,
+    /// Conservative hedge slippage penalty per hedge fill, in USD.
+    #[arg(long, default_value = "0")]
+    hedge_slippage_usd: Decimal,
+    /// Funding duration charged per hedge fill.
+    #[arg(long, default_value = "0")]
+    funding_hours: Decimal,
+    /// Polymarket maker fee in basis points.
+    #[arg(long, default_value = "0")]
+    polymarket_maker_bps: Decimal,
+    /// Polymarket taker fee in basis points.
+    #[arg(long, default_value = "0")]
+    polymarket_taker_bps: Decimal,
+    /// Hyperliquid maker fee in basis points.
+    #[arg(long, default_value = "0")]
+    hyperliquid_maker_bps: Decimal,
+    /// Hyperliquid taker fee in basis points.
+    #[arg(long, default_value = "0")]
+    hyperliquid_taker_bps: Decimal,
+    /// Hyperliquid funding or holding cost in basis points per hour.
+    #[arg(long, default_value = "0")]
+    hyperliquid_funding_bps_per_hour: Decimal,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -271,7 +330,7 @@ async fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Db { command } => handle_db_command(command).await?,
-        Command::Replay { command } => handle_replay_command(command)?,
+        Command::Replay { command } => handle_replay_command(command).await?,
         Command::Collector { command } => handle_collector_command(command).await?,
         Command::Strategy { command } => handle_strategy_command(&command).await?,
     }
@@ -425,7 +484,7 @@ async fn handle_db_command(command: DbCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
+async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
     match command {
         ReplayCommand::DryRun {
             source,
@@ -441,6 +500,134 @@ fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
             info!("replay dry-run validation passed");
             println!("dry-run ok");
         }
+        ReplayCommand::Run(options) => {
+            let report = run_replay_from_database(ReplayRunArgs {
+                strategy: options.strategy,
+                database_url: options.database_url,
+                market_id: options.market_id,
+                up_token_id: options.up_token_id,
+                down_token_id: options.down_token_id,
+                start_unix_ms: options.start_unix_ms,
+                end_unix_ms: options.end_unix_ms,
+                fill_model: options.fill_model,
+                hedge_notional_usd: options.hedge_notional_usd,
+                hedge_slippage_usd: options.hedge_slippage_usd,
+                funding_hours: options.funding_hours,
+                polymarket_maker_bps: options.polymarket_maker_bps,
+                polymarket_taker_bps: options.polymarket_taker_bps,
+                hyperliquid_maker_bps: options.hyperliquid_maker_bps,
+                hyperliquid_taker_bps: options.hyperliquid_taker_bps,
+                hyperliquid_funding_bps_per_hour: options.hyperliquid_funding_bps_per_hour,
+            })
+            .await?;
+            print_replay_report(&report, options.json)?;
+        }
+    }
+    Ok(())
+}
+
+struct ReplayRunArgs {
+    strategy: String,
+    database_url: String,
+    market_id: String,
+    up_token_id: String,
+    down_token_id: String,
+    start_unix_ms: i64,
+    end_unix_ms: i64,
+    fill_model: String,
+    hedge_notional_usd: Decimal,
+    hedge_slippage_usd: Decimal,
+    funding_hours: Decimal,
+    polymarket_maker_bps: Decimal,
+    polymarket_taker_bps: Decimal,
+    hyperliquid_maker_bps: Decimal,
+    hyperliquid_taker_bps: Decimal,
+    hyperliquid_funding_bps_per_hour: Decimal,
+}
+
+async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperReplayReport> {
+    if args.strategy != "baseline" {
+        anyhow::bail!(
+            "unsupported replay strategy '{}'; supported: baseline",
+            args.strategy
+        );
+    }
+    let request = DryRunRequest {
+        sources: vec![
+            "bybit".to_owned(),
+            "polymarket".to_owned(),
+            "hyperliquid".to_owned(),
+        ],
+        start_unix_ms: args.start_unix_ms,
+        end_unix_ms: args.end_unix_ms,
+    };
+    validate_dry_run(&request).context("replay run validation failed")?;
+
+    let fill_model = parse_fill_model(&args.fill_model)?;
+    let start = offset_from_unix_ms(args.start_unix_ms)?;
+    let end = offset_from_unix_ms(args.end_unix_ms)?;
+    let pool = connect(&args.database_url).await?;
+    let data = repository::paper_replay_data(&pool, start, end)
+        .await
+        .context("failed to read paper replay data")?;
+
+    let input = PaperReplayInput {
+        market: BaselineMarket {
+            market_id: args.market_id,
+            up_token_id: args.up_token_id,
+            down_token_id: args.down_token_id,
+            start_unix_ms: args.start_unix_ms,
+            end_unix_ms: args.end_unix_ms,
+        },
+        liquidations: data.liquidations,
+        polymarket_quotes: data.polymarket_quotes,
+        polymarket_trades: data.polymarket_trades,
+        hyperliquid_quotes: data.hyperliquid_quotes,
+        hyperliquid_trades: data.hyperliquid_trades,
+        fill_model,
+        fee_schedule: FeeSchedule {
+            version: "cli_fee_schedule_v1".to_owned(),
+            polymarket_maker_bps: args.polymarket_maker_bps,
+            polymarket_taker_bps: args.polymarket_taker_bps,
+            hyperliquid_maker_bps: args.hyperliquid_maker_bps,
+            hyperliquid_taker_bps: args.hyperliquid_taker_bps,
+            hyperliquid_funding_bps_per_hour: args.hyperliquid_funding_bps_per_hour,
+        },
+        hedge_notional_usd: args.hedge_notional_usd,
+        hedge_slippage_usd: args.hedge_slippage_usd,
+        funding_hours: args.funding_hours,
+    };
+    run_paper_replay(&input).context("paper replay failed")
+}
+
+fn parse_fill_model(value: &str) -> anyhow::Result<FillModel> {
+    match value {
+        "trade_cross" => Ok(FillModel::TradeCross),
+        "book_touch" => Ok(FillModel::BookTouch),
+        _ => anyhow::bail!("unsupported fill model '{value}'; supported: trade_cross, book_touch"),
+    }
+}
+
+fn offset_from_unix_ms(unix_ms: i64) -> anyhow::Result<OffsetDateTime> {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(unix_ms) * 1_000_000)
+        .with_context(|| format!("invalid unix millisecond timestamp: {unix_ms}"))
+}
+
+fn print_replay_report(report: &PaperReplayReport, json: bool) -> anyhow::Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(report).context("failed to serialize replay report")?
+        );
+    } else {
+        println!("strategy_version: {}", report.strategy_version);
+        println!("signal_count: {}", report.signal_count);
+        println!("polymarket_fills: {}", report.polymarket_fills);
+        println!("hedge_fills: {}", report.hedge_fills);
+        println!("unhedged_signals: {}", report.unhedged_signals);
+        println!("gross_pnl_usd: {}", report.gross_pnl_usd);
+        println!("net_pnl_usd: {}", report.net_pnl_usd);
+        println!("max_drawdown_usd: {}", report.max_drawdown_usd);
     }
     Ok(())
 }
