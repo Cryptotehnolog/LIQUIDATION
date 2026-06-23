@@ -11,7 +11,10 @@ use liq_collector::{
 };
 use liq_connectors::okx::OkxInstrumentCache;
 use liq_recorder::{migrations, repository, schema};
-use liq_replay::{DryRunRequest, MarketDataReadiness, StrategyReadinessReport, validate_dry_run};
+use liq_replay::{
+    DryRunRequest, MarketDataReadiness, StrategyReadinessExplanation, StrategyReadinessReport,
+    validate_dry_run,
+};
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -222,6 +225,25 @@ enum CollectorCommand {
 enum StrategyCommand {
     /// Print fail-closed strategy readiness report.
     Readiness {
+        /// Optional nested readiness command.
+        #[command(subcommand)]
+        command: Option<ReadinessCommand>,
+        /// Optional Postgres connection URL. Defaults to `DATABASE_URL` when set.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: Option<String>,
+        /// Market-data evidence window in minutes when a database is configured.
+        #[arg(long, default_value_t = 60)]
+        window_minutes: i64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReadinessCommand {
+    /// Explain readiness conditions with observed counts and pass/fail state.
+    Explain {
         /// Optional Postgres connection URL. Defaults to `DATABASE_URL` when set.
         #[arg(long, env = "DATABASE_URL")]
         database_url: Option<String>,
@@ -260,44 +282,114 @@ async fn run() -> anyhow::Result<()> {
 async fn handle_strategy_command(command: &StrategyCommand) -> anyhow::Result<()> {
     match command {
         StrategyCommand::Readiness {
+            command,
             database_url,
             window_minutes,
             json,
         } => {
-            let report = if let Some(database_url) = database_url {
-                let pool = connect(database_url).await?;
-                let readiness = repository::market_data_readiness(
-                    &pool,
-                    repository::MetricsWindow::minutes((*window_minutes).max(1)),
-                )
-                .await
-                .context("failed to read market-data readiness")?;
-                StrategyReadinessReport::from_market_data(MarketDataReadiness {
-                    polymarket_quotes: readiness.polymarket_quotes,
-                    polymarket_trades: readiness.polymarket_trades,
-                    hyperliquid_quotes: readiness.hyperliquid_quotes,
-                    hyperliquid_trades: readiness.hyperliquid_trades,
-                })
+            if let Some(ReadinessCommand::Explain {
+                database_url,
+                window_minutes,
+                json,
+            }) = command
+            {
+                let explanation =
+                    strategy_readiness_explanation(database_url.as_deref(), *window_minutes)
+                        .await?;
+                print_strategy_readiness_explanation(&explanation, *json)?;
             } else {
-                StrategyReadinessReport::current_foundation()
-            };
-            if *json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&report)
-                        .context("failed to serialize strategy readiness report")?
-                );
-            } else {
-                println!("ready_for_strategy: {}", report.ready_for_strategy);
-                println!("capabilities:");
-                for item in &report.capabilities {
-                    println!("- {}: {} ({})", item.id, item.status, item.note);
-                }
-                println!("blockers:");
-                for item in &report.blockers {
-                    println!("- {}: {} ({})", item.id, item.status, item.note);
-                }
+                let report =
+                    strategy_readiness_report(database_url.as_deref(), *window_minutes).await?;
+                print_strategy_readiness_report(&report, *json)?;
             }
+        }
+    }
+    Ok(())
+}
+
+async fn strategy_readiness_report(
+    database_url: Option<&str>,
+    window_minutes: i64,
+) -> anyhow::Result<StrategyReadinessReport> {
+    let Some(database_url) = database_url else {
+        return Ok(StrategyReadinessReport::current_foundation());
+    };
+    let readiness = read_market_data_readiness(database_url, window_minutes).await?;
+    Ok(StrategyReadinessReport::from_market_data(readiness))
+}
+
+async fn strategy_readiness_explanation(
+    database_url: Option<&str>,
+    window_minutes: i64,
+) -> anyhow::Result<StrategyReadinessExplanation> {
+    let Some(database_url) = database_url else {
+        return Ok(StrategyReadinessExplanation::current_foundation());
+    };
+    let readiness = read_market_data_readiness(database_url, window_minutes).await?;
+    Ok(StrategyReadinessExplanation::from_market_data(readiness))
+}
+
+async fn read_market_data_readiness(
+    database_url: &str,
+    window_minutes: i64,
+) -> anyhow::Result<MarketDataReadiness> {
+    let pool = connect(database_url).await?;
+    let readiness = repository::market_data_readiness(
+        &pool,
+        repository::MetricsWindow::minutes(window_minutes.max(1)),
+    )
+    .await
+    .context("failed to read market-data readiness")?;
+    Ok(MarketDataReadiness {
+        polymarket_quotes: readiness.polymarket_quotes,
+        polymarket_trades: readiness.polymarket_trades,
+        hyperliquid_quotes: readiness.hyperliquid_quotes,
+        hyperliquid_trades: readiness.hyperliquid_trades,
+    })
+}
+
+fn print_strategy_readiness_report(
+    report: &StrategyReadinessReport,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(report)
+                .context("failed to serialize strategy readiness report")?
+        );
+    } else {
+        println!("ready_for_strategy: {}", report.ready_for_strategy);
+        println!("capabilities:");
+        for item in &report.capabilities {
+            println!("- {}: {} ({})", item.id, item.status, item.note);
+        }
+        println!("blockers:");
+        for item in &report.blockers {
+            println!("- {}: {} ({})", item.id, item.status, item.note);
+        }
+    }
+    Ok(())
+}
+
+fn print_strategy_readiness_explanation(
+    explanation: &StrategyReadinessExplanation,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(explanation)
+                .context("failed to serialize strategy readiness explanation")?
+        );
+    } else {
+        print_strategy_readiness_report(&explanation.report, false)?;
+        println!("conditions:");
+        for condition in &explanation.conditions {
+            println!(
+                "- {}: passed={} required='{}' observed='{}'",
+                condition.id, condition.passed, condition.required, condition.observed
+            );
         }
     }
     Ok(())

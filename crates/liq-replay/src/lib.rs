@@ -1,9 +1,10 @@
 //! Deterministic paper replay foundation.
 
+use liq_domain::{LiquidationEvent, LiquidationSide, MarketQuote, MarketVenue};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use thiserror::Error;
 
 /// Dry-run request.
@@ -392,6 +393,338 @@ pub struct StrategySignal {
     pub created_unix_ms: i64,
     /// Signal expiry timestamp in milliseconds.
     pub expires_unix_ms: i64,
+    /// Prediction-market outcome targeted by the baseline strategy.
+    pub outcome: Option<PredictionOutcome>,
+    /// Inverse Hyperliquid hedge side implied by the prediction outcome.
+    pub hedge_side: Option<HedgeSide>,
+    /// Liquidation signal type that caused this strategy signal.
+    pub source_signal: Option<LiquidationSignalKind>,
+    /// Dominant liquidation notional that crossed the strategy threshold.
+    pub source_notional_usd: Option<Decimal>,
+}
+
+/// Binary prediction-market outcome used by the baseline BTC up/down strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PredictionOutcome {
+    /// BTC UP outcome.
+    Up,
+    /// BTC DOWN outcome.
+    Down,
+}
+
+/// Paper hedge side for the inverse Hyperliquid leg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HedgeSide {
+    /// Long hedge.
+    Long,
+    /// Short hedge.
+    Short,
+}
+
+/// Dominant liquidation signal kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiquidationSignalKind {
+    /// Long liquidations dominate, bearish, target DOWN.
+    LongLiquidation,
+    /// Short liquidations dominate, bullish, target UP.
+    ShortLiquidation,
+}
+
+/// Active Polymarket BTC 5-minute market metadata required by replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaselineMarket {
+    /// Market id or slug.
+    pub market_id: String,
+    /// Token id for the UP outcome.
+    pub up_token_id: String,
+    /// Token id for the DOWN outcome.
+    pub down_token_id: String,
+    /// Inclusive market start timestamp in milliseconds.
+    pub start_unix_ms: i64,
+    /// Exclusive market end timestamp in milliseconds.
+    pub end_unix_ms: i64,
+}
+
+/// Event stream consumed by the baseline paper strategy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BaselineEvent {
+    /// A new Polymarket BTC up/down market became active.
+    MarketOpened(BaselineMarket),
+    /// Canonical liquidation event.
+    Liquidation(LiquidationEvent),
+    /// Polymarket top-of-book quote for an outcome token.
+    PolymarketQuote(MarketQuote),
+}
+
+/// Static baseline strategy parameters ported from the original Python bot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaselineStrategyConfig {
+    /// Minimum dominant liquidation notional for a signal.
+    pub liquidation_threshold_min_usd: Decimal,
+    /// Maximum dominant liquidation notional; above this the wave is considered missed.
+    pub liquidation_threshold_max_usd: Decimal,
+    /// Rolling liquidation aggregation window in milliseconds.
+    pub liquidation_window_ms: i64,
+    /// Pullback percentage applied to the observed Polymarket best ask.
+    pub pullback_pct: Decimal,
+    /// Minimum allowed Polymarket limit price.
+    pub min_polymarket_price: Decimal,
+    /// Paper USD allocated to the Polymarket leg.
+    pub polymarket_usd_per_position: Decimal,
+    /// Cancel or avoid unfilled orders this many milliseconds before market expiry.
+    pub order_cancel_window_ms: i64,
+}
+
+impl Default for BaselineStrategyConfig {
+    fn default() -> Self {
+        Self {
+            liquidation_threshold_min_usd: Decimal::new(25_000, 0),
+            liquidation_threshold_max_usd: Decimal::new(100_000, 0),
+            liquidation_window_ms: 10 * 60 * 1_000,
+            pullback_pct: Decimal::new(30, 2),
+            min_polymarket_price: Decimal::new(1, 2),
+            polymarket_usd_per_position: Decimal::new(15, 0),
+            order_cancel_window_ms: 60 * 1_000,
+        }
+    }
+}
+
+/// Baseline paper strategy: liquidation cascade signal, Polymarket stink bid,
+/// and inverse Hyperliquid hedge intent.
+#[derive(Debug, Clone)]
+pub struct BaselineStinkBidStrategy {
+    config: BaselineStrategyConfig,
+    current_market: Option<BaselineMarket>,
+    latest_polymarket_quotes: HashMap<String, MarketQuote>,
+    liquidation_window: VecDeque<LiquidationWindowItem>,
+    signal_fired_for_market: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LiquidationWindowItem {
+    unix_ms: i64,
+    side: LiquidationSide,
+    notional_usd: Decimal,
+}
+
+impl BaselineStinkBidStrategy {
+    /// Create a baseline strategy with explicit static parameters.
+    #[must_use]
+    pub fn new(config: BaselineStrategyConfig) -> Self {
+        Self {
+            config,
+            current_market: None,
+            latest_polymarket_quotes: HashMap::new(),
+            liquidation_window: VecDeque::new(),
+            signal_fired_for_market: false,
+        }
+    }
+
+    fn on_market_opened(&mut self, market: BaselineMarket) {
+        self.current_market = Some(market);
+        self.signal_fired_for_market = false;
+        self.liquidation_window.clear();
+    }
+
+    fn on_polymarket_quote(&mut self, quote: MarketQuote) {
+        if quote.venue == MarketVenue::Polymarket {
+            self.latest_polymarket_quotes
+                .insert(quote.instrument_id.clone(), quote);
+        }
+    }
+
+    fn on_liquidation(&mut self, event: &LiquidationEvent) -> Vec<StrategySignal> {
+        if self.signal_fired_for_market || !is_btc_symbol(&event.symbol) {
+            return Vec::new();
+        }
+
+        let event_unix_ms = event_ts_ms(event);
+        self.liquidation_window.push_back(LiquidationWindowItem {
+            unix_ms: event_unix_ms,
+            side: event.side,
+            notional_usd: event.notional_usd,
+        });
+        self.prune_liquidations(event_unix_ms);
+
+        let Some(market) = self.current_market.as_ref() else {
+            return Vec::new();
+        };
+        if market.end_unix_ms - event_unix_ms <= self.config.order_cancel_window_ms {
+            return Vec::new();
+        }
+
+        let long_total = self.window_notional(LiquidationSide::Long);
+        let short_total = self.window_notional(LiquidationSide::Short);
+        let Some((signal_kind, notional, outcome, hedge_side, token_id)) =
+            self.select_signal(long_total, short_total, market)
+        else {
+            return Vec::new();
+        };
+        let Some(quote) = self.latest_polymarket_quotes.get(token_id) else {
+            return Vec::new();
+        };
+        let Some(best_ask) = quote.best_ask else {
+            return Vec::new();
+        };
+        let limit_price = self.stink_bid_price(best_ask);
+        let Some(quantity) =
+            calculate_polymarket_shares(self.config.polymarket_usd_per_position, limit_price)
+        else {
+            return Vec::new();
+        };
+
+        self.signal_fired_for_market = true;
+        vec![StrategySignal {
+            signal_id: format!("{}:{}:{}", Self::VERSION, market.market_id, event_unix_ms),
+            symbol: token_id.to_owned(),
+            side: OrderSide::Buy,
+            limit_price,
+            quantity,
+            created_unix_ms: event_unix_ms,
+            expires_unix_ms: market.end_unix_ms - self.config.order_cancel_window_ms,
+            outcome: Some(outcome),
+            hedge_side: Some(hedge_side),
+            source_signal: Some(signal_kind),
+            source_notional_usd: Some(notional),
+        }]
+    }
+
+    fn prune_liquidations(&mut self, now_unix_ms: i64) {
+        let cutoff = now_unix_ms - self.config.liquidation_window_ms;
+        while self
+            .liquidation_window
+            .front()
+            .is_some_and(|item| item.unix_ms < cutoff)
+        {
+            self.liquidation_window.pop_front();
+        }
+    }
+
+    fn window_notional(&self, side: LiquidationSide) -> Decimal {
+        self.liquidation_window
+            .iter()
+            .filter(|item| item.side == side)
+            .map(|item| item.notional_usd)
+            .sum()
+    }
+
+    fn select_signal<'a>(
+        &self,
+        long_total: Decimal,
+        short_total: Decimal,
+        market: &'a BaselineMarket,
+    ) -> Option<(
+        LiquidationSignalKind,
+        Decimal,
+        PredictionOutcome,
+        HedgeSide,
+        &'a str,
+    )> {
+        if within_signal_band(
+            long_total,
+            self.config.liquidation_threshold_min_usd,
+            self.config.liquidation_threshold_max_usd,
+        ) && long_total > short_total
+        {
+            return Some((
+                LiquidationSignalKind::LongLiquidation,
+                long_total,
+                PredictionOutcome::Down,
+                HedgeSide::Long,
+                &market.down_token_id,
+            ));
+        }
+        if within_signal_band(
+            short_total,
+            self.config.liquidation_threshold_min_usd,
+            self.config.liquidation_threshold_max_usd,
+        ) && short_total > long_total
+        {
+            return Some((
+                LiquidationSignalKind::ShortLiquidation,
+                short_total,
+                PredictionOutcome::Up,
+                HedgeSide::Short,
+                &market.up_token_id,
+            ));
+        }
+        None
+    }
+
+    fn stink_bid_price(&self, best_ask: Decimal) -> Decimal {
+        let candidate = (best_ask * (Decimal::ONE - self.config.pullback_pct)).round_dp(4);
+        candidate.max(self.config.min_polymarket_price)
+    }
+
+    const VERSION: &'static str = "baseline_stink_bid_v1";
+}
+
+impl Strategy<BaselineEvent> for BaselineStinkBidStrategy {
+    fn version(&self) -> &'static str {
+        Self::VERSION
+    }
+
+    fn on_event(&mut self, event: &BaselineEvent) -> Vec<StrategySignal> {
+        match event {
+            BaselineEvent::MarketOpened(market) => {
+                self.on_market_opened(market.clone());
+                Vec::new()
+            }
+            BaselineEvent::Liquidation(event) => self.on_liquidation(event),
+            BaselineEvent::PolymarketQuote(quote) => {
+                self.on_polymarket_quote(quote.clone());
+                Vec::new()
+            }
+        }
+    }
+}
+
+fn is_btc_symbol(symbol: &str) -> bool {
+    symbol.to_ascii_uppercase().contains("BTC")
+}
+
+fn event_ts_ms(event: &LiquidationEvent) -> i64 {
+    let millis = event.received_ts.unix_timestamp_nanos() / 1_000_000;
+    match i64::try_from(millis) {
+        Ok(value) => value,
+        Err(_) if millis.is_negative() => i64::MIN,
+        Err(_) => i64::MAX,
+    }
+}
+
+fn within_signal_band(value: Decimal, min: Decimal, max: Decimal) -> bool {
+    value >= min && value <= max
+}
+
+fn calculate_polymarket_shares(dollar_amount: Decimal, price: Decimal) -> Option<Decimal> {
+    if price <= Decimal::ZERO {
+        return None;
+    }
+
+    let minimum_shares = Decimal::new(5, 0);
+    let minimum_notional = Decimal::ONE;
+    let share_step = Decimal::new(1, 1);
+
+    let mut shares = (dollar_amount / price).round_dp(1);
+    if shares < minimum_shares {
+        shares = minimum_shares;
+    }
+    if shares * price < minimum_notional {
+        let shares_for_dollar = (minimum_notional / price).round_dp(1);
+        shares = shares_for_dollar.max(minimum_shares);
+    }
+    if shares * price < minimum_notional {
+        shares += share_step;
+    }
+
+    if shares * price < minimum_notional || shares < minimum_shares {
+        None
+    } else {
+        Some(shares)
+    }
 }
 
 /// Replay inputs included in deterministic hashing.
@@ -459,6 +792,30 @@ pub struct MarketDataReadiness {
     pub hyperliquid_trades: i64,
 }
 
+/// Detailed readiness output for operators and dashboard/debug tooling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyReadinessExplanation {
+    /// Normal readiness report.
+    pub report: StrategyReadinessReport,
+    /// Raw storage evidence used by readiness conditions.
+    pub evidence: MarketDataReadiness,
+    /// Per-condition explanation with required and observed values.
+    pub conditions: Vec<ReadinessCondition>,
+}
+
+/// One machine-readable readiness condition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadinessCondition {
+    /// Stable condition id.
+    pub id: String,
+    /// Required condition.
+    pub required: String,
+    /// Observed value.
+    pub observed: String,
+    /// Whether the condition passed.
+    pub passed: bool,
+}
+
 impl MarketDataReadiness {
     fn has_polymarket_probe(self) -> bool {
         self.polymarket_quotes > 0 || self.polymarket_trades > 0
@@ -496,19 +853,19 @@ impl StrategyReadinessReport {
                     "paper_only_safety_gate",
                     "live trading fails closed by default",
                 ),
+                ready(
+                    "baseline_strategy_port",
+                    "baseline liquidation stink-bid strategy is implemented in Rust",
+                ),
             ],
             blockers: vec![
                 blocked(
                     "polymarket_live_probe",
-                    "public Polymarket recorder probe is not implemented yet",
+                    "no Polymarket market-data rows observed in readiness window",
                 ),
                 blocked(
                     "hyperliquid_market_data_probe",
-                    "Hyperliquid hedge market-data probe is not implemented yet",
-                ),
-                blocked(
-                    "baseline_strategy_port",
-                    "Python baseline strategy has not been ported to Rust yet",
+                    "no Hyperliquid quote/trade rows observed in readiness window",
                 ),
             ],
         }
@@ -536,6 +893,57 @@ impl StrategyReadinessReport {
 
         report.ready_for_strategy = report.blockers.is_empty();
         report
+    }
+}
+
+impl StrategyReadinessExplanation {
+    /// Build an explain report from observed market-data evidence.
+    #[must_use]
+    pub fn from_market_data(readiness: MarketDataReadiness) -> Self {
+        let report = StrategyReadinessReport::from_market_data(readiness);
+        let conditions = vec![
+            ReadinessCondition {
+                id: "baseline_strategy_port".to_owned(),
+                required: "code capability present".to_owned(),
+                observed: "implemented".to_owned(),
+                passed: true,
+            },
+            ReadinessCondition {
+                id: "polymarket_live_probe".to_owned(),
+                required: "polymarket_quotes > 0 OR polymarket_trades > 0".to_owned(),
+                observed: format!(
+                    "quotes={} trades={}",
+                    readiness.polymarket_quotes, readiness.polymarket_trades
+                ),
+                passed: readiness.has_polymarket_probe(),
+            },
+            ReadinessCondition {
+                id: "hyperliquid_market_data_probe".to_owned(),
+                required: "hyperliquid_quotes > 0 AND hyperliquid_trades > 0".to_owned(),
+                observed: format!(
+                    "quotes={} trades={}",
+                    readiness.hyperliquid_quotes, readiness.hyperliquid_trades
+                ),
+                passed: readiness.has_hyperliquid_probe(),
+            },
+        ];
+
+        Self {
+            report,
+            evidence: readiness,
+            conditions,
+        }
+    }
+
+    /// Build an explain report without database evidence.
+    #[must_use]
+    pub fn current_foundation() -> Self {
+        Self::from_market_data(MarketDataReadiness {
+            polymarket_quotes: 0,
+            polymarket_trades: 0,
+            hyperliquid_quotes: 0,
+            hyperliquid_trades: 0,
+        })
     }
 }
 
@@ -568,6 +976,7 @@ fn blocked(id: &str, note: &str) -> ReadinessItem {
 mod tests {
     use super::*;
     use rust_decimal::Decimal;
+    use time::OffsetDateTime;
 
     #[test]
     fn dry_run_rejects_empty_source_set() {
@@ -700,6 +1109,12 @@ mod tests {
         );
         assert!(
             report
+                .capabilities
+                .iter()
+                .any(|item| item.id == "baseline_strategy_port")
+        );
+        assert!(
+            report
                 .blockers
                 .iter()
                 .any(|item| item.id == "polymarket_live_probe")
@@ -715,7 +1130,7 @@ mod tests {
             hyperliquid_trades: 1,
         });
 
-        assert!(!report.ready_for_strategy);
+        assert!(report.ready_for_strategy);
         assert!(
             report
                 .capabilities
@@ -740,12 +1155,7 @@ mod tests {
                 .iter()
                 .all(|item| item.id != "hyperliquid_market_data_probe")
         );
-        assert!(
-            report
-                .blockers
-                .iter()
-                .any(|item| item.id == "baseline_strategy_port")
-        );
+        assert!(report.blockers.is_empty());
     }
 
     #[test]
@@ -777,6 +1187,99 @@ mod tests {
         );
     }
 
+    #[test]
+    fn baseline_strategy_buys_down_after_dominant_long_liquidations() {
+        let market = baseline_market();
+        let mut strategy = BaselineStinkBidStrategy::new(BaselineStrategyConfig::default());
+
+        assert!(
+            strategy
+                .on_event(&BaselineEvent::MarketOpened(market.clone()))
+                .is_empty()
+        );
+        assert!(
+            strategy
+                .on_event(&BaselineEvent::PolymarketQuote(polymarket_quote(
+                    &market.down_token_id,
+                    Decimal::new(50, 2),
+                    1_000
+                )))
+                .is_empty()
+        );
+
+        let signals = strategy.on_event(&BaselineEvent::Liquidation(liquidation(
+            LiquidationSide::Long,
+            Decimal::new(25_000, 0),
+            1_500,
+        )));
+
+        assert_eq!(signals.len(), 1);
+        let signal = &signals[0];
+        assert_eq!(signal.symbol, market.down_token_id);
+        assert_eq!(signal.side, OrderSide::Buy);
+        assert_eq!(signal.limit_price, Decimal::new(35, 2));
+        assert_eq!(signal.quantity, Decimal::new(429, 1));
+        assert_eq!(signal.outcome, Some(PredictionOutcome::Down));
+        assert_eq!(signal.hedge_side, Some(HedgeSide::Long));
+        assert_eq!(
+            signal.source_signal,
+            Some(LiquidationSignalKind::LongLiquidation)
+        );
+    }
+
+    #[test]
+    fn baseline_strategy_buys_up_after_dominant_short_liquidations() {
+        let market = baseline_market();
+        let mut strategy = BaselineStinkBidStrategy::new(BaselineStrategyConfig::default());
+
+        strategy.on_event(&BaselineEvent::MarketOpened(market.clone()));
+        strategy.on_event(&BaselineEvent::PolymarketQuote(polymarket_quote(
+            &market.up_token_id,
+            Decimal::new(40, 2),
+            1_000,
+        )));
+
+        let signals = strategy.on_event(&BaselineEvent::Liquidation(liquidation(
+            LiquidationSide::Short,
+            Decimal::new(30_000, 0),
+            1_500,
+        )));
+
+        assert_eq!(signals.len(), 1);
+        let signal = &signals[0];
+        assert_eq!(signal.symbol, market.up_token_id);
+        assert_eq!(signal.limit_price, Decimal::new(28, 2));
+        assert_eq!(signal.outcome, Some(PredictionOutcome::Up));
+        assert_eq!(signal.hedge_side, Some(HedgeSide::Short));
+        assert_eq!(
+            signal.source_signal,
+            Some(LiquidationSignalKind::ShortLiquidation)
+        );
+    }
+
+    #[test]
+    fn readiness_explain_reports_counts_conditions_and_baseline_capability() {
+        let explanation = StrategyReadinessExplanation::from_market_data(MarketDataReadiness {
+            polymarket_quotes: 1,
+            polymarket_trades: 0,
+            hyperliquid_quotes: 3,
+            hyperliquid_trades: 4,
+        });
+
+        assert!(explanation.report.ready_for_strategy);
+        assert_eq!(explanation.evidence.polymarket_quotes, 1);
+        assert!(explanation.conditions.iter().any(|condition| {
+            condition.id == "baseline_strategy_port"
+                && condition.required == "code capability present"
+                && condition.observed == "implemented"
+        }));
+        assert!(explanation.conditions.iter().any(|condition| {
+            condition.id == "hyperliquid_market_data_probe"
+                && condition.passed
+                && condition.observed.contains("quotes=3 trades=4")
+        }));
+    }
+
     fn buy_order(limit_cents: i64) -> PaperOrder {
         PaperOrder {
             order_id: "order-1".to_owned(),
@@ -797,6 +1300,60 @@ mod tests {
             start_unix_ms: 1,
             end_unix_ms: 2,
             parameters: BTreeMap::from([("pullback_pct".to_owned(), "0.02".to_owned())]),
+        }
+    }
+
+    fn baseline_market() -> BaselineMarket {
+        BaselineMarket {
+            market_id: "btc-updown-5m=1000".to_owned(),
+            up_token_id: "up-token".to_owned(),
+            down_token_id: "down-token".to_owned(),
+            start_unix_ms: 1_000,
+            end_unix_ms: 301_000,
+        }
+    }
+
+    fn polymarket_quote(
+        token_id: &str,
+        best_ask: Decimal,
+        unix_ms: i64,
+    ) -> liq_domain::MarketQuote {
+        liq_domain::MarketQuote {
+            event_id: uuid::Uuid::nil(),
+            venue: liq_domain::MarketVenue::Polymarket,
+            source_event_id: format!("quote:{token_id}:{unix_ms}"),
+            instrument_id: token_id.to_owned(),
+            symbol: "btc-updown".to_owned(),
+            best_bid: Some(best_ask - Decimal::new(1, 2)),
+            best_bid_size: Some(Decimal::new(10, 0)),
+            best_ask: Some(best_ask),
+            best_ask_size: Some(Decimal::new(10, 0)),
+            exchange_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
+                .expect("fixture timestamp"),
+            received_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
+                .expect("fixture timestamp"),
+        }
+    }
+
+    fn liquidation(
+        side: LiquidationSide,
+        notional_usd: Decimal,
+        unix_ms: i64,
+    ) -> liq_domain::LiquidationEvent {
+        liq_domain::LiquidationEvent {
+            event_id: uuid::Uuid::nil(),
+            source: liq_domain::Source::Bybit,
+            source_event_id: format!("liq:{side:?}:{unix_ms}"),
+            source_quality: liq_domain::SourceQuality::AllEvents,
+            symbol: "BTCUSDT".to_owned(),
+            side,
+            price: Decimal::new(65_000, 0),
+            quantity: Decimal::new(1, 0),
+            notional_usd,
+            exchange_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
+                .expect("fixture timestamp"),
+            received_ts: OffsetDateTime::from_unix_timestamp(unix_ms / 1_000)
+                .expect("fixture timestamp"),
         }
     }
 }

@@ -117,20 +117,33 @@ cargo run -p liq-cli -- strategy readiness --json
 - explicit fee/funding/slippage model for Polymarket + Hyperliquid;
 - paper-only safety gate that rejects live mode by default.
 
-Это не значит, что strategy уже можно запускать. Gate намеренно оставляет
-`ready_for_strategy = false`, пока не закрыты live-data blockers:
+После baseline port code gate включает:
+
+- `BaselineStinkBidStrategy` с static Python-compatible parameters:
+  `25_000..100_000` USD liquidation band, `10m` rolling window, `30%`
+  pullback, `$15` Polymarket paper notional and `60s` order cancel window;
+- long liquidations -> DOWN stink bid on Polymarket and LONG Hyperliquid hedge
+  intent;
+- short liquidations -> UP stink bid on Polymarket and SHORT Hyperliquid hedge
+  intent;
+- no live order placement: generated output is a deterministic paper
+  `StrategySignal`.
+
+Это не значит, что strategy можно запускать по stale данным. Gate намеренно
+оставляет `ready_for_strategy = false`, пока не закрыты актуальные live-data
+conditions:
 
 - public Polymarket market-data probe;
 - Hyperliquid hedge market-data probe;
-- Rust port of the baseline strategy.
 
-После market-data legs proof increment первые два blockers закрываются
-автоматически по фактическим rows в TimescaleDB:
+После market-data legs proof increment эти conditions закрываются автоматически
+по фактическим rows в TimescaleDB:
 
 - `polymarket_live_probe`: есть хотя бы одна строка `market_quotes` или
   `market_trades` с `venue = 'polymarket'` внутри readiness window;
 - `hyperliquid_market_data_probe`: есть и quote rows, и trade rows с
   `venue = 'hyperliquid'` внутри readiness window.
+- `baseline_strategy_port`: code capability present.
 
 Локальная проверка:
 
@@ -138,7 +151,13 @@ cargo run -p liq-cli -- strategy readiness --json
 cargo run -p liq-cli -- collector probe --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --source polymarket --symbol <polymarket_asset_id> --max-messages 40 --min-messages 1 --read-timeout-seconds 60
 cargo run -p liq-cli -- collector probe --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --source hyperliquid --symbol BTC --max-messages 40 --min-messages 1 --read-timeout-seconds 60
 cargo run -p liq-cli -- strategy readiness --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --window-minutes 60 --json
+cargo run -p liq-cli -- strategy readiness explain --database-url "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" --window-minutes 60 --json
 ```
+
+`strategy readiness explain --json` нужен для отладки перед paper replay: он
+печатает raw counts и per-condition pass/fail, например
+`polymarket_quotes > 0 OR polymarket_trades > 0` и observed
+`quotes=N trades=M`.
 
 ## Что улучшить или автоматизировать
 
@@ -148,6 +167,7 @@ CLI gate уже добавлен:
 cargo run -p liq-cli -- strategy readiness --json
 ```
 
-Команда должна проверять, что recorder, Polymarket data, Hyperliquid hedge data,
-fees, replay config и safety mode готовы. Если хотя бы один blocker не закрыт,
-strategy run должен быть запрещен.
+Команда проверяет, что recorder, Polymarket data, Hyperliquid hedge data, fees,
+replay config, baseline strategy и safety mode готовы. Если хотя бы один
+condition не закрыт в текущем readiness window, strategy run должен быть
+запрещен.
