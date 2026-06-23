@@ -66,6 +66,9 @@
 - Replay-from-archive по Parquet.
 - Автоматическое создание GitHub issue при API docs changelog warning.
 
+Все postponed идеи должны быть записаны в `docs/backlog/deferred-ideas.md`.
+Если идея есть только в чате, она считается незаписанной.
+
 ## Когда возвращаться к Artifact Trend Comparator
 
 `artifact trend comparator` нужно делать:
@@ -78,6 +81,7 @@
   только snapshot последнего запуска.
 
 Сейчас он не является blocker для pre-strategy increment.
+Подробная карточка задачи находится в `docs/backlog/deferred-ideas.md`.
 
 ## Следующий Pre-Strategy Increment
 
