@@ -29,7 +29,8 @@
         "polymarket_clob_market_data_and_fees",
         "hyperliquid_fees_funding_info_endpoint",
         "aperag_freedeepseek_embedding_operations",
-        "rust_websocket_sqlx_parquet_stack"
+        "rust_websocket_sqlx_parquet_stack",
+        "binance_bybit_okx_api_docs_changelog_watch"
       ]
     }
   },
@@ -98,6 +99,10 @@
     {
       "id": "market_data_history_report",
       "summary": "scripts/market-data-report-history.ps1 summarizes multiple nightly artifacts and classifies OKX usefulness as diagnostic-only evidence: insufficient-history, useful-diagnostic, healthy-but-sparse, unreliable-metadata, or unreliable-source."
+    },
+    {
+      "id": "api_docs_changelog_watch",
+      "summary": "scripts/check-api-docs-changelog.ps1 watches official Binance, Bybit, and OKX docs/changelogs against docs/research/api-docs-baseline.json and emits review-trigger artifacts in nightly market-data diagnostics."
     },
     {
       "id": "polymarket_recorder_required",

@@ -23,6 +23,9 @@ jobs:
       - name: market data history report guard
         shell: pwsh
         run: ./scripts/test-market-data-report-history.ps1
+      - name: api docs changelog guard
+        shell: pwsh
+        run: ./scripts/test-api-docs-changelog.ps1
       - uses: taiki-e/install-action@nextest
       - name: cargo fmt
         run: cargo fmt --all --check

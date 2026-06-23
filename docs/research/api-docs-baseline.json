@@ -1,0 +1,23 @@
+{
+    "generated_at":  "2026-06-23T05:37:54.6317757Z",
+    "sources":  [
+                    {
+                        "name":  "binance",
+                        "url":  "https://developers.binance.com/docs/derivatives/change-log",
+                        "content_sha256":  "330c193f4275c2179d52f7e68c3db148202b2cbdd412b9bdf629267ed5cd4ff5",
+                        "bytes":  254158
+                    },
+                    {
+                        "name":  "bybit",
+                        "url":  "https://bybit-exchange.github.io/docs/changelog/v5",
+                        "content_sha256":  "c8f487ef3b8acc462049641f793d72d15fff6bdff2c7d85fd7b91b4a2f9537c5",
+                        "bytes":  306315
+                    },
+                    {
+                        "name":  "okx",
+                        "url":  "https://www.okx.com/docs-v5/log_en/",
+                        "content_sha256":  "400c6d3d3952584efed63708ed103dd26633c43c832ff1be6645b58170582541",
+                        "bytes":  1099598
+                    }
+                ]
+}

@@ -176,5 +176,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\market-data-report-h
 
 ## Что улучшить или автоматизировать
 
-- Добавить nightly official docs changelog check для Binance/Bybit/OKX.
+- Поддерживать official docs/changelog watch через
+  `scripts/check-api-docs-changelog.ps1` и nightly workflow. Warning из этого
+  отчёта означает "нужен review адаптеров/fixtures", а не автоматическое
+  включение источника в strategy signal.
 - Добавить сравнение trend reports между GitHub artifacts разных дат.
