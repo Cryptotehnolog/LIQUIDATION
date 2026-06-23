@@ -23,18 +23,22 @@ jobs:
           } else {
             "skip=false" >> $env:GITHUB_OUTPUT
           }
-      - name: fetch metadata and run latest replay
+      - name: fetch metadata, check freshness, and run latest replay
         if: steps.db.outputs.skip != 'true'
         shell: pwsh
         run: |
           ./scripts/run-latest-polymarket-replay.ps1 `
             -DatabaseUrl $env:REPLAY_DATABASE_URL `
             -ArtifactPath ".cache/replay/latest-polymarket-baseline.json" `
+            -MarketArtifactPath ".cache/replay/latest-polymarket-market.json" `
+            -MarketStaleAfterMinutes 15 `
             -FetchMetadataFirst
       - name: upload replay artifact
         if: steps.db.outputs.skip != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: latest-polymarket-baseline-replay
-          path: .cache/replay/latest-polymarket-baseline.json
+          path: |
+            .cache/replay/latest-polymarket-baseline.json
+            .cache/replay/latest-polymarket-market.json
           if-no-files-found: error

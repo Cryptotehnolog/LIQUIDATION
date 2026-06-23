@@ -87,6 +87,68 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 http://127.0.0.1:18080/
 ```
 
+Открыть сразу из скрипта:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1 -OpenBrowser
+```
+
+Live mode с явным `DATABASE_URL`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1 `
+  -Mode Live `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -OpenBrowser
+```
+
+## Latest Replay Artifact
+
+Dashboard читает replay report только как read-only artifact через endpoint
+`/api/replay/latest`. Он не запускает replay сам и не пишет в БД.
+
+По умолчанию launcher ищет:
+
+- `.cache/replay/latest-polymarket-baseline.json` - последний replay report;
+- `.cache/replay/latest-polymarket-market.json` - последний Polymarket market
+  metadata artifact.
+
+Сформировать оба artifact локально:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-latest-polymarket-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -ArtifactPath ".cache/replay/latest-polymarket-baseline.json" `
+  -MarketArtifactPath ".cache/replay/latest-polymarket-market.json" `
+  -FetchMetadataFirst
+```
+
+Если последний Polymarket 5-minute market старше threshold, dashboard показывает
+`STALE METADATA`, а replay script пишет warning до запуска replay.
+
+Проверить freshness отдельно:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-polymarket-metadata-freshness.ps1 `
+  -MarketArtifactPath ".cache/replay/latest-polymarket-market.json" `
+  -StaleAfterMinutes 15
+```
+
+## GitHub Secret For Scheduled Replay
+
+`REPLAY_DATABASE_URL` нужен только для scheduled GitHub Actions replay. Его
+нельзя заполнять локальным `127.0.0.1` URL: GitHub runner не видит локальную БД
+на ноутбуке.
+
+Безопасная установка secret:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-replay-database-secret.ps1 `
+  -DatabaseUrl "postgres://USER:PASSWORD@HOST:5432/liquidation"
+```
+
+Скрипт откажется сохранять `localhost`, `127.0.0.1` или `::1`.
+
 Development-only fixture mode используется только для smoke tests и UI
 проверок edge states:
 

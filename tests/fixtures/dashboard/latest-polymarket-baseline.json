@@ -1,0 +1,19 @@
+{
+  "strategy_version": "baseline_stink_bid_v1",
+  "fill_model_version": "trade_cross_v1",
+  "fee_schedule_version": "cli_fee_schedule_v1",
+  "signal_count": 2,
+  "polymarket_orders": 2,
+  "polymarket_fills": 1,
+  "hedge_attempts": 1,
+  "hedge_fills": 1,
+  "unhedged_signals": 0,
+  "gross_pnl_usd": "0",
+  "total_fees_usd": "0.0075",
+  "total_funding_usd": "0.0015",
+  "total_slippage_usd": "0.10",
+  "net_pnl_usd": "-0.1090",
+  "max_drawdown_usd": "0.1090",
+  "settlement_status": "unsettled",
+  "trades": []
+}

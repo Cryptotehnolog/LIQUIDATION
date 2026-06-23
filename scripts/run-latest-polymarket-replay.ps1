@@ -1,6 +1,8 @@
 param(
     [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$ArtifactPath = ".cache/replay/latest-polymarket-baseline.json",
+    [string]$MarketArtifactPath = ".cache/replay/latest-polymarket-market.json",
+    [int]$MarketStaleAfterMinutes = 15,
     [string]$FetchFixturePath,
     [switch]$FetchMetadataFirst
 )
@@ -16,6 +18,7 @@ if ($FetchMetadataFirst) {
     $fetchArgs = @{
         DatabaseUrl = $DatabaseUrl
         Apply = $true
+        OutputPath = $MarketArtifactPath
     }
     if ($FetchFixturePath) {
         $fetchArgs.FixturePath = $FetchFixturePath
@@ -24,6 +27,16 @@ if ($FetchMetadataFirst) {
     if ($LASTEXITCODE -ne 0) {
         throw "fetch-polymarket-markets.ps1 failed with exit code $LASTEXITCODE"
     }
+}
+
+if (Test-Path -LiteralPath $MarketArtifactPath) {
+    $freshnessScript = Join-Path $PSScriptRoot "check-polymarket-metadata-freshness.ps1"
+    & $freshnessScript -MarketArtifactPath $MarketArtifactPath -StaleAfterMinutes $MarketStaleAfterMinutes
+    if ($LASTEXITCODE -ne 0) {
+        throw "check-polymarket-metadata-freshness.ps1 failed with exit code $LASTEXITCODE"
+    }
+} else {
+    Write-Warning "Polymarket market artifact does not exist before replay: $MarketArtifactPath"
 }
 
 $args = @(

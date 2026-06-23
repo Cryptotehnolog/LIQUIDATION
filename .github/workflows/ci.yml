@@ -26,6 +26,9 @@ jobs:
       - name: Polymarket market fetcher guard
         shell: pwsh
         run: ./scripts/test-polymarket-market-fetcher.ps1
+      - name: Polymarket metadata freshness guard
+        shell: pwsh
+        run: ./scripts/test-polymarket-metadata-freshness.ps1
       - name: api docs changelog guard
         shell: pwsh
         run: ./scripts/test-api-docs-changelog.ps1

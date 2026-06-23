@@ -1,0 +1,18 @@
+[
+  {
+    "market_id": "btc-5m-fixture",
+    "slug": "bitcoin-up-or-down-june-21-1pm-et",
+    "title": "Bitcoin Up or Down - June 21, 1:00PM-1:05PM ET",
+    "base_asset": "BTC",
+    "market_type": "btc_5m",
+    "up_token_id": "up-token",
+    "down_token_id": "down-token",
+    "start_ts": "2026-06-21T17:00:00Z",
+    "end_ts": "2026-06-21T17:05:00Z",
+    "status": "closed",
+    "source": "gamma-api",
+    "raw_payload": {
+      "id": "btc-5m-fixture"
+    }
+  }
+]

@@ -12,6 +12,12 @@ param(
 
     [string]$FixturePath = "tests/fixtures/dashboard/collector-status-edge-cases.json",
 
+    [string]$ReplayArtifactPath = ".cache/replay/latest-polymarket-baseline.json",
+
+    [string]$PolymarketMarketArtifactPath = ".cache/replay/latest-polymarket-market.json",
+
+    [int]$PolymarketMarketStaleAfterMinutes = 15,
+
     [string]$DatabaseUrl = $env:DATABASE_URL,
 
     [switch]$OpenBrowser,
@@ -52,7 +58,10 @@ $Args = @(
     "collector", "dashboard",
     "--bind", $Bind,
     "--window-minutes", [string]$WindowMinutes,
-    "--poll-seconds", [string]$PollSeconds
+    "--poll-seconds", [string]$PollSeconds,
+    "--replay-artifact-path", (Join-Path $RepoRoot $ReplayArtifactPath),
+    "--polymarket-market-artifact-path", (Join-Path $RepoRoot $PolymarketMarketArtifactPath),
+    "--polymarket-market-stale-after-minutes", [string]$PolymarketMarketStaleAfterMinutes
 )
 
 if ($SelectedMode -eq "Live") {

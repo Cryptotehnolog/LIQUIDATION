@@ -408,6 +408,15 @@ enum CollectorCommand {
         /// Development-only fixture path used by smoke tests.
         #[arg(long)]
         fixture_path: Option<PathBuf>,
+        /// Optional latest replay JSON artifact shown by the read-only dashboard.
+        #[arg(long)]
+        replay_artifact_path: Option<PathBuf>,
+        /// Optional Polymarket market metadata JSON artifact shown by the dashboard.
+        #[arg(long)]
+        polymarket_market_artifact_path: Option<PathBuf>,
+        /// Mark Polymarket metadata stale when latest market end is older than this many minutes.
+        #[arg(long, default_value_t = 15)]
+        polymarket_market_stale_after_minutes: i64,
     },
 }
 
@@ -1144,6 +1153,9 @@ async fn handle_collector_inspection_command(command: CollectorCommand) -> anyho
             window_minutes,
             poll_seconds,
             fixture_path,
+            replay_artifact_path,
+            polymarket_market_artifact_path,
+            polymarket_market_stale_after_minutes,
         } => {
             dashboard::serve_dashboard(DashboardArgs {
                 bind,
@@ -1151,6 +1163,9 @@ async fn handle_collector_inspection_command(command: CollectorCommand) -> anyho
                 window_minutes,
                 poll_seconds,
                 fixture_path,
+                replay_artifact_path,
+                polymarket_market_artifact_path,
+                polymarket_market_stale_after_minutes,
             })
             .await?;
         }

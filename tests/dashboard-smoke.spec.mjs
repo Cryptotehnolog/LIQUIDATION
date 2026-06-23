@@ -25,6 +25,11 @@ test("collector dashboard handles null, empty, and stale source states", async (
   await expect(page.getByTestId("source-coverage")).toContainText("diagnostic");
   await expect(page.getByTestId("trend-summary")).toContainText("samples");
   await expect(page.getByTestId("storage-signal")).toContainText("73.7 KB");
+  await expect(page.getByTestId("latest-replay")).toContainText("Latest Replay Artifact");
+  await expect(page.getByTestId("latest-replay")).toContainText("btc-5m-fixture");
+  await expect(page.getByTestId("latest-replay")).toContainText("signals");
+  await expect(page.getByTestId("latest-replay")).toContainText("-0.1090");
+  await expect(page.getByTestId("latest-replay")).toContainText("STALE METADATA");
   await page.screenshot({ path: path.join(screenshotDir, "desktop.png"), fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });

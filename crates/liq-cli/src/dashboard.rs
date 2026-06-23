@@ -11,12 +11,16 @@ use axum::{
     routing::get,
 };
 use liq_recorder::{
-    records::{CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHistorySample},
+    records::{
+        CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHistorySample,
+        PolymarketMarketRecord,
+    },
     repository,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use time::Duration;
+use time::{Duration, OffsetDateTime};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -29,6 +33,9 @@ pub(crate) struct DashboardArgs {
     pub(crate) window_minutes: i64,
     pub(crate) poll_seconds: u64,
     pub(crate) fixture_path: Option<PathBuf>,
+    pub(crate) replay_artifact_path: Option<PathBuf>,
+    pub(crate) polymarket_market_artifact_path: Option<PathBuf>,
+    pub(crate) polymarket_market_stale_after_minutes: i64,
 }
 
 #[derive(Clone)]
@@ -36,12 +43,28 @@ struct DashboardState {
     pool: Option<PgPool>,
     fixture_path: Option<PathBuf>,
     window_minutes: i64,
+    replay_artifact_path: Option<PathBuf>,
+    polymarket_market_artifact_path: Option<PathBuf>,
+    polymarket_market_stale_after_minutes: i64,
     index_html: Arc<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CollectorStatusQuery {
     window_minutes: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplayDashboardSnapshot {
+    status: String,
+    replay_artifact_path: Option<String>,
+    market_artifact_path: Option<String>,
+    market: Option<PolymarketMarketRecord>,
+    market_stale: bool,
+    market_staleness_minutes: Option<i64>,
+    market_stale_after_minutes: i64,
+    warning: Option<String>,
+    report: Option<Value>,
 }
 
 struct DashboardError(anyhow::Error);
@@ -95,6 +118,9 @@ pub(crate) async fn serve_dashboard(args: DashboardArgs) -> anyhow::Result<()> {
         pool,
         fixture_path: args.fixture_path,
         window_minutes: args.window_minutes.max(1),
+        replay_artifact_path: args.replay_artifact_path,
+        polymarket_market_artifact_path: args.polymarket_market_artifact_path,
+        polymarket_market_stale_after_minutes: args.polymarket_market_stale_after_minutes.max(1),
         index_html: Arc::new(INDEX_HTML.replace(
             "__POLL_MS__",
             &(args.poll_seconds.max(1) * 1000).to_string(),
@@ -105,6 +131,7 @@ pub(crate) async fn serve_dashboard(args: DashboardArgs) -> anyhow::Result<()> {
         .route("/healthz", get(healthz))
         .route("/api/collector/status", get(collector_status))
         .route("/api/collector/history", get(collector_history))
+        .route("/api/replay/latest", get(latest_replay))
         .with_state(state);
 
     let listener = TcpListener::bind(bind)
@@ -179,6 +206,102 @@ async fn collector_history(
         .context("failed to read collector dashboard history")?
     };
     Ok(Json(history))
+}
+
+async fn latest_replay(
+    State(state): State<DashboardState>,
+) -> Result<Json<ReplayDashboardSnapshot>, DashboardError> {
+    let report =
+        match &state.replay_artifact_path {
+            Some(path) if tokio::fs::try_exists(path).await.unwrap_or(false) => {
+                let body = tokio::fs::read_to_string(path).await.with_context(|| {
+                    format!("failed to read replay artifact: {}", path.display())
+                })?;
+                Some(serde_json::from_str::<Value>(&body).with_context(|| {
+                    format!("failed to parse replay artifact: {}", path.display())
+                })?)
+            }
+            _ => None,
+        };
+
+    let market = match &state.polymarket_market_artifact_path {
+        Some(path) if tokio::fs::try_exists(path).await.unwrap_or(false) => {
+            let body = tokio::fs::read_to_string(path).await.with_context(|| {
+                format!(
+                    "failed to read Polymarket market artifact: {}",
+                    path.display()
+                )
+            })?;
+            parse_latest_market_artifact(&body).with_context(|| {
+                format!(
+                    "failed to parse Polymarket market artifact: {}",
+                    path.display()
+                )
+            })?
+        }
+        _ => None,
+    };
+
+    let now = OffsetDateTime::now_utc();
+    let stale_after = state.polymarket_market_stale_after_minutes;
+    let market_staleness_minutes = market
+        .as_ref()
+        .map(|item| (now - item.end_ts).whole_minutes().max(0));
+    let market_stale = market_staleness_minutes.is_some_and(|age| age > stale_after);
+    let warning = if market_stale {
+        Some(format!(
+            "latest Polymarket market metadata is stale: age={} min threshold={} min",
+            market_staleness_minutes.unwrap_or_default(),
+            stale_after
+        ))
+    } else if market.is_none() {
+        Some("latest Polymarket market metadata artifact is missing".to_owned())
+    } else {
+        None
+    };
+    let status = match (report.is_some(), market.is_some(), market_stale) {
+        (true, true, false) => "ok",
+        (true, true, true) => "stale_metadata",
+        (true, false, _) => "report_only",
+        (false, true, true) => "market_only_stale",
+        (false, true, false) => "market_only",
+        (false, false, _) => "missing",
+    }
+    .to_owned();
+
+    Ok(Json(ReplayDashboardSnapshot {
+        status,
+        replay_artifact_path: state
+            .replay_artifact_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        market_artifact_path: state
+            .polymarket_market_artifact_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        market,
+        market_stale,
+        market_staleness_minutes,
+        market_stale_after_minutes: stale_after,
+        warning,
+        report,
+    }))
+}
+
+fn parse_latest_market_artifact(body: &str) -> anyhow::Result<Option<PolymarketMarketRecord>> {
+    if body.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let value = serde_json::from_str::<Value>(body)?;
+    if value.is_array() {
+        let markets = serde_json::from_value::<Vec<PolymarketMarketRecord>>(value)?;
+        return Ok(markets.into_iter().max_by_key(|market| market.end_ts));
+    }
+
+    Ok(Some(serde_json::from_value::<PolymarketMarketRecord>(
+        value,
+    )?))
 }
 
 fn history_from_fixture(metrics: &CollectorDashboardMetrics) -> CollectorDashboardHistory {

@@ -409,6 +409,13 @@
         </div>
         <div class="coverage-grid" id="source-coverage" data-testid="source-coverage"></div>
 
+        <div data-testid="latest-replay">
+          <div class="panel-header" style="margin-top: 22px;">
+            <div class="panel-title">Latest Replay Artifact</div>
+          </div>
+          <div class="coverage-grid" id="latest-replay"></div>
+        </div>
+
         <div class="panel-header" style="margin-top: 22px;">
           <div class="panel-title">Тренд окна</div>
         </div>
@@ -517,6 +524,38 @@
       }
     }
 
+    function valueOrDash(value) {
+      return value === null || value === undefined || value === "" ? "-" : value;
+    }
+
+    function renderLatestReplay(replay) {
+      const root = el("latest-replay");
+      root.replaceChildren();
+      const report = replay?.report ?? {};
+      const market = replay?.market ?? null;
+      const fillRate = report.polymarket_orders
+        ? `${Math.round((Number(report.polymarket_fills ?? 0) / Number(report.polymarket_orders)) * 100)}%`
+        : "-";
+      const windowText = market
+        ? `${market.market_id} · ${market.start_ts} .. ${market.end_ts}`
+        : "no market metadata";
+      const statusLabel = replay?.market_stale ? "STALE METADATA" : (replay?.status ?? "missing").toUpperCase();
+      const rows = [
+        ["status", statusLabel],
+        ["market window", windowText],
+        ["signals", valueOrDash(report.signal_count)],
+        ["fill rate", fillRate],
+        ["net PnL", valueOrDash(report.net_pnl_usd)],
+        ["warning", valueOrDash(replay?.warning)]
+      ];
+      for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        row.className = "coverage-row";
+        row.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+        root.appendChild(row);
+      }
+    }
+
     function renderLatency(sources) {
       const totals = [
         ["<100 ms", sources.reduce((sum, row) => sum + row.latency_bucket_lt_100_ms, 0)],
@@ -586,7 +625,7 @@
       }
     }
 
-    function render(snapshot, history) {
+    function render(snapshot, history, replay) {
       const sources = snapshot.sources ?? [];
       const states = sources.map(classifySource);
       const live = states.filter((item) => item.key === "live").length;
@@ -604,6 +643,7 @@
       renderSources(sources);
       renderLatency(sources);
       renderCoverage(sources);
+      renderLatestReplay(replay);
       renderTrend(history);
       renderStorage(snapshot.storage ?? {});
     }
@@ -611,13 +651,20 @@
     async function refresh() {
       try {
         el("connection-state").textContent = "REFRESHING";
-        const [statusResponse, historyResponse] = await Promise.all([
+        const [statusResponse, historyResponse, replayResponse] = await Promise.all([
           fetch("/api/collector/status", { cache: "no-store" }),
-          fetch("/api/collector/history", { cache: "no-store" })
+          fetch("/api/collector/history", { cache: "no-store" }),
+          fetch("/api/replay/latest", { cache: "no-store" })
         ]);
         if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
         if (!historyResponse.ok) throw new Error(`history HTTP ${historyResponse.status}`);
-        render(await statusResponse.json(), await historyResponse.json());
+        if (!replayResponse.ok) throw new Error(`replay HTTP ${replayResponse.status}`);
+        const responses = await Promise.all([
+          statusResponse.json(),
+          historyResponse.json(),
+          replayResponse.json()
+        ]);
+        render(responses[0], responses[1], responses[2]);
       } catch (error) {
         el("connection-state").textContent = "ERROR";
         el("state-line").textContent = `Dashboard API error: ${error.message}`;

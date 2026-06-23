@@ -37,6 +37,9 @@ $Args = @(
     "collector", "dashboard",
     "--bind", "127.0.0.1:$Port",
     "--fixture-path", $FixtureFullPath,
+    "--replay-artifact-path", (Join-Path $RepoRoot "tests/fixtures/dashboard/latest-polymarket-baseline.json"),
+    "--polymarket-market-artifact-path", (Join-Path $RepoRoot "tests/fixtures/dashboard/latest-polymarket-market.json"),
+    "--polymarket-market-stale-after-minutes", "15",
     "--poll-seconds", "1"
 )
 
