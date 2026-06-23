@@ -12,16 +12,15 @@ if (-not $DatabaseUrl) {
 }
 
 if ($FetchMetadataFirst) {
-    $fetchArgs = @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass",
-        "-File", "scripts/fetch-polymarket-markets.ps1",
-        "-DatabaseUrl", $DatabaseUrl,
-        "-Apply"
-    )
-    if ($FetchFixturePath) {
-        $fetchArgs += @("-FixturePath", $FetchFixturePath)
+    $fetchScript = Join-Path $PSScriptRoot "fetch-polymarket-markets.ps1"
+    $fetchArgs = @{
+        DatabaseUrl = $DatabaseUrl
+        Apply = $true
     }
-    & powershell @fetchArgs
+    if ($FetchFixturePath) {
+        $fetchArgs.FixturePath = $FetchFixturePath
+    }
+    & $fetchScript @fetchArgs
     if ($LASTEXITCODE -ne 0) {
         throw "fetch-polymarket-markets.ps1 failed with exit code $LASTEXITCODE"
     }
