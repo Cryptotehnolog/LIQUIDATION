@@ -3,7 +3,9 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scripts = @(
     "scripts/run-latest-polymarket-replay.ps1",
-    "scripts/collect-paper-replay-window.ps1"
+    "scripts/collect-paper-replay-window.ps1",
+    "scripts/wait-for-liquidation-replay.ps1",
+    "scripts/controlled-replay.ps1"
 )
 
 function Assert-True {
@@ -28,6 +30,7 @@ foreach ($relative in $scripts) {
 $runLatest = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-latest-polymarket-replay.ps1")
 $collectWindow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/collect-paper-replay-window.ps1")
 $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/wait-for-liquidation-replay.ps1")
+$controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -39,10 +42,19 @@ Assert-True ($collectWindow.Contains("cargo build -p liq-cli")) "collect-paper-r
 Assert-True ($collectWindow.Contains("& `$BinaryPath @CollectorArgs")) "collect-paper-replay-window.ps1 must run the prebuilt liq.exe inside collector jobs"
 Assert-True (-not $collectWindow.Contains('"run", "-p", "liq-cli", "--"')) "collect-paper-replay-window.ps1 must not start parallel cargo run jobs"
 Assert-True ($collectWindow.Contains("-InputPath `$OkxInstrumentsFullPath")) "collect-paper-replay-window.ps1 must validate existing OKX instrument cache"
+Assert-True ($collectWindow.Contains("[string]`$ArtifactPath")) "collect-paper-replay-window.ps1 must allow wrapper scripts to choose replay artifact path"
+Assert-True ($collectWindow.Contains("--artifact-path `$ArtifactFullPath")) "collect-paper-replay-window.ps1 must write replay output to the resolved artifact path"
 Assert-True ($waitForLiquidation.Contains("[int]`$MaxWindows")) "wait-for-liquidation-replay.ps1 must bound the number of replay windows"
 Assert-True ($waitForLiquidation.Contains("liquidations=0")) "wait-for-liquidation-replay.ps1 must only continue automatically on empty liquidation windows"
 Assert-True ($waitForLiquidation.Contains("-RunReplay")) "wait-for-liquidation-replay.ps1 must delegate to collect-paper-replay-window.ps1 with -RunReplay"
+Assert-True ($waitForLiquidation.Contains("[string]`$ReplayArtifactPath")) "wait-for-liquidation-replay.ps1 must expose replay artifact path for controlled replay"
 Assert-True ($waitForLiquidation.Contains("`$ErrorActionPreference = `"Continue`"")) "wait-for-liquidation-replay.ps1 must not treat nested cargo stderr as a terminating PowerShell error"
 Assert-True ($waitForLiquidation.Contains("Write-Output ([string]`$_)")) "wait-for-liquidation-replay.ps1 must print nested stderr as text, not ErrorRecord objects"
+Assert-True ($controlledReplay.Contains("wait-for-liquidation-replay.ps1")) "controlled-replay.ps1 must reuse the bounded liquidation-window wrapper"
+Assert-True ($controlledReplay.Contains("start-dashboard.ps1")) "controlled-replay.ps1 must open the read-only dashboard through the dashboard launcher"
+Assert-True ($controlledReplay.Contains("-ReplayArtifactPath")) "controlled-replay.ps1 must pass replay artifact path through the chain"
+Assert-True ($controlledReplay.Contains("[switch]`$PrintCommandsOnly")) "controlled-replay.ps1 must support a dry command preview mode"
+Assert-True ($controlledReplay.Contains("Expected replay artifact was not written")) "controlled-replay.ps1 must fail if replay did not write the latest artifact"
+Assert-True (-not $controlledReplay.Contains("replay run")) "controlled-replay.ps1 must orchestrate existing scripts, not duplicate replay CLI logic"
 
 Write-Output "replay script checks passed"

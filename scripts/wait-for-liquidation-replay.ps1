@@ -1,6 +1,7 @@
 param(
     [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$MarketArtifactPath = ".cache/replay/latest-polymarket-market.json",
+    [string]$ReplayArtifactPath = ".cache/replay/latest-polymarket-baseline.json",
     [string]$OkxInstrumentsPath = ".cache/okx/instruments-BTC-USDT-SWAP.json",
     [int]$MaxWindows = 6,
     [int]$MaxRuntimeSeconds = 330,
@@ -38,6 +39,7 @@ for ($window = 1; $window -le $MaxWindows; $window++) {
         "-File", $collectScript,
         "-DatabaseUrl", $DatabaseUrl,
         "-MarketArtifactPath", $MarketArtifactPath,
+        "-ArtifactPath", $ReplayArtifactPath,
         "-OkxInstrumentsPath", $OkxInstrumentsPath,
         "-MaxRuntimeSeconds", [string]$MaxRuntimeSeconds,
         "-MinFreshSeconds", [string]$MinFreshSeconds,

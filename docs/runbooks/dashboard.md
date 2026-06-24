@@ -130,6 +130,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-latest-polymarke
 Если последний Polymarket 5-minute market старше threshold, dashboard показывает
 `STALE METADATA`, а replay script пишет warning до запуска replay.
 
+Собрать controlled replay window и сразу открыть dashboard:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/controlled-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+```
+
+Этот скрипт не запускает real orders. Он использует только paper replay,
+обновляет latest replay artifacts и затем стартует read-only dashboard.
+
 Проверить freshness отдельно:
 
 ```powershell

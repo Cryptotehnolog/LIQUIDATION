@@ -1,6 +1,7 @@
 param(
     [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$MarketArtifactPath = ".cache/replay/latest-polymarket-market.json",
+    [string]$ArtifactPath = ".cache/replay/latest-polymarket-baseline.json",
     [string]$OkxInstrumentsPath = ".cache/okx/instruments-BTC-USDT-SWAP.json",
     [int]$MaxRuntimeSeconds = 330,
     [int]$MinFreshSeconds = 120,
@@ -14,6 +15,7 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $MarketArtifactFullPath = Join-Path $RepoRoot $MarketArtifactPath
+$ArtifactFullPath = Join-Path $RepoRoot $ArtifactPath
 $OkxInstrumentsFullPath = Join-Path $RepoRoot $OkxInstrumentsPath
 
 if (-not $DatabaseUrl) {
@@ -212,11 +214,10 @@ $replayArgs = @(
 $preflightExit = $LASTEXITCODE
 
 if ($RunReplay -and $preflightExit -eq 0) {
-    $artifactPath = ".cache/replay/latest-polymarket-baseline.json"
-    if (Test-Path -LiteralPath $artifactPath) {
-        Remove-Item -LiteralPath $artifactPath -Force
+    if (Test-Path -LiteralPath $ArtifactFullPath) {
+        Remove-Item -LiteralPath $ArtifactFullPath -Force
     }
-    & cargo run -p liq-cli -- replay run @replayArgs --artifact-path $artifactPath
+    & cargo run -p liq-cli -- replay run @replayArgs --artifact-path $ArtifactFullPath
     exit $LASTEXITCODE
 }
 
