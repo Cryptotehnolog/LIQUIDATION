@@ -6,6 +6,7 @@ $scripts = @(
     "scripts/collect-paper-replay-window.ps1",
     "scripts/wait-for-liquidation-replay.ps1",
     "scripts/controlled-replay.ps1",
+    "scripts/run-entry-fill-diagnostics-batch.ps1",
     "scripts/analyze-controlled-replay.ps1",
     "scripts/analyze-entry-fill-diagnostics.ps1",
     "scripts/compare-replay-profiles.ps1",
@@ -35,6 +36,7 @@ $runLatest = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-lat
 $collectWindow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/collect-paper-replay-window.ps1")
 $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/wait-for-liquidation-replay.ps1")
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
+$entryFillBatch = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-entry-fill-diagnostics-batch.ps1")
 $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
 $entryFillAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-entry-fill-diagnostics.ps1")
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
@@ -82,6 +84,19 @@ Assert-True ($controlledReplay.Contains("-LiquidationThresholdMaxUsd")) "control
 Assert-True ($controlledReplay.Contains("Read-ReplayArtifactSummary")) "controlled-replay.ps1 must summarize each replay artifact"
 Assert-True ($controlledReplay.Contains("Write-AggregateReport")) "controlled-replay.ps1 must persist aggregate replay statistics"
 Assert-True ($controlledReplay.Contains("polymarket_fills")) "controlled-replay.ps1 must stop based on observed Polymarket entry fills"
+Assert-True ($entryFillBatch.Contains("controlled-replay.ps1")) "run-entry-fill-diagnostics-batch.ps1 must reuse controlled replay windows"
+Assert-True ($entryFillBatch.Contains("analyze-entry-fill-diagnostics.ps1")) "run-entry-fill-diagnostics-batch.ps1 must run entry-fill diagnostics after the batch"
+Assert-True ($entryFillBatch.Contains("analyze-controlled-replay.ps1")) "run-entry-fill-diagnostics-batch.ps1 must run controlled replay aggregate analysis after the batch"
+Assert-True ($entryFillBatch.Contains("[int]`$MaxAttempts")) "run-entry-fill-diagnostics-batch.ps1 must bound the number of replay attempts"
+Assert-True ($entryFillBatch.Contains("[int]`$MaxTotalRuntimeSeconds")) "run-entry-fill-diagnostics-batch.ps1 must bound total runtime"
+Assert-True ($entryFillBatch.Contains("[int]`$AttemptTimeoutBufferSeconds")) "run-entry-fill-diagnostics-batch.ps1 must enforce per-attempt timeout padding"
+Assert-True ($entryFillBatch.Contains("Stop-RepoLiqProcesses")) "run-entry-fill-diagnostics-batch.ps1 must clean up repo liq.exe processes after attempt timeout"
+Assert-True ($entryFillBatch.Contains("__LIQ_BATCH_EXIT_CODE")) "run-entry-fill-diagnostics-batch.ps1 must capture nested PowerShell exit codes explicitly"
+Assert-True ($entryFillBatch.Contains("attempt-{0:D3}")) "run-entry-fill-diagnostics-batch.ps1 must write unique artifacts per attempt"
+Assert-True ($entryFillBatch.Contains("entry_fill_analysis_path")) "run-entry-fill-diagnostics-batch.ps1 must publish entry-fill analysis path in the final report"
+Assert-True ($entryFillBatch.Contains("trade_path_analysis_path")) "run-entry-fill-diagnostics-batch.ps1 must publish trade-path analysis path in the final report"
+Assert-True ($entryFillBatch.Contains("[switch]`$StopOnEntryFill")) "run-entry-fill-diagnostics-batch.ps1 must support stopping after a filled entry"
+Assert-True ($entryFillBatch.Contains("[switch]`$PrintCommandsOnly")) "run-entry-fill-diagnostics-batch.ps1 must support dry-run command preview"
 Assert-True ($controlledReplayAnalyzer.Contains("[string]`$AggregateReportPath")) "analyze-controlled-replay.ps1 must accept an aggregate report path"
 Assert-True ($controlledReplayAnalyzer.Contains("Get-StageCounts")) "analyze-controlled-replay.ps1 must aggregate rejection reasons by stage"
 Assert-True ($controlledReplayAnalyzer.Contains("trade_path_blocker")) "analyze-controlled-replay.ps1 must separately report the first blocker on the actual trade path"
@@ -94,6 +109,7 @@ Assert-True ($entryFillAnalyzer.Contains("trade_distance_to_fill")) "analyze-ent
 Assert-True ($entryFillAnalyzer.Contains("seconds_to_order_expiry")) "analyze-entry-fill-diagnostics.ps1 must report seconds to forced cancel"
 Assert-True ($entryFillAnalyzer.Contains("late_signal_dominates")) "analyze-entry-fill-diagnostics.ps1 must classify late-signal dominated runs"
 Assert-True ($entryFillAnalyzer.Contains("pullback_too_deep_candidate")) "analyze-entry-fill-diagnostics.ps1 must classify deep pullback candidates"
+Assert-True ($entryFillAnalyzer.Contains("no_signals_built")) "analyze-entry-fill-diagnostics.ps1 must distinguish no-signal windows from missing diagnostics"
 Assert-True ($profileComparator.Contains("wait-for-liquidation-replay.ps1")) "compare-replay-profiles.ps1 must collect one bounded replay-ready window before comparing profiles"
 Assert-True ($profileComparator.Contains("research-wide-threshold")) "compare-replay-profiles.ps1 must compare baseline against the diagnostic wide-threshold profile"
 Assert-True ($profileComparator.Contains("--market-id")) "compare-replay-profiles.ps1 must replay the second profile against the pinned market window"

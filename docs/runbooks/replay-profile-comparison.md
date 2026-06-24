@@ -226,6 +226,8 @@ Analyzer читает replay artifacts, ищет `trades[].entry_fill_diagnostic
 Классификации:
 
 - `late_signal_dominates` - большинство сигналов пришли слишком поздно;
+- `no_signals_built` - replay прошёл, но signals не построились; сначала
+  смотреть `signal_gate` и `expiry`, а не entry fill;
 - `polymarket_trade_liquidity_gap` - внутри order window не было Polymarket
   trades;
 - `trade_cross_conservative` - book touch был достижим, но trade_cross не
@@ -250,3 +252,58 @@ Analyzer читает replay artifacts, ищет `trades[].entry_fill_diagnostic
 `liquidation_notional_below_threshold`. Вывод: это пока только smoke по одному
 новому diagnostic row. Нельзя менять baseline/pullback по такой выборке. Нужно
 накопить серию новых controlled replay windows с текущим кодом.
+
+## Entry Fill Diagnostics Batch
+
+Для серии controlled replay windows и автоматического отчёта:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-entry-fill-diagnostics-batch.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MaxAttempts 1 `
+  -MaxWindowsPerAttempt 3 `
+  -MaxRuntimeSeconds 260
+```
+
+Batch wrapper делает:
+
+- запускает bounded `controlled-replay.ps1`;
+- пишет уникальные artifacts по попыткам: `attempt-001/replay.json`,
+  `attempt-001/market.json`;
+- строит `analyze-controlled-replay.ps1` report;
+- строит `analyze-entry-fill-diagnostics.ps1` report;
+- чистит зависшие `target/debug/liq.exe` при attempt timeout.
+
+## Controlled Batch Result 2026-06-25
+
+Run id: `20260625-022104`.
+
+Market: `2661331`, `2026-06-24T23:20:00Z..2026-06-24T23:25:00Z`.
+
+Collector facts:
+
+- Binance: `received_messages=4`, `canonical_inserted=4`;
+- Bybit: `received_messages=12`, `canonical_inserted=0`;
+- OKX: `received_messages=3`, `canonical_inserted=0`;
+- Polymarket quotes/trades and Hyperliquid quotes/trades were present.
+
+Replay facts:
+
+- `ready_for_replay=true`;
+- `liquidations=4`;
+- `signal_count=0`;
+- `polymarket_orders=0`;
+- `polymarket_fills=0`;
+- dominant blocker: `signal_gate/liquidation_notional_below_threshold`
+  count `3`;
+- secondary blocker: `expiry/order_cancel_window` count `1`.
+
+Entry-fill conclusion:
+
+- classification: `no_signals_built`;
+- entry fill was not tested in this window because baseline did not build a
+  signal;
+- do not tune `pullback_pct` from this run;
+- lowering `liquidation_threshold_min_usd` is not recommended from this run
+  alone because below-threshold events are likely noise unless a research
+  profile proves otherwise across many windows.

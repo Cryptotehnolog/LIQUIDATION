@@ -179,6 +179,12 @@ function Add-ReportToAnalysis {
 function New-Decision {
     param([Parameter(Mandatory = $true)]$Summary)
 
+    if ($Summary.signals -eq 0) {
+        return [pscustomobject]@{
+            classification = "no_signals_built"
+            detail = "Replay artifacts contain no strategy signals; inspect signal_gate/expiry rejection reasons before entry-fill tuning."
+        }
+    }
     if ($Summary.entry_diagnostics -eq 0) {
         return [pscustomobject]@{
             classification = "insufficient_diagnostics"

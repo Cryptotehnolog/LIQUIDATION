@@ -186,3 +186,35 @@ controlled comparison series:
 controlled replay windows после добавления diagnostics. Если analyzer продолжит
 показывать `late_signal_dominates`, сначала исследовать timing/order_cancel_window,
 а не liquidation thresholds.
+
+## Entry Fill Diagnostics Batch Result
+
+Дата запуска: 2026-06-25.
+
+Добавлен `scripts/run-entry-fill-diagnostics-batch.ps1`: bounded wrapper,
+который запускает controlled replay windows, сохраняет уникальные artifacts по
+attempts, затем автоматически строит trade-path analysis и entry-fill analysis.
+Скрипт имеет per-attempt timeout и чистит только наши
+`D:\Liquidation\LIQUIDATION\target\debug\liq.exe`, чтобы не оставлять зависшие
+collector-процессы.
+
+Первый рабочий batch run: `20260625-022104`.
+
+Market `2661331`, `2026-06-24T23:20:00Z..2026-06-24T23:25:00Z`:
+
+- Binance collector: `received_messages=4`, `canonical_inserted=4`;
+- replay preflight: `ready_for_replay=true`;
+- `liquidations=4`;
+- `signal_count=0`;
+- `polymarket_orders=0`;
+- `polymarket_fills=0`;
+- trade path blocker: `signal_gate`;
+- reasons: `liquidation_notional_below_threshold=3`,
+  `order_cancel_window=1`;
+- entry-fill classification: `no_signals_built`.
+
+Вывод: это окно доказывает, что Binance liquidation path уже пишет canonical
+events, но baseline не дошёл до entry-fill стадии. Нельзя делать выводы про
+`pullback_pct` по этому окну. Следующий сбор должен продолжать искать windows,
+где `signal_count > 0`, и только потом анализировать
+`trade_distance_to_fill`/`seconds_to_order_expiry`.
