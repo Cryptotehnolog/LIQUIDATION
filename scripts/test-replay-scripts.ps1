@@ -6,7 +6,8 @@ $scripts = @(
     "scripts/collect-paper-replay-window.ps1",
     "scripts/wait-for-liquidation-replay.ps1",
     "scripts/controlled-replay.ps1",
-    "scripts/analyze-controlled-replay.ps1"
+    "scripts/analyze-controlled-replay.ps1",
+    "scripts/compare-replay-profiles.ps1"
 )
 
 function Assert-True {
@@ -33,6 +34,7 @@ $collectWindow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/col
 $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/wait-for-liquidation-replay.ps1")
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
 $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
+$profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -81,5 +83,13 @@ Assert-True ($controlledReplayAnalyzer.Contains("Get-StageCounts")) "analyze-con
 Assert-True ($controlledReplayAnalyzer.Contains("trade_path_blocker")) "analyze-controlled-replay.ps1 must separately report the first blocker on the actual trade path"
 Assert-True ($controlledReplayAnalyzer.Contains("research-wide-threshold")) "analyze-controlled-replay.ps1 must explicitly flag when a diagnostic wide-threshold profile may be useful"
 Assert-True ($controlledReplayAnalyzer.Contains("ConvertTo-Json")) "analyze-controlled-replay.ps1 must support machine-readable JSON output"
+Assert-True ($profileComparator.Contains("wait-for-liquidation-replay.ps1")) "compare-replay-profiles.ps1 must collect one bounded replay-ready window before comparing profiles"
+Assert-True ($profileComparator.Contains("research-wide-threshold")) "compare-replay-profiles.ps1 must compare baseline against the diagnostic wide-threshold profile"
+Assert-True ($profileComparator.Contains("--market-id")) "compare-replay-profiles.ps1 must replay the second profile against the pinned market window"
+Assert-True ($profileComparator.Contains("baseline_artifact_path")) "compare-replay-profiles.ps1 must report the baseline artifact path"
+Assert-True ($profileComparator.Contains("research_artifact_path")) "compare-replay-profiles.ps1 must report the research artifact path"
+Assert-True ($profileComparator.Contains("fill_rate")) "compare-replay-profiles.ps1 must report fill rate without manual JSON reading"
+Assert-True ($profileComparator.Contains("net_pnl_usd")) "compare-replay-profiles.ps1 must compare net PnL without manual JSON reading"
+Assert-True ($profileComparator.Contains("SkipCollect requires existing baseline replay artifact")) "compare-replay-profiles.ps1 must fail fast when -SkipCollect has no baseline artifact"
 
 Write-Output "replay script checks passed"
