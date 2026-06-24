@@ -271,9 +271,18 @@ function Invoke-ComparisonAttempt {
     }
 
     Write-Output ("profile comparison attempt $Attempt/$MaxComparisons")
-    & powershell @args
-    if ($LASTEXITCODE -ne 0) {
-        throw "profile comparison attempt $Attempt failed with exit code $LASTEXITCODE"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & powershell @args 2>&1 | ForEach-Object {
+            Write-Output ([string]$_)
+        }
+        $childExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($childExitCode -ne 0) {
+        throw "profile comparison attempt $Attempt failed with exit code $childExitCode"
     }
 
     $comparisonFullPath = Join-Path $RepoRoot $comparisonPath

@@ -7,6 +7,7 @@ $scripts = @(
     "scripts/wait-for-liquidation-replay.ps1",
     "scripts/controlled-replay.ps1",
     "scripts/analyze-controlled-replay.ps1",
+    "scripts/analyze-entry-fill-diagnostics.ps1",
     "scripts/compare-replay-profiles.ps1",
     "scripts/compare-replay-profiles-aggregate.ps1"
 )
@@ -35,6 +36,7 @@ $collectWindow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/col
 $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/wait-for-liquidation-replay.ps1")
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
 $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
+$entryFillAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-entry-fill-diagnostics.ps1")
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
 $profileAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles-aggregate.ps1")
 
@@ -85,6 +87,13 @@ Assert-True ($controlledReplayAnalyzer.Contains("Get-StageCounts")) "analyze-con
 Assert-True ($controlledReplayAnalyzer.Contains("trade_path_blocker")) "analyze-controlled-replay.ps1 must separately report the first blocker on the actual trade path"
 Assert-True ($controlledReplayAnalyzer.Contains("research-wide-threshold")) "analyze-controlled-replay.ps1 must explicitly flag when a diagnostic wide-threshold profile may be useful"
 Assert-True ($controlledReplayAnalyzer.Contains("ConvertTo-Json")) "analyze-controlled-replay.ps1 must support machine-readable JSON output"
+Assert-True ($entryFillAnalyzer.Contains("[string[]]`$ReplayArtifactPath")) "analyze-entry-fill-diagnostics.ps1 must accept explicit replay artifact paths"
+Assert-True ($entryFillAnalyzer.Contains("[string]`$ReplayArtifactDirectory")) "analyze-entry-fill-diagnostics.ps1 must scan replay artifact directories"
+Assert-True ($entryFillAnalyzer.Contains("entry_fill_diagnostics")) "analyze-entry-fill-diagnostics.ps1 must aggregate entry fill diagnostics"
+Assert-True ($entryFillAnalyzer.Contains("trade_distance_to_fill")) "analyze-entry-fill-diagnostics.ps1 must report trade distance to fill"
+Assert-True ($entryFillAnalyzer.Contains("seconds_to_order_expiry")) "analyze-entry-fill-diagnostics.ps1 must report seconds to forced cancel"
+Assert-True ($entryFillAnalyzer.Contains("late_signal_dominates")) "analyze-entry-fill-diagnostics.ps1 must classify late-signal dominated runs"
+Assert-True ($entryFillAnalyzer.Contains("pullback_too_deep_candidate")) "analyze-entry-fill-diagnostics.ps1 must classify deep pullback candidates"
 Assert-True ($profileComparator.Contains("wait-for-liquidation-replay.ps1")) "compare-replay-profiles.ps1 must collect one bounded replay-ready window before comparing profiles"
 Assert-True ($profileComparator.Contains("research-wide-threshold")) "compare-replay-profiles.ps1 must compare baseline against the diagnostic wide-threshold profile"
 Assert-True ($profileComparator.Contains("--market-id")) "compare-replay-profiles.ps1 must replay the second profile against the pinned market window"
@@ -104,5 +113,7 @@ Assert-True ($profileAggregateComparator.Contains("StopOnEntryFill")) "compare-r
 Assert-True ($profileAggregateComparator.Contains("planned_commands")) "compare-replay-profiles-aggregate.ps1 must make dry-run commands visible"
 Assert-True ($profileAggregateComparator.Contains("dominant_rejection_reasons")) "compare-replay-profiles-aggregate.ps1 must identify dominant blockers"
 Assert-True ($profileAggregateComparator.Contains("diagnostic_summary")) "compare-replay-profiles-aggregate.ps1 must write a concise aggregate conclusion"
+Assert-True ($profileAggregateComparator.Contains('$ErrorActionPreference = "Continue"')) "compare-replay-profiles-aggregate.ps1 must not fail solely on nested cargo stderr"
+Assert-True ($profileAggregateComparator.Contains('Write-Output ([string]$_)')) "compare-replay-profiles-aggregate.ps1 must print nested stderr as text"
 
 Write-Output "replay script checks passed"

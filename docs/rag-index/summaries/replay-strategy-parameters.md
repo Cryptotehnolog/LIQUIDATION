@@ -152,3 +152,37 @@ Market `2657475`, `btc-updown-5m-1782327600`,
 late signal плюс слишком далёкий stink bid относительно фактических Polymarket
 trades. Следующий анализ должен агрегировать entry diagnostics по нескольким
 окнам с нормальным временем до expiry.
+
+## Entry Fill Aggregate Analyzer
+
+Дата добавления: 2026-06-25.
+
+Добавлен `scripts/analyze-entry-fill-diagnostics.ps1`. Он агрегирует
+`trades[].entry_fill_diagnostics` из replay artifacts и пишет:
+
+- `late_entry_ratio`;
+- `average_seconds_to_order_expiry`;
+- `average_trade_distance_to_fill`;
+- `average_book_distance_to_fill`;
+- `no_trade_liquidity`;
+- `book_touch_reachable_without_trade`;
+- `classification`.
+
+Первый запуск по `.cache/replay` после добавления analyzer и одной короткой
+controlled comparison series:
+
+- `artifacts=9`;
+- `entry_diagnostics=1`;
+- `signals=1`;
+- `polymarket_fills=0`;
+- `late_entry_ratio=1`;
+- `average_seconds_to_order_expiry=27`;
+- `average_trade_distance_to_fill=0.1650`;
+- `classification=late_signal_dominates`.
+
+Короткая controlled series добавила окно без signals, где dominant blocker был
+`liquidation_notional_below_threshold`. Вывод: текущая выборка слишком мала для
+настройки `pullback_pct` или thresholds. Нужно накопить несколько новых
+controlled replay windows после добавления diagnostics. Если analyzer продолжит
+показывать `late_signal_dominates`, сначала исследовать timing/order_cancel_window,
+а не liquidation thresholds.

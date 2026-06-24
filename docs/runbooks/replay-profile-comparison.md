@@ -201,3 +201,52 @@ Baseline replay с новым `trades[].entry_fill_diagnostics` показал:
 относительно 5-minute expiry, а Polymarket не торговался близко к stink bid.
 Для настройки `pullback_pct` нужна серия окон с нормальным
 `seconds_to_order_expiry`, а не одиночный late signal.
+
+## Entry Diagnostics Aggregate Analyzer
+
+Чтобы не читать replay JSON руками, используйте:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-entry-fill-diagnostics.ps1 `
+  -ReplayArtifactDirectory ".cache/replay" `
+  -OutputPath ".cache/replay/entry-fill-diagnostics-analysis.json"
+```
+
+Analyzer читает replay artifacts, ищет `trades[].entry_fill_diagnostics` и
+считает:
+
+- `late_entries` и `late_entry_ratio`;
+- `average_seconds_to_order_expiry`;
+- `average_trade_distance_to_fill`;
+- `average_book_distance_to_fill`;
+- `no_trade_liquidity`;
+- `book_touch_reachable_without_trade`;
+- итоговую `classification`.
+
+Классификации:
+
+- `late_signal_dominates` - большинство сигналов пришли слишком поздно;
+- `polymarket_trade_liquidity_gap` - внутри order window не было Polymarket
+  trades;
+- `trade_cross_conservative` - book touch был достижим, но trade_cross не
+  доказал fill;
+- `pullback_too_deep_candidate` - средняя дистанция до fill слишком большая;
+- `needs_more_windows` - данных мало или pattern не доминирует;
+- `entry_fill_observed` - хотя бы один entry fill доказан.
+
+Первый запуск analyzer по `.cache/replay` после добавления diagnostics и
+одной короткой controlled comparison series:
+
+- `artifacts=9`;
+- `entry_diagnostics=1`;
+- `signals=1`;
+- `polymarket_fills=0`;
+- `late_entry_ratio=1`;
+- `average_seconds_to_order_expiry=27`;
+- `average_trade_distance_to_fill=0.1650`;
+- `classification=late_signal_dominates`.
+
+Короткая controlled series добавила окно без signals: dominant blocker был
+`liquidation_notional_below_threshold`. Вывод: это пока только smoke по одному
+новому diagnostic row. Нельзя менять baseline/pullback по такой выборке. Нужно
+накопить серию новых controlled replay windows с текущим кодом.
