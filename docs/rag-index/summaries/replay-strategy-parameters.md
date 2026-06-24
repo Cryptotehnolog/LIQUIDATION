@@ -103,3 +103,52 @@ Baseline defaults нельзя менять по этой серии.
   multiple windows.
 - Не интерпретировать `order_cancel_window` blockers как доказательство плохого
   liquidation threshold.
+- Не менять `pullback_pct` или верхний threshold, пока replay artifact не
+  покажет entry-fill качество через `trades[].entry_fill_diagnostics`.
+
+## Entry Fill Diagnostics
+
+Дата добавления: 2026-06-25.
+
+Практический bottleneck после первых real controlled replay windows -
+Polymarket entry fill. Replay artifact теперь должен использовать
+`trades[].entry_fill_diagnostics`, чтобы объяснять каждый сигнал:
+
+- `signal_best_ask` - anchor price из первоисточника стратегии;
+- `limit_price` - stink bid после `pullback_pct`;
+- `seconds_to_order_expiry` - осталось времени до forced cancel;
+- `trades_in_order_window` и `best_trade_price_in_window` - фактические trades
+  внутри order window;
+- `trade_distance_to_fill` - расстояние до fill по conservative `trade_cross`;
+- `books_in_order_window` и `book_distance_to_fill` - optimistic book-touch
+  диагностика.
+
+Правило: если signals есть, но `polymarket_fills=0`, сначала анализировать
+`trade_distance_to_fill`, `book_distance_to_fill`, `signal_best_ask` и
+`seconds_to_order_expiry`. Только после серии окон с понятным pattern можно
+обсуждать изменение `pullback_pct` или thresholds.
+
+## Entry Diagnostics Smoke Result
+
+Дата запуска: 2026-06-25.
+
+Market `2657475`, `btc-updown-5m-1782327600`,
+`2026-06-24T19:00:00Z..2026-06-24T19:05:00Z`.
+
+Новый replay artifact показал:
+
+- `signal_count=1`;
+- `polymarket_fills=0`;
+- `signal_best_ask=0.55`;
+- `limit_price=0.3850`;
+- `seconds_to_order_expiry=27`;
+- `trades_in_order_window=57`;
+- `best_trade_price_in_window=0.55`;
+- `trade_distance_to_fill=0.1650`;
+- `books_in_order_window=3073`;
+- `book_distance_to_fill=0.1650`.
+
+Вывод: конкретное окно не поддерживает изменение threshold. Оно показывает
+late signal плюс слишком далёкий stink bid относительно фактических Polymarket
+trades. Следующий анализ должен агрегировать entry diagnostics по нескольким
+окнам с нормальным временем до expiry.

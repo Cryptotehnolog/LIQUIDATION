@@ -1146,6 +1146,8 @@ pub struct PaperReplayTrade {
     pub signal: StrategySignal,
     /// Prediction-market outcome.
     pub outcome: Option<PredictionOutcome>,
+    /// Diagnostics explaining whether the Polymarket entry limit was reachable.
+    pub entry_fill_diagnostics: EntryFillDiagnostics,
     /// Polymarket fill decision.
     pub polymarket_fill: FillDecision,
     /// Hyperliquid hedge fill decision, when a hedge was attempted.
@@ -1160,6 +1162,45 @@ pub struct PaperReplayTrade {
     pub net_pnl_usd: Decimal,
     /// Whether the filled Polymarket leg has no filled hedge.
     pub unhedged: bool,
+}
+
+/// Per-signal Polymarket entry diagnostics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntryFillDiagnostics {
+    /// Token id targeted by the Polymarket entry.
+    pub token_id: String,
+    /// Order side evaluated by the entry fill model.
+    pub side: OrderSide,
+    /// Limit price sent by the strategy.
+    pub limit_price: Decimal,
+    /// Pullback percentage used to compute the limit price.
+    pub pullback_pct: Decimal,
+    /// Seconds between signal creation and forced order cancellation.
+    pub seconds_to_order_expiry: i64,
+    /// Latest top-of-book timestamp available at or before signal creation.
+    pub signal_quote_unix_ms: Option<i64>,
+    /// Best bid from the signal quote.
+    pub signal_best_bid: Option<Decimal>,
+    /// Best ask from the signal quote. This is the original stink-bid anchor.
+    pub signal_best_ask: Option<Decimal>,
+    /// Number of recorded Polymarket trades inside the order window.
+    pub trades_in_order_window: u64,
+    /// Best trade price for this order side inside the order window.
+    pub best_trade_price_in_window: Option<Decimal>,
+    /// Distance from the best observed trade to the limit. Zero means crossed.
+    pub trade_distance_to_fill: Option<Decimal>,
+    /// Timestamp of the best observed trade inside the order window.
+    pub best_trade_unix_ms: Option<i64>,
+    /// Number of recorded top-of-book rows inside the order window.
+    pub books_in_order_window: u64,
+    /// Best book-touch price for this order side inside the order window.
+    pub best_book_touch_price_in_window: Option<Decimal>,
+    /// Distance from the best observed top-of-book price to the limit.
+    pub book_distance_to_fill: Option<Decimal>,
+    /// Timestamp of the best observed book row inside the order window.
+    pub best_book_unix_ms: Option<i64>,
+    /// Fill model decision reason or fill marker.
+    pub fill_reason: String,
 }
 
 /// Paper replay execution error.
@@ -1263,6 +1304,14 @@ fn evaluate_paper_signal(input: &PaperReplayInput, signal: StrategySignal) -> Pa
         &polymarket_trades,
         &polymarket_books,
     );
+    let entry_fill_diagnostics = build_entry_fill_diagnostics(
+        input,
+        &signal,
+        &polymarket_order,
+        &polymarket_trades,
+        &polymarket_books,
+        &polymarket_fill,
+    );
 
     let polymarket_cost = if let FillDecision::Filled {
         price, quantity, ..
@@ -1312,6 +1361,7 @@ fn evaluate_paper_signal(input: &PaperReplayInput, signal: StrategySignal) -> Pa
     PaperReplayTrade {
         outcome: signal.outcome,
         signal,
+        entry_fill_diagnostics,
         polymarket_fill,
         hedge_fill,
         fee_usd,
@@ -1319,6 +1369,114 @@ fn evaluate_paper_signal(input: &PaperReplayInput, signal: StrategySignal) -> Pa
         slippage_usd,
         net_pnl_usd,
         unhedged,
+    }
+}
+
+fn build_entry_fill_diagnostics(
+    input: &PaperReplayInput,
+    signal: &StrategySignal,
+    order: &PaperOrder,
+    trades: &[ObservedTrade],
+    books: &[ObservedBook],
+    fill: &FillDecision,
+) -> EntryFillDiagnostics {
+    let signal_quote = latest_quote_at_or_before(
+        &input.polymarket_quotes,
+        &signal.symbol,
+        signal.created_unix_ms,
+    );
+    let trades_in_window = trades
+        .iter()
+        .filter(|trade| in_order_window(order, trade.unix_ms))
+        .collect::<Vec<_>>();
+    let books_in_window = books
+        .iter()
+        .filter(|book| in_order_window(order, book.unix_ms))
+        .collect::<Vec<_>>();
+    let best_trade = best_trade_for_order_side(order.side, &trades_in_window);
+    let best_book = best_book_for_order_side(order.side, &books_in_window);
+
+    EntryFillDiagnostics {
+        token_id: signal.symbol.clone(),
+        side: order.side,
+        limit_price: order.limit_price,
+        pullback_pct: input.strategy_config.pullback_pct,
+        seconds_to_order_expiry: (order.expires_unix_ms - order.created_unix_ms) / 1_000,
+        signal_quote_unix_ms: signal_quote.map(market_quote_ts_ms),
+        signal_best_bid: signal_quote.and_then(|quote| quote.best_bid),
+        signal_best_ask: signal_quote.and_then(|quote| quote.best_ask),
+        trades_in_order_window: usize_to_u64(trades_in_window.len()),
+        best_trade_price_in_window: best_trade.map(|trade| trade.price),
+        trade_distance_to_fill: best_trade.map(|trade| distance_to_fill(order, trade.price)),
+        best_trade_unix_ms: best_trade.map(|trade| trade.unix_ms),
+        books_in_order_window: usize_to_u64(books_in_window.len()),
+        best_book_touch_price_in_window: best_book.and_then(|book| book_touch_price(order, book)),
+        book_distance_to_fill: best_book
+            .and_then(|book| book_touch_price(order, book))
+            .map(|price| distance_to_fill(order, price)),
+        best_book_unix_ms: best_book.map(|book| book.unix_ms),
+        fill_reason: fill_reason(fill),
+    }
+}
+
+fn latest_quote_at_or_before<'a>(
+    quotes: &'a [MarketQuote],
+    instrument_id: &str,
+    unix_ms: i64,
+) -> Option<&'a MarketQuote> {
+    quotes
+        .iter()
+        .filter(|quote| quote.instrument_id == instrument_id)
+        .filter(|quote| market_quote_ts_ms(quote) <= unix_ms)
+        .max_by_key(|quote| market_quote_ts_ms(quote))
+}
+
+fn best_trade_for_order_side<'a>(
+    side: OrderSide,
+    trades: &[&'a ObservedTrade],
+) -> Option<&'a ObservedTrade> {
+    match side {
+        OrderSide::Buy => trades.iter().copied().min_by_key(|trade| trade.price),
+        OrderSide::Sell => trades.iter().copied().max_by_key(|trade| trade.price),
+    }
+}
+
+fn best_book_for_order_side<'a>(
+    side: OrderSide,
+    books: &[&'a ObservedBook],
+) -> Option<&'a ObservedBook> {
+    match side {
+        OrderSide::Buy => books
+            .iter()
+            .copied()
+            .filter(|book| book.best_ask.is_some())
+            .min_by_key(|book| book.best_ask),
+        OrderSide::Sell => books
+            .iter()
+            .copied()
+            .filter(|book| book.best_bid.is_some())
+            .max_by_key(|book| book.best_bid),
+    }
+}
+
+fn book_touch_price(order: &PaperOrder, book: &ObservedBook) -> Option<Decimal> {
+    match order.side {
+        OrderSide::Buy => book.best_ask,
+        OrderSide::Sell => book.best_bid,
+    }
+}
+
+fn distance_to_fill(order: &PaperOrder, observed_price: Decimal) -> Decimal {
+    match order.side {
+        OrderSide::Buy => (observed_price - order.limit_price).max(Decimal::ZERO),
+        OrderSide::Sell => (order.limit_price - observed_price).max(Decimal::ZERO),
+    }
+}
+
+fn fill_reason(fill: &FillDecision) -> String {
+    match fill {
+        FillDecision::Filled { model_version, .. } => format!("filled by {model_version}"),
+        FillDecision::NotFilled { reason } => reason.clone(),
     }
 }
 
@@ -1778,7 +1936,7 @@ fn explain_incomplete_trade_execution(
                 "polymarket_entry_not_filled",
                 REJECTION_STAGE_ENTRY_FILL,
                 "Polymarket entry not filled",
-                reason.clone(),
+                format_entry_not_filled_detail(reason, &trade.entry_fill_diagnostics),
             );
         }
         if let Some(FillDecision::NotFilled { reason }) = &trade.hedge_fill {
@@ -1791,6 +1949,27 @@ fn explain_incomplete_trade_execution(
             );
         }
     }
+}
+
+fn format_entry_not_filled_detail(reason: &str, diagnostics: &EntryFillDiagnostics) -> String {
+    format!(
+        "{}; token_id={} limit_price={} signal_best_ask={} seconds_to_order_expiry={} trades_in_window={} best_trade_price={} trade_distance_to_fill={} books_in_window={} best_book_touch_price={} book_distance_to_fill={}",
+        reason,
+        diagnostics.token_id,
+        diagnostics.limit_price,
+        format_optional_decimal(diagnostics.signal_best_ask),
+        diagnostics.seconds_to_order_expiry,
+        diagnostics.trades_in_order_window,
+        format_optional_decimal(diagnostics.best_trade_price_in_window),
+        format_optional_decimal(diagnostics.trade_distance_to_fill),
+        diagnostics.books_in_order_window,
+        format_optional_decimal(diagnostics.best_book_touch_price_in_window),
+        format_optional_decimal(diagnostics.book_distance_to_fill)
+    )
+}
+
+fn format_optional_decimal(value: Option<Decimal>) -> String {
+    value.map_or_else(|| "none".to_owned(), |value| value.to_string())
 }
 
 fn explain_select_signal_token<'a>(
@@ -2604,6 +2783,16 @@ mod tests {
             report.trades[0].polymarket_fill,
             FillDecision::Filled { .. }
         ));
+        assert_eq!(
+            report.trades[0].entry_fill_diagnostics.signal_best_ask,
+            Some(Decimal::new(50, 2))
+        );
+        assert_eq!(
+            report.trades[0]
+                .entry_fill_diagnostics
+                .trade_distance_to_fill,
+            Some(Decimal::ZERO)
+        );
     }
 
     #[test]
@@ -2650,6 +2839,75 @@ mod tests {
             Some(&"0.20".to_owned())
         );
         assert_eq!(report.trades[0].signal.limit_price, Decimal::new(40, 2));
+    }
+
+    #[test]
+    fn paper_replay_reports_entry_fill_quality_when_stink_bid_misses() {
+        let market = baseline_market();
+        let input = PaperReplayInput {
+            market: market.clone(),
+            liquidations: vec![liquidation(
+                LiquidationSide::Long,
+                Decimal::new(25_000, 0),
+                2_500,
+            )],
+            polymarket_quotes: vec![
+                polymarket_quote(&market.down_token_id, Decimal::new(50, 2), 1_000),
+                polymarket_quote(&market.down_token_id, Decimal::new(42, 2), 3_000),
+            ],
+            polymarket_trades: vec![market_trade(
+                MarketVenue::Polymarket,
+                &market.down_token_id,
+                Decimal::new(38, 2),
+                Decimal::new(100, 0),
+                4_000,
+            )],
+            hyperliquid_quotes: vec![market_quote(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_100, 0),
+                1_400,
+            )],
+            hyperliquid_trades: vec![market_trade(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_120, 0),
+                Decimal::new(1, 4),
+                4_500,
+            )],
+            strategy_config: BaselineStrategyConfig::default(),
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule::paper_v1(),
+            hedge_notional_usd: Decimal::new(15, 0),
+            hedge_slippage_usd: Decimal::ZERO,
+            funding_hours: Decimal::ZERO,
+        };
+
+        let report = run_paper_replay(&input).expect("paper replay must run");
+
+        assert_eq!(report.signal_count, 1);
+        assert_eq!(report.polymarket_fills, 0);
+        let diagnostics = &report.trades[0].entry_fill_diagnostics;
+        assert_eq!(diagnostics.signal_best_ask, Some(Decimal::new(50, 2)));
+        assert_eq!(diagnostics.limit_price, Decimal::new(35, 2));
+        assert_eq!(diagnostics.seconds_to_order_expiry, 239);
+        assert_eq!(diagnostics.trades_in_order_window, 1);
+        assert_eq!(
+            diagnostics.best_trade_price_in_window,
+            Some(Decimal::new(38, 2))
+        );
+        assert_eq!(diagnostics.trade_distance_to_fill, Some(Decimal::new(3, 2)));
+        assert_eq!(diagnostics.books_in_order_window, 1);
+        assert_eq!(
+            diagnostics.best_book_touch_price_in_window,
+            Some(Decimal::new(42, 2))
+        );
+        assert_eq!(diagnostics.book_distance_to_fill, Some(Decimal::new(7, 2)));
+        assert!(report.signal_rejection_reasons.iter().any(|reason| {
+            reason.id == "polymarket_entry_not_filled"
+                && reason.detail.contains("trade_distance_to_fill=0.03")
+                && reason.detail.contains("seconds_to_order_expiry=239")
+        }));
     }
 
     #[test]

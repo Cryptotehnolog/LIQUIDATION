@@ -88,6 +88,34 @@ Aggregate report содержит:
   сигнал, это доказывает только влияние верхнего liquidation threshold.
 - Если оба профиля дают `net_pnl_usd=0`, winner по PnL должен оставаться `tie`.
 
+## Entry Fill Diagnostics
+
+После появления signals с `polymarket_fills=0` нельзя сразу менять
+`liquidation_threshold_max_usd` или `pullback_pct`. Сначала нужно смотреть
+`trades[].entry_fill_diagnostics` в replay artifact.
+
+Ключевые поля:
+
+- `signal_best_ask` - цена Polymarket, от которой стратегия считала stink bid;
+- `limit_price` - фактическая цена лимитного entry;
+- `pullback_pct` - использованный pullback;
+- `seconds_to_order_expiry` - сколько секунд оставалось до forced cancel;
+- `trades_in_order_window` и `best_trade_price_in_window` - были ли реальные
+  trades около лимита;
+- `trade_distance_to_fill` - насколько лучшая trade price не дошла до лимита;
+- `books_in_order_window`, `best_book_touch_price_in_window` и
+  `book_distance_to_fill` - оптимистичная book-touch диагностика.
+
+Интерпретация:
+
+- `trade_distance_to_fill = 0` означает, что `trade_cross` доказал fill.
+- Малый `trade_distance_to_fill` при большом `book_distance_to_fill` указывает
+  на проблему trade liquidity/print coverage.
+- Большой `trade_distance_to_fill` при нормальном времени до экспирации
+  указывает, что pullback может быть слишком глубоким для этого окна.
+- Малый `seconds_to_order_expiry` указывает, что сигнал пришёл поздно, и
+  менять threshold/pullback по такому окну нельзя.
+
 ## Текущий вывод на 2026-06-24
 
 Первое реальное сравнение на market `2657002`
@@ -148,3 +176,28 @@ threshold по этой серии.
 
 Вывод: это окно не поддерживает изменение threshold. Текущий практический
 barrier - entry fill на Polymarket.
+
+## Entry Diagnostics Smoke
+
+Дата запуска: 2026-06-25.
+
+Pinned market: `2657475`, `btc-updown-5m-1782327600`,
+`2026-06-24T19:00:00Z..2026-06-24T19:05:00Z`.
+
+Baseline replay с новым `trades[].entry_fill_diagnostics` показал:
+
+- `signal_count=1`;
+- `polymarket_fills=0`;
+- `signal_best_ask=0.55`;
+- `limit_price=0.3850`;
+- `seconds_to_order_expiry=27`;
+- `trades_in_order_window=57`;
+- `best_trade_price_in_window=0.55`;
+- `trade_distance_to_fill=0.1650`;
+- `books_in_order_window=3073`;
+- `book_distance_to_fill=0.1650`.
+
+Вывод: это окно не доказывает плохой threshold. Сигнал пришёл поздно
+относительно 5-minute expiry, а Polymarket не торговался близко к stink bid.
+Для настройки `pullback_pct` нужна серия окон с нормальным
+`seconds_to_order_expiry`, а не одиночный late signal.
