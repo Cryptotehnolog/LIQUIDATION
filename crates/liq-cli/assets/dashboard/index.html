@@ -289,6 +289,57 @@
       text-align: right;
     }
 
+    .replay-reasons {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .replay-reasons summary {
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .replay-reason-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .replay-reason {
+      display: grid;
+      gap: 5px;
+      padding: 9px;
+      background: rgba(13, 17, 23, 0.76);
+      border: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .replay-reason-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .replay-reason-id,
+    .replay-reason-detail {
+      overflow-wrap: anywhere;
+    }
+
+    .replay-reason-id {
+      color: var(--soft);
+    }
+
+    .replay-reason-detail {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
     .storage-cell {
       border-top: 1px solid var(--line);
       padding-top: 10px;
@@ -536,6 +587,52 @@
         .join("; ");
     }
 
+    function renderReplayRejectionDetails(root, reasons) {
+      const details = document.createElement("details");
+      details.className = "replay-reasons";
+      details.dataset.testid = "replay-rejection-details";
+
+      const summary = document.createElement("summary");
+      const count = Array.isArray(reasons) ? reasons.length : 0;
+      summary.textContent = count
+        ? `signal rejection reasons (${count})`
+        : "signal rejection reasons (none)";
+      details.appendChild(summary);
+
+      if (count) {
+        const list = document.createElement("div");
+        list.className = "replay-reason-list";
+        for (const reason of reasons) {
+          const item = document.createElement("div");
+          item.className = "replay-reason";
+
+          const title = document.createElement("div");
+          title.className = "replay-reason-title";
+
+          const label = document.createElement("span");
+          label.textContent = reason.label ?? reason.id ?? "unknown reason";
+
+          const reasonCount = document.createElement("strong");
+          reasonCount.textContent = String(reason.count ?? 0);
+
+          const id = document.createElement("div");
+          id.className = "replay-reason-id";
+          id.textContent = reason.id ?? "unknown";
+
+          const detail = document.createElement("div");
+          detail.className = "replay-reason-detail";
+          detail.textContent = reason.detail ?? "no detail";
+
+          title.append(label, reasonCount);
+          item.append(title, id, detail);
+          list.appendChild(item);
+        }
+        details.appendChild(list);
+      }
+
+      root.appendChild(details);
+    }
+
     function renderLatestReplay(replay) {
       const root = el("latest-replay");
       root.replaceChildren();
@@ -564,6 +661,7 @@
         row.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
         root.appendChild(row);
       }
+      renderReplayRejectionDetails(root, report.signal_rejection_reasons);
     }
 
     function renderLatency(sources) {

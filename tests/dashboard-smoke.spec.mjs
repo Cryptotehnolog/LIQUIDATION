@@ -30,6 +30,9 @@ test("collector dashboard handles null, empty, and stale source states", async (
   await expect(page.getByTestId("latest-replay")).toContainText("signals");
   await expect(page.getByTestId("latest-replay")).toContainText("-0.1090");
   await expect(page.getByTestId("latest-replay")).toContainText("below threshold");
+  await expect(page.getByTestId("replay-rejection-details")).toContainText("signal rejection reasons");
+  await page.getByTestId("replay-rejection-details").getByText("signal rejection reasons").click();
+  await expect(page.getByTestId("replay-rejection-details")).toContainText("dominant_notional_usd=4615");
   await expect(page.getByTestId("latest-replay")).toContainText("STALE METADATA");
   await page.screenshot({ path: path.join(screenshotDir, "desktop.png"), fullPage: true });
 

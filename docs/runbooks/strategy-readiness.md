@@ -368,7 +368,10 @@ Auto mode fail-closed:
   notional ниже/выше threshold, сигнал слишком близко к expiry, нет
   Polymarket quote/best ask, entry не исполнился или hedge не исполнился.
   Dashboard показывает это как `replay explanation`, чтобы `signal_count=0`
-  не выглядел как молчаливая поломка.
+  не выглядел как молчаливая поломка. Под краткой строкой есть
+  раскрываемый блок `signal rejection reasons` с полным списком причин и
+  полем `detail`, поэтому при controlled replay не нужно вручную открывать
+  JSON artifact для первичной диагностики.
 
 Важное ограничение: `settlement_status = unsettled`. MVP paper replay не
 моделирует финальное settlement Polymarket outcome, потому что в текущей схеме
