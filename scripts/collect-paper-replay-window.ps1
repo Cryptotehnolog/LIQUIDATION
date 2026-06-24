@@ -179,12 +179,16 @@ $jobs += Start-LiqCollectorJob -Name "hyperliquid" -CollectorArgs @(
 
 try {
     Wait-Job -Job $jobs | Out-Null
+    $collectorJobFailures = @()
     foreach ($job in $jobs) {
         Write-Output "=== collector job: $($job.Name) ==="
         Receive-Job -Job $job -ErrorAction SilentlyContinue | Out-Host
         if ($job.State -ne "Completed") {
-            throw "collector job $($job.Name) ended with state $($job.State)"
+            $collectorJobFailures += "$($job.Name):$($job.State)"
         }
+    }
+    if ($collectorJobFailures.Count -gt 0) {
+        Write-Warning "collector job failures recorded before replay preflight: $($collectorJobFailures -join ', ')"
     }
 }
 finally {
