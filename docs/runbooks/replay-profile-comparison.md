@@ -36,6 +36,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-replay-profi
   -PrintCommandsOnly
 ```
 
+## Aggregate comparison
+
+Для серии сравнений на нескольких реальных windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-replay-profiles-aggregate.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MaxComparisons 2 `
+  -MaxWindowsPerComparison 6 `
+  -OutputPath ".cache/replay/profile-comparison-aggregate.json"
+```
+
+Aggregate report содержит:
+
+- `completed_comparisons`;
+- `failed_comparisons`;
+- `profile_totals`;
+- `rejection_reasons_by_profile`;
+- `dominant_rejection_reasons`;
+- `baseline_vs_research_delta`;
+- `diagnostic_summary`.
+
+Этот режим всё ещё paper-only. Он не должен менять baseline defaults
+автоматически.
+
 ## Что читает отчёт
 
 Отчёт `.cache/replay/profile-comparison.json` содержит:
@@ -84,3 +109,42 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-replay-profi
 Следующий полезный шаг - aggregate comparison over multiple windows:
 одна команда запускает несколько profile comparisons и строит общий report по
 частоте сигналов, fills, net PnL и главным blockers.
+
+## Первый aggregate run
+
+Дата запуска: 2026-06-24.
+
+Параметры: `MaxComparisons=2`, `MaxWindowsPerComparison=6`.
+
+Результат:
+
+- `completed_comparisons=2`;
+- `failed_comparisons=0`;
+- baseline: `signals=0`, `fills=0`, `net_pnl_usd=0`;
+- research-wide-threshold: `signals=0`, `fills=0`, `net_pnl_usd=0`;
+- delta между research и baseline: `signals=0`, `fills=0`, `net_pnl_usd=0`;
+- dominant blockers: `order_cancel_window=18` для обоих профилей,
+  `liquidation_notional_below_threshold=2` для обоих профилей.
+
+Вывод: в этой серии проблема не в верхнем liquidation threshold, а в том, что
+события приходили слишком близко к экспирации market. Нельзя менять baseline
+threshold по этой серии.
+
+## Aggregate smoke after diagnostic summary
+
+Дата запуска: 2026-06-24.
+
+Параметры: `MaxComparisons=1`, `MaxWindowsPerComparison=6`.
+
+Результат:
+
+- `completed_comparisons=1`;
+- `failed_comparisons=0`;
+- baseline: `signals=1`, `orders=1`, `fills=0`, `net_pnl_usd=0`;
+- research-wide-threshold: `signals=1`, `orders=1`, `fills=0`,
+  `net_pnl_usd=0`;
+- delta между research и baseline: `signals=0`, `fills=0`, `net_pnl_usd=0`;
+- diagnostic summary: signals были, но Polymarket entry не filled.
+
+Вывод: это окно не поддерживает изменение threshold. Текущий практический
+barrier - entry fill на Polymarket.

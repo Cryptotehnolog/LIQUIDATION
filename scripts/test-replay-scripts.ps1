@@ -7,7 +7,8 @@ $scripts = @(
     "scripts/wait-for-liquidation-replay.ps1",
     "scripts/controlled-replay.ps1",
     "scripts/analyze-controlled-replay.ps1",
-    "scripts/compare-replay-profiles.ps1"
+    "scripts/compare-replay-profiles.ps1",
+    "scripts/compare-replay-profiles-aggregate.ps1"
 )
 
 function Assert-True {
@@ -35,6 +36,7 @@ $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "script
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
 $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
+$profileAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles-aggregate.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -91,5 +93,16 @@ Assert-True ($profileComparator.Contains("research_artifact_path")) "compare-rep
 Assert-True ($profileComparator.Contains("fill_rate")) "compare-replay-profiles.ps1 must report fill rate without manual JSON reading"
 Assert-True ($profileComparator.Contains("net_pnl_usd")) "compare-replay-profiles.ps1 must compare net PnL without manual JSON reading"
 Assert-True ($profileComparator.Contains("SkipCollect requires existing baseline replay artifact")) "compare-replay-profiles.ps1 must fail fast when -SkipCollect has no baseline artifact"
+Assert-True ($profileAggregateComparator.Contains("compare-replay-profiles.ps1")) "compare-replay-profiles-aggregate.ps1 must reuse the single-window profile comparator"
+Assert-True ($profileAggregateComparator.Contains("[int]`$MaxComparisons")) "compare-replay-profiles-aggregate.ps1 must bound the number of comparison attempts"
+Assert-True ($profileAggregateComparator.Contains("completed_comparisons")) "compare-replay-profiles-aggregate.ps1 must report completed comparisons"
+Assert-True ($profileAggregateComparator.Contains("failed_comparisons")) "compare-replay-profiles-aggregate.ps1 must report failed comparisons"
+Assert-True ($profileAggregateComparator.Contains("profile_totals")) "compare-replay-profiles-aggregate.ps1 must aggregate totals by profile"
+Assert-True ($profileAggregateComparator.Contains("rejection_reasons_by_profile")) "compare-replay-profiles-aggregate.ps1 must aggregate rejection reasons by profile"
+Assert-True ($profileAggregateComparator.Contains("baseline_vs_research_delta")) "compare-replay-profiles-aggregate.ps1 must report baseline vs research deltas"
+Assert-True ($profileAggregateComparator.Contains("StopOnEntryFill")) "compare-replay-profiles-aggregate.ps1 must support stopping after a filled entry is observed"
+Assert-True ($profileAggregateComparator.Contains("planned_commands")) "compare-replay-profiles-aggregate.ps1 must make dry-run commands visible"
+Assert-True ($profileAggregateComparator.Contains("dominant_rejection_reasons")) "compare-replay-profiles-aggregate.ps1 must identify dominant blockers"
+Assert-True ($profileAggregateComparator.Contains("diagnostic_summary")) "compare-replay-profiles-aggregate.ps1 must write a concise aggregate conclusion"
 
 Write-Output "replay script checks passed"
