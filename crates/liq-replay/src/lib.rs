@@ -789,10 +789,37 @@ pub struct PaperReplayReport {
     pub max_drawdown_usd: Decimal,
     /// Settlement status for prediction-market outcome valuation.
     pub settlement_status: PaperSettlementStatus,
+    /// Short ordered replay execution chain for dashboards and reports.
+    pub run_summary: Vec<ReplayRunSummaryStep>,
     /// Aggregated reasons explaining why candidate events did not become complete replay trades.
     pub signal_rejection_reasons: Vec<SignalRejectionReason>,
     /// Per-signal diagnostics.
     pub trades: Vec<PaperReplayTrade>,
+}
+
+/// One ordered paper replay summary step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplayRunSummaryStep {
+    /// Stable machine-readable step id.
+    pub id: String,
+    /// Short human-readable step label.
+    pub label: String,
+    /// Step status.
+    pub status: ReplayRunSummaryStatus,
+    /// Compact diagnostic detail.
+    pub detail: String,
+}
+
+/// Status for a paper replay summary step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayRunSummaryStatus {
+    /// Step completed.
+    Ok,
+    /// Step should have completed but did not.
+    Blocked,
+    /// Step was not applicable because an earlier step did not complete.
+    Skipped,
 }
 
 /// Aggregated replay diagnostic explaining missing signals, fills, or hedges.
@@ -1355,6 +1382,15 @@ fn build_paper_replay_report(
     let net_pnl_usd = gross_pnl_usd - total_fees_usd - total_funding_usd - total_slippage_usd;
     let max_drawdown_usd = max_drawdown(trades.iter().map(|trade| trade.net_pnl_usd));
     let signal_rejection_reasons = explain_signal_rejections(input, &trades);
+    let run_summary = build_replay_run_summary(
+        input,
+        signal_count,
+        polymarket_orders,
+        polymarket_fills,
+        hedge_attempts,
+        hedge_fills,
+        net_pnl_usd,
+    );
 
     PaperReplayReport {
         strategy_version,
@@ -1373,8 +1409,103 @@ fn build_paper_replay_report(
         net_pnl_usd,
         max_drawdown_usd,
         settlement_status: PaperSettlementStatus::Unsettled,
+        run_summary,
         signal_rejection_reasons,
         trades,
+    }
+}
+
+fn build_replay_run_summary(
+    input: &PaperReplayInput,
+    signal_count: u64,
+    polymarket_orders: u64,
+    polymarket_fills: u64,
+    hedge_attempts: u64,
+    hedge_fills: u64,
+    net_pnl_usd: Decimal,
+) -> Vec<ReplayRunSummaryStep> {
+    let liquidation_count = usize_to_u64(input.liquidations.len());
+    vec![
+        summary_step(
+            "liquidation_seen",
+            "liquidation seen",
+            if liquidation_count > 0 {
+                ReplayRunSummaryStatus::Ok
+            } else {
+                ReplayRunSummaryStatus::Blocked
+            },
+            format!("liquidations={liquidation_count}"),
+        ),
+        summary_step(
+            "signal_built",
+            "signal built",
+            if signal_count > 0 {
+                ReplayRunSummaryStatus::Ok
+            } else {
+                ReplayRunSummaryStatus::Blocked
+            },
+            format!("signals={signal_count}"),
+        ),
+        summary_step(
+            "entry_filled",
+            "entry filled",
+            entry_fill_summary_status(signal_count, polymarket_fills),
+            format!("polymarket_fills={polymarket_fills}/{polymarket_orders}"),
+        ),
+        summary_step(
+            "hedge_filled",
+            "hedge filled",
+            hedge_fill_summary_status(polymarket_fills, hedge_attempts, hedge_fills),
+            format!("hedge_fills={hedge_fills}/{hedge_attempts}"),
+        ),
+        summary_step(
+            "pnl_computed",
+            "PnL computed",
+            if signal_count > 0 {
+                ReplayRunSummaryStatus::Ok
+            } else {
+                ReplayRunSummaryStatus::Skipped
+            },
+            format!("net_pnl_usd={net_pnl_usd}"),
+        ),
+    ]
+}
+
+fn entry_fill_summary_status(signal_count: u64, polymarket_fills: u64) -> ReplayRunSummaryStatus {
+    if signal_count == 0 {
+        ReplayRunSummaryStatus::Skipped
+    } else if polymarket_fills > 0 {
+        ReplayRunSummaryStatus::Ok
+    } else {
+        ReplayRunSummaryStatus::Blocked
+    }
+}
+
+fn hedge_fill_summary_status(
+    polymarket_fills: u64,
+    hedge_attempts: u64,
+    hedge_fills: u64,
+) -> ReplayRunSummaryStatus {
+    if polymarket_fills == 0 {
+        ReplayRunSummaryStatus::Skipped
+    } else if hedge_attempts > 0 && hedge_fills == hedge_attempts {
+        ReplayRunSummaryStatus::Ok
+    } else {
+        ReplayRunSummaryStatus::Blocked
+    }
+}
+
+fn summary_step(
+    id: &str,
+    label: &str,
+    status: ReplayRunSummaryStatus,
+    detail: String,
+) -> ReplayRunSummaryStep {
+    ReplayRunSummaryStep {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        status,
+        detail,
     }
 }
 
@@ -2417,6 +2548,20 @@ mod tests {
         assert_eq!(report.net_pnl_usd, Decimal::new(-1090, 4));
         assert_eq!(report.max_drawdown_usd, Decimal::new(1090, 4));
         assert_eq!(report.settlement_status, PaperSettlementStatus::Unsettled);
+        assert_eq!(
+            report
+                .run_summary
+                .iter()
+                .map(|step| (step.id.as_str(), step.status))
+                .collect::<Vec<_>>(),
+            vec![
+                ("liquidation_seen", ReplayRunSummaryStatus::Ok),
+                ("signal_built", ReplayRunSummaryStatus::Ok),
+                ("entry_filled", ReplayRunSummaryStatus::Ok),
+                ("hedge_filled", ReplayRunSummaryStatus::Ok),
+                ("pnl_computed", ReplayRunSummaryStatus::Ok),
+            ]
+        );
         assert_eq!(report.trades.len(), 1);
         assert_eq!(report.trades[0].outcome, Some(PredictionOutcome::Down));
         assert!(matches!(
@@ -2470,6 +2615,20 @@ mod tests {
         let report = run_paper_replay(&input).expect("paper replay must run");
 
         assert_eq!(report.signal_count, 0);
+        assert_eq!(
+            report
+                .run_summary
+                .iter()
+                .map(|step| (step.id.as_str(), step.status))
+                .collect::<Vec<_>>(),
+            vec![
+                ("liquidation_seen", ReplayRunSummaryStatus::Ok),
+                ("signal_built", ReplayRunSummaryStatus::Blocked),
+                ("entry_filled", ReplayRunSummaryStatus::Skipped),
+                ("hedge_filled", ReplayRunSummaryStatus::Skipped),
+                ("pnl_computed", ReplayRunSummaryStatus::Skipped),
+            ]
+        );
         assert!(report.signal_rejection_reasons.iter().any(|reason| {
             reason.id == "liquidation_notional_below_threshold"
                 && reason.stage == "signal_gate"

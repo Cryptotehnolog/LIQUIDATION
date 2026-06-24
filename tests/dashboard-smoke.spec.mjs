@@ -29,6 +29,10 @@ test("collector dashboard handles null, empty, and stale source states", async (
   await expect(page.getByTestId("latest-replay")).toContainText("btc-5m-fixture");
   await expect(page.getByTestId("latest-replay")).toContainText("signals");
   await expect(page.getByTestId("latest-replay")).toContainText("-0.1090");
+  await expect(page.getByTestId("replay-run-summary")).toContainText(
+    /liquidation seen[\s\S]*signal built[\s\S]*entry filled[\s\S]*hedge filled[\s\S]*PnL computed/
+  );
+  await expect(page.getByTestId("replay-run-summary")).toContainText("net_pnl_usd=-0.1090");
   await expect(page.getByTestId("latest-replay")).toContainText("below threshold");
   await expect(page.getByTestId("replay-rejection-details")).toContainText("signal rejection reasons");
   await page.getByTestId("replay-rejection-details").getByText("signal rejection reasons").click();

@@ -359,6 +359,60 @@
       line-height: 1.45;
     }
 
+    .replay-run-summary {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .replay-run-step {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      min-width: 0;
+    }
+
+    .replay-run-status {
+      border: 1px solid currentColor;
+      padding: 2px 6px;
+      text-align: center;
+      font-size: 11px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .replay-run-status.ok {
+      color: var(--live);
+    }
+
+    .replay-run-status.blocked {
+      color: var(--bad);
+    }
+
+    .replay-run-status.skipped {
+      color: var(--warn);
+    }
+
+    .replay-run-body {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .replay-run-label {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .replay-run-detail {
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
     .storage-cell {
       border-top: 1px solid var(--line);
       padding-top: 10px;
@@ -643,6 +697,57 @@
       return groups;
     }
 
+    function fallbackReplayRunSummary(report) {
+      const signals = Number(report.signal_count ?? 0);
+      const entryFills = Number(report.polymarket_fills ?? 0);
+      const orders = Number(report.polymarket_orders ?? 0);
+      const hedgeAttempts = Number(report.hedge_attempts ?? 0);
+      const hedgeFills = Number(report.hedge_fills ?? 0);
+      return [
+        { label: "liquidation seen", status: signals > 0 ? "ok" : "blocked", detail: "legacy artifact: liquidation count unavailable" },
+        { label: "signal built", status: signals > 0 ? "ok" : "blocked", detail: `signals=${signals}` },
+        { label: "entry filled", status: signals === 0 ? "skipped" : (entryFills > 0 ? "ok" : "blocked"), detail: `polymarket_fills=${entryFills}/${orders}` },
+        { label: "hedge filled", status: entryFills === 0 ? "skipped" : (hedgeAttempts > 0 && hedgeFills === hedgeAttempts ? "ok" : "blocked"), detail: `hedge_fills=${hedgeFills}/${hedgeAttempts}` },
+        { label: "PnL computed", status: signals > 0 ? "ok" : "skipped", detail: `net_pnl_usd=${valueOrDash(report.net_pnl_usd)}` }
+      ];
+    }
+
+    function renderReplayRunSummary(root, report) {
+      const summary = Array.isArray(report.run_summary) && report.run_summary.length
+        ? report.run_summary
+        : fallbackReplayRunSummary(report);
+      const summaryRoot = document.createElement("div");
+      summaryRoot.className = "replay-run-summary";
+      summaryRoot.dataset.testid = "replay-run-summary";
+
+      for (const step of summary) {
+        const row = document.createElement("div");
+        row.className = "replay-run-step";
+
+        const status = document.createElement("span");
+        const statusValue = step.status ?? "skipped";
+        status.className = `replay-run-status ${statusValue}`;
+        status.textContent = statusValue;
+
+        const body = document.createElement("div");
+        body.className = "replay-run-body";
+
+        const label = document.createElement("div");
+        label.className = "replay-run-label";
+        label.textContent = step.label ?? step.id ?? "unknown step";
+
+        const detail = document.createElement("div");
+        detail.className = "replay-run-detail";
+        detail.textContent = step.detail ?? "-";
+
+        body.append(label, detail);
+        row.append(status, body);
+        summaryRoot.appendChild(row);
+      }
+
+      root.appendChild(summaryRoot);
+    }
+
     function renderReplayRejectionDetails(root, reasons) {
       const details = document.createElement("details");
       details.className = "replay-reasons";
@@ -728,6 +833,7 @@
         row.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
         root.appendChild(row);
       }
+      renderReplayRunSummary(root, report);
       renderReplayRejectionDetails(root, report.signal_rejection_reasons);
     }
 

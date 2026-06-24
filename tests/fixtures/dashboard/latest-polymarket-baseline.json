@@ -15,6 +15,38 @@
   "net_pnl_usd": "-0.1090",
   "max_drawdown_usd": "0.1090",
   "settlement_status": "unsettled",
+  "run_summary": [
+    {
+      "id": "liquidation_seen",
+      "label": "liquidation seen",
+      "status": "ok",
+      "detail": "liquidations=1"
+    },
+    {
+      "id": "signal_built",
+      "label": "signal built",
+      "status": "ok",
+      "detail": "signals=2"
+    },
+    {
+      "id": "entry_filled",
+      "label": "entry filled",
+      "status": "ok",
+      "detail": "polymarket_fills=1/2"
+    },
+    {
+      "id": "hedge_filled",
+      "label": "hedge filled",
+      "status": "ok",
+      "detail": "hedge_fills=1/1"
+    },
+    {
+      "id": "pnl_computed",
+      "label": "PnL computed",
+      "status": "ok",
+      "detail": "net_pnl_usd=-0.1090"
+    }
+  ],
   "signal_rejection_reasons": [
     {
       "id": "hyperliquid_hedge_not_filled",

@@ -374,6 +374,11 @@ Auto mode fail-closed:
   JSON artifact для первичной диагностики. Каждая причина содержит `stage`;
   dashboard группирует этапы в порядке прохождения стратегии:
   `signal_gate`, `entry_fill`, `hedge_fill`, `expiry`.
+- добавляет `run_summary`: короткую ordered-chain диагностику для dashboard:
+  `liquidation_seen`, `signal_built`, `entry_filled`, `hedge_filled`,
+  `pnl_computed`. Каждый шаг имеет статус `ok`, `blocked` или `skipped` и
+  поле `detail`. Это показывает не только причины отказов, но и успешный путь
+  paper replay без ручного чтения JSON.
 
 Важное ограничение: `settlement_status = unsettled`. MVP paper replay не
 моделирует финальное settlement Polymarket outcome, потому что в текущей схеме
