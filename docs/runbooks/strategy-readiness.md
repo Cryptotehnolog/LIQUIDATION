@@ -371,7 +371,9 @@ Auto mode fail-closed:
   не выглядел как молчаливая поломка. Под краткой строкой есть
   раскрываемый блок `signal rejection reasons` с полным списком причин и
   полем `detail`, поэтому при controlled replay не нужно вручную открывать
-  JSON artifact для первичной диагностики.
+  JSON artifact для первичной диагностики. Каждая причина содержит `stage`;
+  dashboard группирует этапы в порядке прохождения стратегии:
+  `signal_gate`, `entry_fill`, `hedge_fill`, `expiry`.
 
 Важное ограничение: `settlement_status = unsettled`. MVP paper replay не
 моделирует финальное settlement Polymarket outcome, потому что в текущей схеме

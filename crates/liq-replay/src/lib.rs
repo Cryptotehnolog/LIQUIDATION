@@ -800,6 +800,8 @@ pub struct PaperReplayReport {
 pub struct SignalRejectionReason {
     /// Stable machine-readable reason id.
     pub id: String,
+    /// Replay stage where the rejection happened.
+    pub stage: String,
     /// Short human-readable reason.
     pub label: String,
     /// Number of observations that matched this reason.
@@ -1378,10 +1380,16 @@ fn build_paper_replay_report(
 
 #[derive(Debug, Clone)]
 struct RejectionAccumulator {
+    stage: &'static str,
     label: &'static str,
     count: u64,
     detail: String,
 }
+
+const REJECTION_STAGE_SIGNAL_GATE: &str = "signal_gate";
+const REJECTION_STAGE_ENTRY_FILL: &str = "entry_fill";
+const REJECTION_STAGE_HEDGE_FILL: &str = "hedge_fill";
+const REJECTION_STAGE_EXPIRY: &str = "expiry";
 
 fn explain_signal_rejections(
     input: &PaperReplayInput,
@@ -1391,15 +1399,32 @@ fn explain_signal_rejections(
     explain_missing_strategy_signals(input, &mut reasons);
     explain_incomplete_trade_execution(trades, &mut reasons);
 
-    reasons
+    let mut reasons = reasons
         .into_iter()
         .map(|(id, reason)| SignalRejectionReason {
             id: id.to_owned(),
+            stage: reason.stage.to_owned(),
             label: reason.label.to_owned(),
             count: reason.count,
             detail: reason.detail,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    reasons.sort_by(|left, right| {
+        rejection_stage_rank(&left.stage)
+            .cmp(&rejection_stage_rank(&right.stage))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    reasons
+}
+
+fn rejection_stage_rank(stage: &str) -> u8 {
+    match stage {
+        REJECTION_STAGE_SIGNAL_GATE => 0,
+        REJECTION_STAGE_ENTRY_FILL => 1,
+        REJECTION_STAGE_HEDGE_FILL => 2,
+        REJECTION_STAGE_EXPIRY => 3,
+        _ => 4,
+    }
 }
 
 fn explain_missing_strategy_signals(
@@ -1456,6 +1481,7 @@ fn explain_liquidation_candidate(
         push_rejection(
             reasons,
             "signal_already_fired",
+            REJECTION_STAGE_SIGNAL_GATE,
             "signal already fired for market",
             format!(
                 "market_id={} event_ts_ms={}",
@@ -1469,6 +1495,7 @@ fn explain_liquidation_candidate(
         push_rejection(
             reasons,
             "non_btc_liquidation",
+            REJECTION_STAGE_SIGNAL_GATE,
             "non-BTC liquidation ignored",
             format!("symbol={}", liquidation.symbol),
         );
@@ -1491,6 +1518,7 @@ fn explain_liquidation_candidate(
         push_rejection(
             reasons,
             "order_cancel_window",
+            REJECTION_STAGE_EXPIRY,
             "too close to market expiry",
             format!(
                 "event_ts_ms={} market_end_ms={} cancel_window_ms={}",
@@ -1530,6 +1558,7 @@ fn explain_target_quote(
         push_rejection(
             reasons,
             "missing_polymarket_quote",
+            REJECTION_STAGE_ENTRY_FILL,
             "missing Polymarket quote for target token",
             format!("token_id={token_id} dominant_notional_usd={dominant_notional}"),
         );
@@ -1539,6 +1568,7 @@ fn explain_target_quote(
         push_rejection(
             reasons,
             "missing_polymarket_best_ask",
+            REJECTION_STAGE_ENTRY_FILL,
             "missing Polymarket best ask",
             format!("token_id={token_id} dominant_notional_usd={dominant_notional}"),
         );
@@ -1564,6 +1594,7 @@ fn can_build_polymarket_order(
     push_rejection(
         reasons,
         "invalid_polymarket_pullback_price",
+        REJECTION_STAGE_ENTRY_FILL,
         "invalid Polymarket pullback price",
         format!("best_ask={best_ask} limit_price={limit_price}"),
     );
@@ -1579,6 +1610,7 @@ fn explain_incomplete_trade_execution(
             push_rejection(
                 reasons,
                 "polymarket_entry_not_filled",
+                REJECTION_STAGE_ENTRY_FILL,
                 "Polymarket entry not filled",
                 reason.clone(),
             );
@@ -1587,6 +1619,7 @@ fn explain_incomplete_trade_execution(
             push_rejection(
                 reasons,
                 "hyperliquid_hedge_not_filled",
+                REJECTION_STAGE_HEDGE_FILL,
                 "Hyperliquid hedge not filled",
                 reason.clone(),
             );
@@ -1641,6 +1674,7 @@ fn push_liquidation_band_rejection(
     push_rejection(
         reasons,
         reason_id,
+        REJECTION_STAGE_SIGNAL_GATE,
         label,
         format!(
             "long_total={} short_total={} dominant_notional_usd={} min={} max={}",
@@ -1681,6 +1715,7 @@ fn window_notional_for_side(
 fn push_rejection(
     reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
     id: &'static str,
+    stage: &'static str,
     label: &'static str,
     detail: String,
 ) {
@@ -1691,6 +1726,7 @@ fn push_rejection(
             reason.detail.clone_from(&detail);
         })
         .or_insert_with(|| RejectionAccumulator {
+            stage,
             label,
             count: 1,
             detail,
@@ -2436,6 +2472,7 @@ mod tests {
         assert_eq!(report.signal_count, 0);
         assert!(report.signal_rejection_reasons.iter().any(|reason| {
             reason.id == "liquidation_notional_below_threshold"
+                && reason.stage == "signal_gate"
                 && reason.count == 1
                 && reason.detail.contains("min=25000")
         }));

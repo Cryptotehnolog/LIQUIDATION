@@ -17,10 +17,25 @@
   "settlement_status": "unsettled",
   "signal_rejection_reasons": [
     {
+      "id": "hyperliquid_hedge_not_filled",
+      "stage": "hedge_fill",
+      "label": "Hyperliquid hedge not filled",
+      "count": 1,
+      "detail": "no BTC-PERP trade crossed hedge price"
+    },
+    {
       "id": "liquidation_notional_below_threshold",
+      "stage": "signal_gate",
       "label": "liquidation notional below threshold",
       "count": 1,
       "detail": "long_total=4615 short_total=0 dominant_notional_usd=4615 min=25000 max=100000"
+    },
+    {
+      "id": "polymarket_entry_not_filled",
+      "stage": "entry_fill",
+      "label": "Polymarket entry not filled",
+      "count": 1,
+      "detail": "no Polymarket trade crossed limit price"
     }
   ],
   "trades": []
