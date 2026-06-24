@@ -15,5 +15,13 @@
   "net_pnl_usd": "-0.1090",
   "max_drawdown_usd": "0.1090",
   "settlement_status": "unsettled",
+  "signal_rejection_reasons": [
+    {
+      "id": "liquidation_notional_below_threshold",
+      "label": "liquidation notional below threshold",
+      "count": 1,
+      "detail": "long_total=4615 short_total=0 dominant_notional_usd=4615 min=25000 max=100000"
+    }
+  ],
   "trades": []
 }

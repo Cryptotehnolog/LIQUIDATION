@@ -363,6 +363,12 @@ Auto mode fail-closed:
 - считает `gross_pnl_usd`, `fees`, `funding`, `slippage`,
   `net_unsettled_pnl_usd`, `max_drawdown_usd`, `fill counts` и
   `unhedged_signals`.
+- добавляет `signal_rejection_reasons`: агрегированное объяснение, почему
+  liquidation events не стали полноценными signal/trade outcomes. Например:
+  notional ниже/выше threshold, сигнал слишком близко к expiry, нет
+  Polymarket quote/best ask, entry не исполнился или hedge не исполнился.
+  Dashboard показывает это как `replay explanation`, чтобы `signal_count=0`
+  не выглядел как молчаливая поломка.
 
 Важное ограничение: `settlement_status = unsettled`. MVP paper replay не
 моделирует финальное settlement Polymarket outcome, потому что в текущей схеме

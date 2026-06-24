@@ -29,6 +29,7 @@ test("collector dashboard handles null, empty, and stale source states", async (
   await expect(page.getByTestId("latest-replay")).toContainText("btc-5m-fixture");
   await expect(page.getByTestId("latest-replay")).toContainText("signals");
   await expect(page.getByTestId("latest-replay")).toContainText("-0.1090");
+  await expect(page.getByTestId("latest-replay")).toContainText("below threshold");
   await expect(page.getByTestId("latest-replay")).toContainText("STALE METADATA");
   await page.screenshot({ path: path.join(screenshotDir, "desktop.png"), fullPage: true });
 

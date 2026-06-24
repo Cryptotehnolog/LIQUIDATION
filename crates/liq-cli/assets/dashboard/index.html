@@ -528,6 +528,14 @@
       return value === null || value === undefined || value === "" ? "-" : value;
     }
 
+    function formatReplayReasons(reasons) {
+      if (!Array.isArray(reasons) || !reasons.length) return "-";
+      return reasons
+        .slice(0, 3)
+        .map((reason) => `${reason.label ?? reason.id}: ${reason.count ?? 0}`)
+        .join("; ");
+    }
+
     function renderLatestReplay(replay) {
       const root = el("latest-replay");
       root.replaceChildren();
@@ -545,6 +553,7 @@
         ["market window", windowText],
         ["signals", valueOrDash(report.signal_count)],
         ["fill rate", fillRate],
+        ["replay explanation", formatReplayReasons(report.signal_rejection_reasons)],
         ["settlement", valueOrDash(report.settlement_status)],
         ["net unsettled PnL", valueOrDash(report.net_pnl_usd)],
         ["warning", valueOrDash(replay?.warning)]

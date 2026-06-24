@@ -789,8 +789,23 @@ pub struct PaperReplayReport {
     pub max_drawdown_usd: Decimal,
     /// Settlement status for prediction-market outcome valuation.
     pub settlement_status: PaperSettlementStatus,
+    /// Aggregated reasons explaining why candidate events did not become complete replay trades.
+    pub signal_rejection_reasons: Vec<SignalRejectionReason>,
     /// Per-signal diagnostics.
     pub trades: Vec<PaperReplayTrade>,
+}
+
+/// Aggregated replay diagnostic explaining missing signals, fills, or hedges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignalRejectionReason {
+    /// Stable machine-readable reason id.
+    pub id: String,
+    /// Short human-readable reason.
+    pub label: String,
+    /// Number of observations that matched this reason.
+    pub count: u64,
+    /// Compact diagnostic details for the most recent matching observation.
+    pub detail: String,
 }
 
 /// Row counts available for one paper replay window.
@@ -1156,6 +1171,7 @@ pub fn run_paper_replay(input: &PaperReplayInput) -> Result<PaperReplayReport, P
     }
 
     Ok(build_paper_replay_report(
+        input,
         strategy_version,
         input.fill_model.version().to_owned(),
         input.fee_schedule.version.clone(),
@@ -1303,6 +1319,7 @@ fn is_btc_hedge_trade(trade: &MarketTrade) -> bool {
 }
 
 fn build_paper_replay_report(
+    input: &PaperReplayInput,
     strategy_version: String,
     fill_model_version: String,
     fee_schedule_version: String,
@@ -1335,6 +1352,7 @@ fn build_paper_replay_report(
     let gross_pnl_usd = Decimal::ZERO;
     let net_pnl_usd = gross_pnl_usd - total_fees_usd - total_funding_usd - total_slippage_usd;
     let max_drawdown_usd = max_drawdown(trades.iter().map(|trade| trade.net_pnl_usd));
+    let signal_rejection_reasons = explain_signal_rejections(input, &trades);
 
     PaperReplayReport {
         strategy_version,
@@ -1353,8 +1371,330 @@ fn build_paper_replay_report(
         net_pnl_usd,
         max_drawdown_usd,
         settlement_status: PaperSettlementStatus::Unsettled,
+        signal_rejection_reasons,
         trades,
     }
+}
+
+#[derive(Debug, Clone)]
+struct RejectionAccumulator {
+    label: &'static str,
+    count: u64,
+    detail: String,
+}
+
+fn explain_signal_rejections(
+    input: &PaperReplayInput,
+    trades: &[PaperReplayTrade],
+) -> Vec<SignalRejectionReason> {
+    let mut reasons = BTreeMap::<&'static str, RejectionAccumulator>::new();
+    explain_missing_strategy_signals(input, &mut reasons);
+    explain_incomplete_trade_execution(trades, &mut reasons);
+
+    reasons
+        .into_iter()
+        .map(|(id, reason)| SignalRejectionReason {
+            id: id.to_owned(),
+            label: reason.label.to_owned(),
+            count: reason.count,
+            detail: reason.detail,
+        })
+        .collect()
+}
+
+fn explain_missing_strategy_signals(
+    input: &PaperReplayInput,
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+) {
+    let config = BaselineStrategyConfig::default();
+    let mut latest_polymarket_quotes = HashMap::<String, MarketQuote>::new();
+    let mut liquidation_window = VecDeque::<LiquidationWindowItem>::new();
+    let mut signal_fired = false;
+
+    let mut events = baseline_replay_events(input);
+    events.sort_by_key(BaselineReplayEvent::sort_key);
+
+    for event in events {
+        match event {
+            BaselineReplayEvent::Quote(quote) => {
+                track_polymarket_quote(&mut latest_polymarket_quotes, quote);
+            }
+            BaselineReplayEvent::Liquidation(liquidation) => {
+                signal_fired = explain_liquidation_candidate(
+                    input,
+                    liquidation,
+                    &config,
+                    &mut liquidation_window,
+                    &latest_polymarket_quotes,
+                    signal_fired,
+                    reasons,
+                );
+            }
+        }
+    }
+}
+
+fn track_polymarket_quote(
+    latest_polymarket_quotes: &mut HashMap<String, MarketQuote>,
+    quote: MarketQuote,
+) {
+    if quote.venue == MarketVenue::Polymarket {
+        latest_polymarket_quotes.insert(quote.instrument_id.clone(), quote);
+    }
+}
+
+fn explain_liquidation_candidate(
+    input: &PaperReplayInput,
+    liquidation: &LiquidationEvent,
+    config: &BaselineStrategyConfig,
+    liquidation_window: &mut VecDeque<LiquidationWindowItem>,
+    latest_polymarket_quotes: &HashMap<String, MarketQuote>,
+    signal_fired: bool,
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+) -> bool {
+    if signal_fired {
+        push_rejection(
+            reasons,
+            "signal_already_fired",
+            "signal already fired for market",
+            format!(
+                "market_id={} event_ts_ms={}",
+                input.market.market_id,
+                event_ts_ms(liquidation)
+            ),
+        );
+        return true;
+    }
+    if !is_btc_symbol(&liquidation.symbol) {
+        push_rejection(
+            reasons,
+            "non_btc_liquidation",
+            "non-BTC liquidation ignored",
+            format!("symbol={}", liquidation.symbol),
+        );
+        return false;
+    }
+
+    let event_unix_ms = event_ts_ms(liquidation);
+    liquidation_window.push_back(LiquidationWindowItem {
+        unix_ms: event_unix_ms,
+        side: liquidation.side,
+        notional_usd: liquidation.notional_usd,
+    });
+    prune_liquidation_window(
+        liquidation_window,
+        event_unix_ms,
+        config.liquidation_window_ms,
+    );
+
+    if input.market.end_unix_ms - event_unix_ms <= config.order_cancel_window_ms {
+        push_rejection(
+            reasons,
+            "order_cancel_window",
+            "too close to market expiry",
+            format!(
+                "event_ts_ms={} market_end_ms={} cancel_window_ms={}",
+                event_unix_ms, input.market.end_unix_ms, config.order_cancel_window_ms
+            ),
+        );
+        return false;
+    }
+
+    let long_total = window_notional_for_side(liquidation_window, LiquidationSide::Long);
+    let short_total = window_notional_for_side(liquidation_window, LiquidationSide::Short);
+    let Some((token_id, dominant_notional)) =
+        explain_select_signal_token(config, long_total, short_total, &input.market)
+    else {
+        push_liquidation_band_rejection(config, long_total, short_total, reasons);
+        return false;
+    };
+
+    if let Some(best_ask) = explain_target_quote(
+        token_id,
+        dominant_notional,
+        latest_polymarket_quotes,
+        reasons,
+    ) {
+        return can_build_polymarket_order(config, best_ask, reasons);
+    }
+    false
+}
+
+fn explain_target_quote(
+    token_id: &str,
+    dominant_notional: Decimal,
+    latest_polymarket_quotes: &HashMap<String, MarketQuote>,
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+) -> Option<Decimal> {
+    let Some(quote) = latest_polymarket_quotes.get(token_id) else {
+        push_rejection(
+            reasons,
+            "missing_polymarket_quote",
+            "missing Polymarket quote for target token",
+            format!("token_id={token_id} dominant_notional_usd={dominant_notional}"),
+        );
+        return None;
+    };
+    let Some(best_ask) = quote.best_ask else {
+        push_rejection(
+            reasons,
+            "missing_polymarket_best_ask",
+            "missing Polymarket best ask",
+            format!("token_id={token_id} dominant_notional_usd={dominant_notional}"),
+        );
+        return None;
+    };
+    Some(best_ask)
+}
+
+fn can_build_polymarket_order(
+    config: &BaselineStrategyConfig,
+    best_ask: Decimal,
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+) -> bool {
+    let limit_price = (best_ask * (Decimal::ONE - config.pullback_pct)).round_dp(4);
+    if calculate_polymarket_shares(
+        config.polymarket_usd_per_position,
+        limit_price.max(config.min_polymarket_price),
+    )
+    .is_some()
+    {
+        return true;
+    }
+    push_rejection(
+        reasons,
+        "invalid_polymarket_pullback_price",
+        "invalid Polymarket pullback price",
+        format!("best_ask={best_ask} limit_price={limit_price}"),
+    );
+    false
+}
+
+fn explain_incomplete_trade_execution(
+    trades: &[PaperReplayTrade],
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+) {
+    for trade in trades {
+        if let FillDecision::NotFilled { reason } = &trade.polymarket_fill {
+            push_rejection(
+                reasons,
+                "polymarket_entry_not_filled",
+                "Polymarket entry not filled",
+                reason.clone(),
+            );
+        }
+        if let Some(FillDecision::NotFilled { reason }) = &trade.hedge_fill {
+            push_rejection(
+                reasons,
+                "hyperliquid_hedge_not_filled",
+                "Hyperliquid hedge not filled",
+                reason.clone(),
+            );
+        }
+    }
+}
+
+fn explain_select_signal_token<'a>(
+    config: &BaselineStrategyConfig,
+    long_total: Decimal,
+    short_total: Decimal,
+    market: &'a BaselineMarket,
+) -> Option<(&'a str, Decimal)> {
+    if within_signal_band(
+        long_total,
+        config.liquidation_threshold_min_usd,
+        config.liquidation_threshold_max_usd,
+    ) && long_total > short_total
+    {
+        return Some((&market.down_token_id, long_total));
+    }
+    if within_signal_band(
+        short_total,
+        config.liquidation_threshold_min_usd,
+        config.liquidation_threshold_max_usd,
+    ) && short_total > long_total
+    {
+        return Some((&market.up_token_id, short_total));
+    }
+    None
+}
+
+fn push_liquidation_band_rejection(
+    config: &BaselineStrategyConfig,
+    long_total: Decimal,
+    short_total: Decimal,
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+) {
+    let dominant_notional = long_total.max(short_total);
+    let reason_id = if dominant_notional < config.liquidation_threshold_min_usd {
+        "liquidation_notional_below_threshold"
+    } else if dominant_notional > config.liquidation_threshold_max_usd {
+        "liquidation_notional_above_threshold"
+    } else {
+        "no_dominant_liquidation_side"
+    };
+    let label = match reason_id {
+        "liquidation_notional_below_threshold" => "liquidation notional below threshold",
+        "liquidation_notional_above_threshold" => "liquidation notional above threshold",
+        _ => "no dominant liquidation side",
+    };
+    push_rejection(
+        reasons,
+        reason_id,
+        label,
+        format!(
+            "long_total={} short_total={} dominant_notional_usd={} min={} max={}",
+            long_total,
+            short_total,
+            dominant_notional,
+            config.liquidation_threshold_min_usd,
+            config.liquidation_threshold_max_usd
+        ),
+    );
+}
+
+fn prune_liquidation_window(
+    liquidation_window: &mut VecDeque<LiquidationWindowItem>,
+    now_unix_ms: i64,
+    window_ms: i64,
+) {
+    let cutoff = now_unix_ms - window_ms;
+    while liquidation_window
+        .front()
+        .is_some_and(|item| item.unix_ms < cutoff)
+    {
+        liquidation_window.pop_front();
+    }
+}
+
+fn window_notional_for_side(
+    liquidation_window: &VecDeque<LiquidationWindowItem>,
+    side: LiquidationSide,
+) -> Decimal {
+    liquidation_window
+        .iter()
+        .filter(|item| item.side == side)
+        .map(|item| item.notional_usd)
+        .sum()
+}
+
+fn push_rejection(
+    reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
+    id: &'static str,
+    label: &'static str,
+    detail: String,
+) {
+    reasons
+        .entry(id)
+        .and_modify(|reason| {
+            reason.count = reason.count.saturating_add(1);
+            reason.detail.clone_from(&detail);
+        })
+        .or_insert_with(|| RejectionAccumulator {
+            label,
+            count: 1,
+            detail,
+        });
 }
 
 fn observed_trades_for_instrument(
@@ -2047,6 +2387,58 @@ mod tests {
             report.trades[0].polymarket_fill,
             FillDecision::Filled { .. }
         ));
+    }
+
+    #[test]
+    fn paper_replay_explains_zero_signal_when_liquidations_are_below_threshold() {
+        let market = baseline_market();
+        let input = PaperReplayInput {
+            market: market.clone(),
+            liquidations: vec![liquidation(
+                LiquidationSide::Long,
+                Decimal::new(4_615, 0),
+                1_500,
+            )],
+            polymarket_quotes: vec![polymarket_quote(
+                &market.down_token_id,
+                Decimal::new(50, 2),
+                1_000,
+            )],
+            polymarket_trades: vec![market_trade(
+                MarketVenue::Polymarket,
+                &market.down_token_id,
+                Decimal::new(35, 2),
+                Decimal::new(429, 1),
+                1_600,
+            )],
+            hyperliquid_quotes: vec![market_quote(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_100, 0),
+                1_400,
+            )],
+            hyperliquid_trades: vec![market_trade(
+                MarketVenue::Hyperliquid,
+                "BTC-PERP",
+                Decimal::new(65_120, 0),
+                Decimal::new(1, 4),
+                1_700,
+            )],
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule::paper_v1(),
+            hedge_notional_usd: Decimal::new(15, 0),
+            hedge_slippage_usd: Decimal::ZERO,
+            funding_hours: Decimal::ZERO,
+        };
+
+        let report = run_paper_replay(&input).expect("paper replay must run");
+
+        assert_eq!(report.signal_count, 0);
+        assert!(report.signal_rejection_reasons.iter().any(|reason| {
+            reason.id == "liquidation_notional_below_threshold"
+                && reason.count == 1
+                && reason.detail.contains("min=25000")
+        }));
     }
 
     #[test]
