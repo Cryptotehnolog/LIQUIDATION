@@ -35,6 +35,9 @@ jobs:
       - name: api docs changelog guard
         shell: pwsh
         run: ./scripts/test-api-docs-changelog.ps1
+      - name: websocket endpoint contracts guard
+        shell: pwsh
+        run: ./scripts/test-websocket-endpoint-contracts.ps1
       - uses: taiki-e/install-action@nextest
       - name: cargo fmt
         run: cargo fmt --all --check

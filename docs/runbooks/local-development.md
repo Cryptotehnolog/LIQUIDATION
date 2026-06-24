@@ -157,6 +157,16 @@ TimescaleDB. Для Binance USD-M market streams используем endpoint
 `wss://fstream.binance.com/ws/<symbol>@forceOrder` может открывать WebSocket, но
 не является корректным URL для текущих market streams.
 
+Чтобы это не сломалось снова, endpoint contracts проверяются отдельным guard:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-websocket-endpoint-contracts.ps1
+```
+
+Guard сверяет base URL в `crates/liq-collector/src/source.rs` с official docs
+для Binance, Bybit и OKX. Nightly market-data diagnostics сохраняет artifact
+`websocket-endpoint-contracts`.
+
 OKX в текущем инкременте raw-only diagnostic source. Он может писать
 `raw_source_events`, но не пишет canonical `liquidation_events`, пока не добавлен
 instrument metadata для корректного `notional_usd`.

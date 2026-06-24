@@ -283,6 +283,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect-paper-replay
 ошибка инфраструктуры, а корректный отказ от пустого strategy replay без
 signal source. В таком случае запускаем следующий window, а не снижаем gate.
 
+Чтобы автоматизировать ожидание окна с liquidation events, используйте bounded
+wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/wait-for-liquidation-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MaxWindows 6 `
+  -MaxRuntimeSeconds 330
+```
+
+Wrapper продолжает следующий Polymarket 5-minute window только если preflight
+упал по причине `liquidations=0`. Любая другая ошибка collector/replay
+останавливает процесс, чтобы не маскировать инфраструктурный сбой.
+
 Команда:
 
 ```powershell

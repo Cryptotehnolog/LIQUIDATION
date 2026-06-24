@@ -544,6 +544,12 @@ async fn read_service_with_reconnects(
         {
             Ok(()) => return Ok(stats),
             Err(error) => {
+                let runtime_elapsed = settings
+                    .max_runtime
+                    .is_some_and(|limit| started_at.elapsed() >= limit);
+                if is_expected_runtime_end_error(&error, *shutdown.borrow(), runtime_elapsed) {
+                    return Ok(stats);
+                }
                 let now = Instant::now();
                 reconnects.push_back(now);
                 while reconnects
@@ -795,6 +801,14 @@ fn health_status_for_error(error: &CollectorError) -> &'static str {
         CollectorError::BackpressureTimeout(_) => "backpressure",
         _ => "failed",
     }
+}
+
+fn is_expected_runtime_end_error(
+    error: &CollectorError,
+    shutdown_requested: bool,
+    runtime_elapsed: bool,
+) -> bool {
+    matches!(error, CollectorError::ChannelClosed) && (shutdown_requested || runtime_elapsed)
 }
 
 async fn record_payloads(
@@ -1178,6 +1192,30 @@ mod tests {
             health_status_for_error(&CollectorError::BackpressureTimeout(Duration::from_secs(1))),
             "backpressure"
         );
+    }
+
+    #[test]
+    fn treats_channel_closed_as_shutdown_only_when_runtime_is_ending() {
+        assert!(is_expected_runtime_end_error(
+            &CollectorError::ChannelClosed,
+            true,
+            false
+        ));
+        assert!(is_expected_runtime_end_error(
+            &CollectorError::ChannelClosed,
+            false,
+            true
+        ));
+        assert!(!is_expected_runtime_end_error(
+            &CollectorError::ChannelClosed,
+            false,
+            false
+        ));
+        assert!(!is_expected_runtime_end_error(
+            &CollectorError::BackpressureTimeout(Duration::from_secs(1)),
+            true,
+            true
+        ));
     }
 
     #[test]
