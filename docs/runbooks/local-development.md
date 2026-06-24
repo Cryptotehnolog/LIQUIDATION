@@ -150,6 +150,13 @@ subscription ack, а Binance `forceOrder` может молчать, если в
 ликвидаций. Для проверки обязательного события задавайте `--min-messages 1`, но
 такая проверка может законно упасть по таймауту на спокойном рынке.
 
+Coinglass можно использовать как внешний sanity-check, но не как источник истины
+для replay: событие считается доступным только после записи нашим collector в
+TimescaleDB. Для Binance USD-M market streams используем endpoint
+`wss://fstream.binance.com/market/ws/<symbol>@forceOrder`. Legacy endpoint
+`wss://fstream.binance.com/ws/<symbol>@forceOrder` может открывать WebSocket, но
+не является корректным URL для текущих market streams.
+
 OKX в текущем инкременте raw-only diagnostic source. Он может писать
 `raw_source_events`, но не пишет canonical `liquidation_events`, пока не добавлен
 instrument metadata для корректного `notional_usd`.

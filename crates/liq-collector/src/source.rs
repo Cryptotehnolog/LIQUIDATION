@@ -145,7 +145,10 @@ impl SourceProbe {
         match self.source {
             CollectorSource::Bybit => "wss://stream.bybit.com/v5/public/linear".to_owned(),
             CollectorSource::Binance => {
-                format!("wss://fstream.binance.com/ws/{}@forceOrder", self.symbol)
+                format!(
+                    "wss://fstream.binance.com/market/ws/{}@forceOrder",
+                    self.symbol
+                )
             }
             CollectorSource::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_owned(),
             CollectorSource::Polymarket => {
@@ -195,11 +198,9 @@ impl SourceProbe {
     #[must_use]
     pub const fn heartbeat_message(&self) -> Option<&'static str> {
         match self.source {
+            CollectorSource::Bybit => Some(r#"{"op":"ping"}"#),
             CollectorSource::Polymarket => Some("PING"),
-            CollectorSource::Bybit
-            | CollectorSource::Binance
-            | CollectorSource::Okx
-            | CollectorSource::Hyperliquid => None,
+            CollectorSource::Binance | CollectorSource::Okx | CollectorSource::Hyperliquid => None,
         }
     }
 
@@ -207,11 +208,9 @@ impl SourceProbe {
     #[must_use]
     pub const fn heartbeat_interval(&self) -> Option<Duration> {
         match self.source {
+            CollectorSource::Bybit => Some(Duration::from_secs(20)),
             CollectorSource::Polymarket => Some(Duration::from_secs(10)),
-            CollectorSource::Bybit
-            | CollectorSource::Binance
-            | CollectorSource::Okx
-            | CollectorSource::Hyperliquid => None,
+            CollectorSource::Binance | CollectorSource::Okx | CollectorSource::Hyperliquid => None,
         }
     }
 
@@ -362,7 +361,7 @@ mod tests {
         );
         assert_eq!(
             SourceProbe::binance("BTCUSDT").websocket_url(),
-            "wss://fstream.binance.com/ws/btcusdt@forceOrder"
+            "wss://fstream.binance.com/market/ws/btcusdt@forceOrder"
         );
         assert_eq!(
             SourceProbe::okx("btc-usdt-swap").websocket_url(),
@@ -381,6 +380,14 @@ mod tests {
             .expect("ack should not be an error");
 
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn sends_bybit_application_heartbeat() {
+        let probe = SourceProbe::bybit("BTCUSDT");
+
+        assert_eq!(probe.heartbeat_message(), Some(r#"{"op":"ping"}"#));
+        assert_eq!(probe.heartbeat_interval(), Some(Duration::from_secs(20)));
     }
 
     #[test]
