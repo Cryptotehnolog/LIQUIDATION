@@ -325,6 +325,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/controlled-replay.ps
   -PrintCommandsOnly
 ```
 
+Для серии real controlled replay windows до первого доказанного Polymarket
+entry fill:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/controlled-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -UntilEntryFilled `
+  -MaxReplayAttempts 6 `
+  -SkipDashboard
+```
+
+Этот режим не снижает thresholds и не подменяет fill model. Он повторяет
+controlled replay windows, пока `polymarket_fills > 0` или пока не исчерпан
+`MaxReplayAttempts`. После каждой попытки пишется aggregate report:
+
+```text
+.cache/replay/controlled-replay-aggregate.json
+```
+
+Если за лимит попыток entry fill не найден, команда завершается non-zero, но
+aggregate report остаётся для анализа: сколько было signals, где они
+отсеялись, и какие причины `signal_rejection_reasons` повторяются.
+
 Команда:
 
 ```powershell

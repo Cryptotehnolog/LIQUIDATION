@@ -59,5 +59,11 @@ Assert-True ($controlledReplay.Contains("-ReplayArtifactPath")) "controlled-repl
 Assert-True ($controlledReplay.Contains("[switch]`$PrintCommandsOnly")) "controlled-replay.ps1 must support a dry command preview mode"
 Assert-True ($controlledReplay.Contains("Expected replay artifact was not written")) "controlled-replay.ps1 must fail if replay did not write the latest artifact"
 Assert-True (-not $controlledReplay.Contains("replay run")) "controlled-replay.ps1 must orchestrate existing scripts, not duplicate replay CLI logic"
+Assert-True ($controlledReplay.Contains("[switch]`$UntilEntryFilled")) "controlled-replay.ps1 must support running real windows until a Polymarket entry fill is observed"
+Assert-True ($controlledReplay.Contains("[int]`$MaxReplayAttempts")) "controlled-replay.ps1 must bound the number of until-entry-filled attempts"
+Assert-True ($controlledReplay.Contains("[string]`$AggregateReportPath")) "controlled-replay.ps1 must write an aggregate report for repeated real replay attempts"
+Assert-True ($controlledReplay.Contains("Read-ReplayArtifactSummary")) "controlled-replay.ps1 must summarize each replay artifact"
+Assert-True ($controlledReplay.Contains("Write-AggregateReport")) "controlled-replay.ps1 must persist aggregate replay statistics"
+Assert-True ($controlledReplay.Contains("polymarket_fills")) "controlled-replay.ps1 must stop based on observed Polymarket entry fills"
 
 Write-Output "replay script checks passed"
