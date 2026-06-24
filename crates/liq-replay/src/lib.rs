@@ -742,6 +742,8 @@ pub struct PaperReplayInput {
     pub hyperliquid_quotes: Vec<MarketQuote>,
     /// Hyperliquid trades used as hedge execution evidence.
     pub hyperliquid_trades: Vec<MarketTrade>,
+    /// Baseline strategy parameters used for signal construction.
+    pub strategy_config: BaselineStrategyConfig,
     /// Polymarket entry fill model.
     pub fill_model: FillModel,
     /// Fee and funding assumptions.
@@ -759,6 +761,8 @@ pub struct PaperReplayInput {
 pub struct PaperReplayReport {
     /// Stable strategy version.
     pub strategy_version: String,
+    /// Strategy parameters resolved for this replay run.
+    pub strategy_parameters: BTreeMap<String, String>,
     /// Fill model version used for Polymarket entries.
     pub fill_model_version: String,
     /// Fee schedule version.
@@ -1174,7 +1178,7 @@ pub enum PaperReplayError {
 pub fn run_paper_replay(input: &PaperReplayInput) -> Result<PaperReplayReport, PaperReplayError> {
     PaperOnlyGate::paper_only().ensure_allowed(TradingMode::Paper)?;
 
-    let mut strategy = BaselineStinkBidStrategy::new(BaselineStrategyConfig::default());
+    let mut strategy = BaselineStinkBidStrategy::new(input.strategy_config.clone());
     let strategy_version = strategy.version().to_owned();
     let _ = strategy.on_event(&BaselineEvent::MarketOpened(input.market.clone()));
 
@@ -1394,6 +1398,7 @@ fn build_paper_replay_report(
 
     PaperReplayReport {
         strategy_version,
+        strategy_parameters: baseline_strategy_parameters(&input.strategy_config),
         fill_model_version,
         fee_schedule_version,
         signal_count,
@@ -1413,6 +1418,36 @@ fn build_paper_replay_report(
         signal_rejection_reasons,
         trades,
     }
+}
+
+fn baseline_strategy_parameters(config: &BaselineStrategyConfig) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "liquidation_threshold_min_usd".to_owned(),
+            config.liquidation_threshold_min_usd.to_string(),
+        ),
+        (
+            "liquidation_threshold_max_usd".to_owned(),
+            config.liquidation_threshold_max_usd.to_string(),
+        ),
+        (
+            "liquidation_window_ms".to_owned(),
+            config.liquidation_window_ms.to_string(),
+        ),
+        ("pullback_pct".to_owned(), config.pullback_pct.to_string()),
+        (
+            "min_polymarket_price".to_owned(),
+            config.min_polymarket_price.to_string(),
+        ),
+        (
+            "polymarket_usd_per_position".to_owned(),
+            config.polymarket_usd_per_position.to_string(),
+        ),
+        (
+            "order_cancel_window_ms".to_owned(),
+            config.order_cancel_window_ms.to_string(),
+        ),
+    ])
 }
 
 fn build_replay_run_summary(
@@ -1562,7 +1597,7 @@ fn explain_missing_strategy_signals(
     input: &PaperReplayInput,
     reasons: &mut BTreeMap<&'static str, RejectionAccumulator>,
 ) {
-    let config = BaselineStrategyConfig::default();
+    let config = input.strategy_config.clone();
     let mut latest_polymarket_quotes = HashMap::<String, MarketQuote>::new();
     let mut liquidation_window = VecDeque::<LiquidationWindowItem>::new();
     let mut signal_fired = false;
@@ -2521,6 +2556,7 @@ mod tests {
                 Decimal::new(1, 4),
                 1_700,
             )],
+            strategy_config: BaselineStrategyConfig::default(),
             fill_model: FillModel::TradeCross,
             fee_schedule: FeeSchedule {
                 hyperliquid_taker_bps: Decimal::new(5, 0),
@@ -2571,6 +2607,52 @@ mod tests {
     }
 
     #[test]
+    fn paper_replay_uses_explicit_strategy_thresholds_and_reports_parameters() {
+        let market = baseline_market();
+        let input = PaperReplayInput {
+            market: market.clone(),
+            liquidations: vec![liquidation(
+                LiquidationSide::Long,
+                Decimal::new(150_000, 0),
+                1_500,
+            )],
+            polymarket_quotes: vec![polymarket_quote(
+                &market.down_token_id,
+                Decimal::new(50, 2),
+                1_000,
+            )],
+            polymarket_trades: vec![],
+            hyperliquid_quotes: vec![],
+            hyperliquid_trades: vec![],
+            strategy_config: BaselineStrategyConfig {
+                liquidation_threshold_max_usd: Decimal::new(200_000, 0),
+                pullback_pct: Decimal::new(20, 2),
+                ..BaselineStrategyConfig::default()
+            },
+            fill_model: FillModel::TradeCross,
+            fee_schedule: FeeSchedule::paper_v1(),
+            hedge_notional_usd: Decimal::new(15, 0),
+            hedge_slippage_usd: Decimal::ZERO,
+            funding_hours: Decimal::ZERO,
+        };
+
+        let report = run_paper_replay(&input).expect("paper replay must run");
+
+        assert_eq!(report.signal_count, 1);
+        assert_eq!(
+            report
+                .strategy_parameters
+                .get("liquidation_threshold_max_usd"),
+            Some(&"200000".to_owned())
+        );
+        assert_eq!(
+            report.strategy_parameters.get("pullback_pct"),
+            Some(&"0.20".to_owned())
+        );
+        assert_eq!(report.trades[0].signal.limit_price, Decimal::new(40, 2));
+    }
+
+    #[test]
     fn paper_replay_explains_zero_signal_when_liquidations_are_below_threshold() {
         let market = baseline_market();
         let input = PaperReplayInput {
@@ -2605,6 +2687,7 @@ mod tests {
                 Decimal::new(1, 4),
                 1_700,
             )],
+            strategy_config: BaselineStrategyConfig::default(),
             fill_model: FillModel::TradeCross,
             fee_schedule: FeeSchedule::paper_v1(),
             hedge_notional_usd: Decimal::new(15, 0),
@@ -2782,6 +2865,7 @@ mod tests {
                 1_400,
             )],
             hyperliquid_trades: vec![non_btc_trade],
+            strategy_config: BaselineStrategyConfig::default(),
             fill_model: FillModel::TradeCross,
             fee_schedule: FeeSchedule::paper_v1(),
             hedge_notional_usd: Decimal::new(15, 0),

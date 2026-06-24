@@ -3,6 +3,12 @@ param(
     [string]$ArtifactPath = ".cache/replay/latest-polymarket-baseline.json",
     [string]$MarketArtifactPath = ".cache/replay/latest-polymarket-market.json",
     [int]$MarketStaleAfterMinutes = 15,
+    [string]$ReplayProfile = "baseline",
+    [decimal]$LiquidationThresholdMinUsd = -1,
+    [decimal]$LiquidationThresholdMaxUsd = -1,
+    [decimal]$PullbackPct = -1,
+    [decimal]$PolymarketUsdPerPosition = -1,
+    [int]$OrderCancelWindowSeconds = -1,
     [string]$FetchFixturePath,
     [switch]$FetchMetadataFirst,
     [switch]$SkipFetch
@@ -44,6 +50,23 @@ if (Test-Path -LiteralPath $MarketArtifactPath) {
     Write-Warning "Polymarket market artifact does not exist before replay: $MarketArtifactPath"
 }
 
+$strategyArgs = @("--replay-profile", $ReplayProfile)
+if ($LiquidationThresholdMinUsd -ge 0) {
+    $strategyArgs += @("--liquidation-threshold-min-usd", [string]$LiquidationThresholdMinUsd)
+}
+if ($LiquidationThresholdMaxUsd -ge 0) {
+    $strategyArgs += @("--liquidation-threshold-max-usd", [string]$LiquidationThresholdMaxUsd)
+}
+if ($PullbackPct -ge 0) {
+    $strategyArgs += @("--pullback-pct", [string]$PullbackPct)
+}
+if ($PolymarketUsdPerPosition -ge 0) {
+    $strategyArgs += @("--polymarket-usd-per-position", [string]$PolymarketUsdPerPosition)
+}
+if ($OrderCancelWindowSeconds -ge 0) {
+    $strategyArgs += @("--order-cancel-window-seconds", [string]$OrderCancelWindowSeconds)
+}
+
 $args = @(
     "run", "-p", "liq-cli", "--",
     "replay", "preflight",
@@ -59,6 +82,7 @@ $args = @(
     "--market-stale-after-minutes", [string]$MarketStaleAfterMinutes,
     "--json"
 )
+$args += $strategyArgs
 
 & cargo @args
 if ($LASTEXITCODE -ne 0) {
@@ -81,6 +105,7 @@ $args = @(
     "--artifact-path", $ArtifactPath,
     "--json"
 )
+$args += $strategyArgs
 
 & cargo @args
 if ($LASTEXITCODE -ne 0) {

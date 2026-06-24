@@ -325,6 +325,46 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/controlled-replay.ps
   -PrintCommandsOnly
 ```
 
+### Настраиваемые параметры baseline strategy
+
+Верхний порог liquidation notional не является константой стратегии. Это
+операторская ручка, как и нижний порог, pullback, размер позиции и окно отмены
+ордера. Baseline replay использует исходные консервативные defaults:
+
+- `liquidation_threshold_min_usd = 25000`;
+- `liquidation_threshold_max_usd = 100000`;
+- `pullback_pct = 0.30`;
+- `polymarket_usd_per_position = 15`;
+- `order_cancel_window_seconds = 60`.
+
+Эти значения можно переопределять без изменения Rust-кода:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/controlled-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -LiquidationThresholdMinUsd 25000 `
+  -LiquidationThresholdMaxUsd 200000 `
+  -PullbackPct 0.25 `
+  -PolymarketUsdPerPosition 15 `
+  -OrderCancelWindowSeconds 60
+```
+
+Для проверки гипотезы, что baseline слишком часто отсекает крупные реальные
+каскады по верхнему threshold, есть диагностический профиль:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/controlled-replay.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -ReplayProfile research-wide-threshold
+```
+
+`research-wide-threshold` расширяет только верхний liquidation threshold до
+`1000000`. Это не новая production strategy и не разрешение снижать качество
+fill/hedge model. Его цель - сравнить baseline и wide-threshold на одних и тех
+же real controlled replay windows. Каждый replay artifact пишет
+`strategy_parameters`, поэтому dashboard/CI могут показать, какими ручками был
+получен результат.
+
 Для серии real controlled replay windows до первого доказанного Polymarket
 entry fill:
 

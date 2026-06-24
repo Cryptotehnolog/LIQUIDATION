@@ -8,7 +8,13 @@ param(
     [int]$MinFreshSeconds = 120,
     [int]$MaxWaitForFreshWindowSeconds = 360,
     [int]$PostWindowGraceSeconds = 10,
-    [int]$DelayBetweenWindowsSeconds = 5
+    [int]$DelayBetweenWindowsSeconds = 5,
+    [string]$ReplayProfile = "baseline",
+    [decimal]$LiquidationThresholdMinUsd = 25000,
+    [decimal]$LiquidationThresholdMaxUsd = 100000,
+    [decimal]$PullbackPct = 0.30,
+    [decimal]$PolymarketUsdPerPosition = 15,
+    [int]$OrderCancelWindowSeconds = 60
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +51,12 @@ for ($window = 1; $window -le $MaxWindows; $window++) {
         "-MinFreshSeconds", [string]$MinFreshSeconds,
         "-MaxWaitForFreshWindowSeconds", [string]$MaxWaitForFreshWindowSeconds,
         "-PostWindowGraceSeconds", [string]$PostWindowGraceSeconds,
+        "-ReplayProfile", $ReplayProfile,
+        "-LiquidationThresholdMinUsd", [string]$LiquidationThresholdMinUsd,
+        "-LiquidationThresholdMaxUsd", [string]$LiquidationThresholdMaxUsd,
+        "-PullbackPct", [string]$PullbackPct,
+        "-PolymarketUsdPerPosition", [string]$PolymarketUsdPerPosition,
+        "-OrderCancelWindowSeconds", [string]$OrderCancelWindowSeconds,
         "-RunReplay"
     )
 

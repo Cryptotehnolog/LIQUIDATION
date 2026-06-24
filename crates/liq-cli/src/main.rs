@@ -17,10 +17,10 @@ use liq_recorder::{
     repository, schema,
 };
 use liq_replay::{
-    BaselineMarket, DryRunRequest, FeeSchedule, FillModel, MarketDataReadiness,
-    PaperReplayDataCounts, PaperReplayInput, PaperReplayPreflightInput, PaperReplayPreflightReport,
-    PaperReplayReport, StrategyReadinessExplanation, StrategyReadinessReport,
-    paper_replay_preflight, run_paper_replay, validate_dry_run,
+    BaselineMarket, BaselineStrategyConfig, DryRunRequest, FeeSchedule, FillModel,
+    MarketDataReadiness, PaperReplayDataCounts, PaperReplayInput, PaperReplayPreflightInput,
+    PaperReplayPreflightReport, PaperReplayReport, StrategyReadinessExplanation,
+    StrategyReadinessReport, paper_replay_preflight, run_paper_replay, validate_dry_run,
 };
 use polymarket_markets::{
     PolymarketMarketFetchFilter, PolymarketMarketFetchRequest, fetch_polymarket_markets,
@@ -111,6 +111,9 @@ struct ReplayRunOptions {
     /// Strategy id. MVP supports `baseline`.
     #[arg(long, default_value = "baseline")]
     strategy: String,
+    /// Replay parameter profile. Supported: `baseline`, `research-wide-threshold`.
+    #[arg(long, default_value = "baseline")]
+    replay_profile: String,
     /// Postgres connection URL. Defaults to `DATABASE_URL`.
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
@@ -141,6 +144,21 @@ struct ReplayRunOptions {
     /// Polymarket entry fill model: `trade_cross` or `book_touch`.
     #[arg(long, default_value = "trade_cross")]
     fill_model: String,
+    /// Minimum dominant liquidation notional for a signal.
+    #[arg(long)]
+    liquidation_threshold_min_usd: Option<Decimal>,
+    /// Maximum dominant liquidation notional; above this the wave is considered missed.
+    #[arg(long)]
+    liquidation_threshold_max_usd: Option<Decimal>,
+    /// Pullback percentage applied to the observed Polymarket best ask.
+    #[arg(long)]
+    pullback_pct: Option<Decimal>,
+    /// Paper USD allocated to the Polymarket leg.
+    #[arg(long)]
+    polymarket_usd_per_position: Option<Decimal>,
+    /// Cancel or avoid unfilled orders this many seconds before market expiry.
+    #[arg(long)]
+    order_cancel_window_seconds: Option<i64>,
     /// Paper hedge notional in USD for each filled Polymarket signal.
     #[arg(long, default_value = "15")]
     hedge_notional_usd: Decimal,
@@ -687,7 +705,7 @@ async fn handle_replay_command(command: ReplayCommand) -> anyhow::Result<()> {
 async fn handle_replay_run(options: ReplayRunOptions) -> anyhow::Result<()> {
     let json = options.json;
     let artifact_path = options.artifact_path.clone();
-    let report = run_replay_from_database(replay_options_to_args(options)).await?;
+    let report = run_replay_from_database(replay_options_to_args(options)?).await?;
     if let Some(artifact_path) = artifact_path {
         write_replay_artifact(&artifact_path, &report).await?;
     }
@@ -696,7 +714,7 @@ async fn handle_replay_run(options: ReplayRunOptions) -> anyhow::Result<()> {
 
 async fn handle_replay_preflight(options: ReplayRunOptions) -> anyhow::Result<()> {
     let json = options.json;
-    let report = preflight_replay_from_database(replay_options_to_args(options)).await?;
+    let report = preflight_replay_from_database(replay_options_to_args(options)?).await?;
     let ready_for_replay = report.ready_for_replay;
     print_replay_preflight_report(&report, json)?;
     if !ready_for_replay {
@@ -708,8 +726,9 @@ async fn handle_replay_preflight(options: ReplayRunOptions) -> anyhow::Result<()
     Ok(())
 }
 
-fn replay_options_to_args(options: ReplayRunOptions) -> ReplayRunArgs {
-    ReplayRunArgs {
+fn replay_options_to_args(options: ReplayRunOptions) -> anyhow::Result<ReplayRunArgs> {
+    let strategy_config = resolve_baseline_strategy_config(&options)?;
+    Ok(ReplayRunArgs {
         strategy: options.strategy,
         database_url: options.database_url,
         market_id: options.market_id,
@@ -718,6 +737,7 @@ fn replay_options_to_args(options: ReplayRunOptions) -> ReplayRunArgs {
         start_unix_ms: options.start_unix_ms,
         end_unix_ms: options.end_unix_ms,
         fill_model: options.fill_model,
+        strategy_config,
         hedge_notional_usd: options.hedge_notional_usd,
         hedge_slippage_usd: options.hedge_slippage_usd,
         funding_hours: options.funding_hours,
@@ -730,7 +750,7 @@ fn replay_options_to_args(options: ReplayRunOptions) -> ReplayRunArgs {
         base_asset: options.base_asset,
         market_type: options.market_type,
         market_stale_after_minutes: options.market_stale_after_minutes,
-    }
+    })
 }
 
 struct ReplayRunArgs {
@@ -742,6 +762,7 @@ struct ReplayRunArgs {
     start_unix_ms: Option<i64>,
     end_unix_ms: Option<i64>,
     fill_model: String,
+    strategy_config: BaselineStrategyConfig,
     hedge_notional_usd: Decimal,
     hedge_slippage_usd: Decimal,
     funding_hours: Decimal,
@@ -773,6 +794,7 @@ async fn run_replay_from_database(args: ReplayRunArgs) -> anyhow::Result<PaperRe
         polymarket_trades: data.polymarket_trades,
         hyperliquid_quotes: data.hyperliquid_quotes,
         hyperliquid_trades: data.hyperliquid_trades,
+        strategy_config: args.strategy_config,
         fill_model,
         fee_schedule,
         hedge_notional_usd: args.hedge_notional_usd,
@@ -875,6 +897,63 @@ fn validate_replay_numeric_args(args: &ReplayRunArgs) -> anyhow::Result<()> {
         if value < Decimal::ZERO {
             anyhow::bail!("{name} must be greater than or equal to zero");
         }
+    }
+    Ok(())
+}
+
+fn resolve_baseline_strategy_config(
+    options: &ReplayRunOptions,
+) -> anyhow::Result<BaselineStrategyConfig> {
+    let mut config = match options.replay_profile.as_str() {
+        "baseline" => BaselineStrategyConfig::default(),
+        "research-wide-threshold" => BaselineStrategyConfig {
+            liquidation_threshold_max_usd: Decimal::new(1_000_000, 0),
+            ..BaselineStrategyConfig::default()
+        },
+        other => anyhow::bail!(
+            "unsupported replay profile '{other}'; supported: baseline, research-wide-threshold"
+        ),
+    };
+
+    if let Some(value) = options.liquidation_threshold_min_usd {
+        config.liquidation_threshold_min_usd = value;
+    }
+    if let Some(value) = options.liquidation_threshold_max_usd {
+        config.liquidation_threshold_max_usd = value;
+    }
+    if let Some(value) = options.pullback_pct {
+        config.pullback_pct = value;
+    }
+    if let Some(value) = options.polymarket_usd_per_position {
+        config.polymarket_usd_per_position = value;
+    }
+    if let Some(value) = options.order_cancel_window_seconds {
+        config.order_cancel_window_ms = value
+            .checked_mul(1_000)
+            .context("--order-cancel-window-seconds is too large")?;
+    }
+
+    validate_baseline_strategy_config(&config)?;
+    Ok(config)
+}
+
+fn validate_baseline_strategy_config(config: &BaselineStrategyConfig) -> anyhow::Result<()> {
+    if config.liquidation_threshold_min_usd <= Decimal::ZERO {
+        anyhow::bail!("--liquidation-threshold-min-usd must be greater than zero");
+    }
+    if config.liquidation_threshold_max_usd < config.liquidation_threshold_min_usd {
+        anyhow::bail!(
+            "--liquidation-threshold-max-usd must be greater than or equal to --liquidation-threshold-min-usd"
+        );
+    }
+    if config.pullback_pct < Decimal::ZERO || config.pullback_pct >= Decimal::ONE {
+        anyhow::bail!("--pullback-pct must be greater than or equal to 0 and less than 1");
+    }
+    if config.polymarket_usd_per_position <= Decimal::ZERO {
+        anyhow::bail!("--polymarket-usd-per-position must be greater than zero");
+    }
+    if config.order_cancel_window_ms < 0 {
+        anyhow::bail!("--order-cancel-window-seconds must be greater than or equal to zero");
     }
     Ok(())
 }

@@ -7,6 +7,12 @@ param(
     [int]$MinFreshSeconds = 120,
     [int]$MaxWaitForFreshWindowSeconds = 360,
     [int]$PostWindowGraceSeconds = 10,
+    [string]$ReplayProfile = "baseline",
+    [decimal]$LiquidationThresholdMinUsd = 25000,
+    [decimal]$LiquidationThresholdMaxUsd = 100000,
+    [decimal]$PullbackPct = 0.30,
+    [decimal]$PolymarketUsdPerPosition = 15,
+    [int]$OrderCancelWindowSeconds = 60,
     [switch]$SkipFetch,
     [switch]$RunReplay
 )
@@ -211,6 +217,12 @@ $replayArgs = @(
     "--hedge-slippage-usd", "0.10",
     "--funding-hours", "1",
     "--market-stale-after-minutes", "15",
+    "--replay-profile", $ReplayProfile,
+    "--liquidation-threshold-min-usd", [string]$LiquidationThresholdMinUsd,
+    "--liquidation-threshold-max-usd", [string]$LiquidationThresholdMaxUsd,
+    "--pullback-pct", [string]$PullbackPct,
+    "--polymarket-usd-per-position", [string]$PolymarketUsdPerPosition,
+    "--order-cancel-window-seconds", [string]$OrderCancelWindowSeconds,
     "--json"
 )
 

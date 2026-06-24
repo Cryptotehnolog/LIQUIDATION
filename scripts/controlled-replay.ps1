@@ -14,6 +14,12 @@ param(
     [int]$DashboardWindowMinutes = 60,
     [int]$DashboardPollSeconds = 5,
     [int]$PolymarketMarketStaleAfterMinutes = 15,
+    [string]$ReplayProfile = "baseline",
+    [decimal]$LiquidationThresholdMinUsd = -1,
+    [decimal]$LiquidationThresholdMaxUsd = -1,
+    [decimal]$PullbackPct = -1,
+    [decimal]$PolymarketUsdPerPosition = -1,
+    [int]$OrderCancelWindowSeconds = -1,
     [switch]$UntilEntryFilled,
     [int]$MaxReplayAttempts = 6,
     [int]$DelayBetweenReplayAttemptsSeconds = 5,
@@ -46,6 +52,56 @@ if ($MaxReplayAttempts -lt 1) {
 }
 if ($DelayBetweenReplayAttemptsSeconds -lt 0) {
     throw "DelayBetweenReplayAttemptsSeconds must be non-negative"
+}
+
+function Resolve-ReplayParameters {
+    switch ($ReplayProfile) {
+        "baseline" {
+            $resolved = [ordered]@{
+                LiquidationThresholdMinUsd = [decimal]25000
+                LiquidationThresholdMaxUsd = [decimal]100000
+                PullbackPct = [decimal]0.30
+                PolymarketUsdPerPosition = [decimal]15
+                OrderCancelWindowSeconds = 60
+            }
+        }
+        "research-wide-threshold" {
+            $resolved = [ordered]@{
+                LiquidationThresholdMinUsd = [decimal]25000
+                LiquidationThresholdMaxUsd = [decimal]1000000
+                PullbackPct = [decimal]0.30
+                PolymarketUsdPerPosition = [decimal]15
+                OrderCancelWindowSeconds = 60
+            }
+        }
+        default {
+            throw "Unsupported ReplayProfile '$ReplayProfile'; supported: baseline, research-wide-threshold"
+        }
+    }
+
+    if ($LiquidationThresholdMinUsd -ge 0) { $resolved.LiquidationThresholdMinUsd = $LiquidationThresholdMinUsd }
+    if ($LiquidationThresholdMaxUsd -ge 0) { $resolved.LiquidationThresholdMaxUsd = $LiquidationThresholdMaxUsd }
+    if ($PullbackPct -ge 0) { $resolved.PullbackPct = $PullbackPct }
+    if ($PolymarketUsdPerPosition -ge 0) { $resolved.PolymarketUsdPerPosition = $PolymarketUsdPerPosition }
+    if ($OrderCancelWindowSeconds -ge 0) { $resolved.OrderCancelWindowSeconds = $OrderCancelWindowSeconds }
+
+    if ($resolved.LiquidationThresholdMinUsd -le 0) {
+        throw "LiquidationThresholdMinUsd must be greater than zero"
+    }
+    if ($resolved.LiquidationThresholdMaxUsd -lt $resolved.LiquidationThresholdMinUsd) {
+        throw "LiquidationThresholdMaxUsd must be greater than or equal to LiquidationThresholdMinUsd"
+    }
+    if ($resolved.PullbackPct -lt 0 -or $resolved.PullbackPct -ge 1) {
+        throw "PullbackPct must be greater than or equal to zero and less than one"
+    }
+    if ($resolved.PolymarketUsdPerPosition -le 0) {
+        throw "PolymarketUsdPerPosition must be greater than zero"
+    }
+    if ($resolved.OrderCancelWindowSeconds -lt 0) {
+        throw "OrderCancelWindowSeconds must be non-negative"
+    }
+
+    [pscustomobject]$resolved
 }
 
 function Format-Command {
@@ -110,6 +166,8 @@ function Write-AggregateReport {
     $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $AggregateReportFullPath -Encoding UTF8
 }
 
+$ResolvedReplayParameters = Resolve-ReplayParameters
+
 $waitArgs = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
@@ -123,7 +181,13 @@ $waitArgs = @(
     "-MinFreshSeconds", [string]$MinFreshSeconds,
     "-MaxWaitForFreshWindowSeconds", [string]$MaxWaitForFreshWindowSeconds,
     "-PostWindowGraceSeconds", [string]$PostWindowGraceSeconds,
-    "-DelayBetweenWindowsSeconds", [string]$DelayBetweenWindowsSeconds
+    "-DelayBetweenWindowsSeconds", [string]$DelayBetweenWindowsSeconds,
+    "-ReplayProfile", $ReplayProfile,
+    "-LiquidationThresholdMinUsd", [string]$ResolvedReplayParameters.LiquidationThresholdMinUsd,
+    "-LiquidationThresholdMaxUsd", [string]$ResolvedReplayParameters.LiquidationThresholdMaxUsd,
+    "-PullbackPct", [string]$ResolvedReplayParameters.PullbackPct,
+    "-PolymarketUsdPerPosition", [string]$ResolvedReplayParameters.PolymarketUsdPerPosition,
+    "-OrderCancelWindowSeconds", [string]$ResolvedReplayParameters.OrderCancelWindowSeconds
 )
 
 $dashboardArgs = @(
@@ -145,6 +209,8 @@ if (-not $NoOpenBrowser) {
 }
 
 Write-Output "controlled replay: waiting for replay-ready liquidation window"
+Write-Output "replay profile: $ReplayProfile"
+Write-Output "strategy params: min=$($ResolvedReplayParameters.LiquidationThresholdMinUsd) max=$($ResolvedReplayParameters.LiquidationThresholdMaxUsd) pullback=$($ResolvedReplayParameters.PullbackPct) polymarket_usd=$($ResolvedReplayParameters.PolymarketUsdPerPosition) cancel_seconds=$($ResolvedReplayParameters.OrderCancelWindowSeconds)"
 if ($UntilEntryFilled) {
     Write-Output "controlled replay mode: until entry filled, max attempts $MaxReplayAttempts"
     Write-Output "aggregate report: $AggregateReportFullPath"
