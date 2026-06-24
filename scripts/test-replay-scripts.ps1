@@ -5,7 +5,8 @@ $scripts = @(
     "scripts/run-latest-polymarket-replay.ps1",
     "scripts/collect-paper-replay-window.ps1",
     "scripts/wait-for-liquidation-replay.ps1",
-    "scripts/controlled-replay.ps1"
+    "scripts/controlled-replay.ps1",
+    "scripts/analyze-controlled-replay.ps1"
 )
 
 function Assert-True {
@@ -31,6 +32,7 @@ $runLatest = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-lat
 $collectWindow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/collect-paper-replay-window.ps1")
 $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/wait-for-liquidation-replay.ps1")
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
+$controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -65,5 +67,10 @@ Assert-True ($controlledReplay.Contains("[string]`$AggregateReportPath")) "contr
 Assert-True ($controlledReplay.Contains("Read-ReplayArtifactSummary")) "controlled-replay.ps1 must summarize each replay artifact"
 Assert-True ($controlledReplay.Contains("Write-AggregateReport")) "controlled-replay.ps1 must persist aggregate replay statistics"
 Assert-True ($controlledReplay.Contains("polymarket_fills")) "controlled-replay.ps1 must stop based on observed Polymarket entry fills"
+Assert-True ($controlledReplayAnalyzer.Contains("[string]`$AggregateReportPath")) "analyze-controlled-replay.ps1 must accept an aggregate report path"
+Assert-True ($controlledReplayAnalyzer.Contains("Get-StageCounts")) "analyze-controlled-replay.ps1 must aggregate rejection reasons by stage"
+Assert-True ($controlledReplayAnalyzer.Contains("trade_path_blocker")) "analyze-controlled-replay.ps1 must separately report the first blocker on the actual trade path"
+Assert-True ($controlledReplayAnalyzer.Contains("research-wide-threshold")) "analyze-controlled-replay.ps1 must explicitly flag when a diagnostic wide-threshold profile may be useful"
+Assert-True ($controlledReplayAnalyzer.Contains("ConvertTo-Json")) "analyze-controlled-replay.ps1 must support machine-readable JSON output"
 
 Write-Output "replay script checks passed"

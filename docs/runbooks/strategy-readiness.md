@@ -348,6 +348,20 @@ controlled replay windows, пока `polymarket_fills > 0` или пока не 
 aggregate report остаётся для анализа: сколько было signals, где они
 отсеялись, и какие причины `signal_rejection_reasons` повторяются.
 
+Для машинного разбора нескольких attempts используйте analyzer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-controlled-replay.ps1 `
+  -AggregateReportPath ".cache/replay/controlled-replay-aggregate.json" `
+  -Json
+```
+
+Analyzer считает attempts, liquidation events, signals, Polymarket orders/fills,
+hedge attempts/fills, группирует `signal_rejection_reasons` по этапам и отдельно
+пишет, есть ли смысл запускать diagnostic `research-wide-threshold` profile.
+Это advisory-вывод: он не меняет baseline strategy и не разрешает реальную
+торговлю.
+
 Команда:
 
 ```powershell
