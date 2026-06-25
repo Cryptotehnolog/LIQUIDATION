@@ -7,6 +7,7 @@ $scripts = @(
     "scripts/wait-for-liquidation-replay.ps1",
     "scripts/controlled-replay.ps1",
     "scripts/run-entry-fill-diagnostics-batch.ps1",
+    "scripts/run-until-signal-built.ps1",
     "scripts/analyze-controlled-replay.ps1",
     "scripts/analyze-entry-fill-diagnostics.ps1",
     "scripts/compare-replay-profiles.ps1",
@@ -37,6 +38,7 @@ $collectWindow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/col
 $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/wait-for-liquidation-replay.ps1")
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
 $entryFillBatch = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-entry-fill-diagnostics-batch.ps1")
+$untilSignalBuilt = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-until-signal-built.ps1")
 $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
 $entryFillAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-entry-fill-diagnostics.ps1")
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
@@ -100,7 +102,17 @@ Assert-True ($entryFillBatch.Contains("[switch]`$UntilSignalBuilt")) "run-entry-
 Assert-True ($entryFillBatch.Contains("signal_built_observed")) "run-entry-fill-diagnostics-batch.ps1 must record when it stops after a built signal"
 Assert-True ($entryFillBatch.Contains("signal_count -gt 0")) "run-entry-fill-diagnostics-batch.ps1 must stop based on signal_count, not entry fill only"
 Assert-True ($entryFillBatch.Contains("until_signal_built")) "run-entry-fill-diagnostics-batch.ps1 must publish until-signal-built mode in reports"
+Assert-True ($entryFillBatch.Contains("no_replay_ready_window")) "run-entry-fill-diagnostics-batch.ps1 must classify empty liquidation windows without treating them as technical failures"
+Assert-True ($entryFillBatch.Contains("No replay-ready liquidation window found")) "run-entry-fill-diagnostics-batch.ps1 must detect bounded windows without liquidations"
+Assert-True (-not $entryFillBatch.Contains("if (`$completed -eq 0)")) "run-entry-fill-diagnostics-batch.ps1 must not fail solely because a bounded cycle had no replay-ready liquidation window"
 Assert-True ($entryFillBatch.Contains("[switch]`$PrintCommandsOnly")) "run-entry-fill-diagnostics-batch.ps1 must support dry-run command preview"
+Assert-True ($untilSignalBuilt.Contains("run-entry-fill-diagnostics-batch.ps1")) "run-until-signal-built.ps1 must delegate to the bounded replay batch"
+Assert-True ($untilSignalBuilt.Contains("-UntilSignalBuilt")) "run-until-signal-built.ps1 must always enable until-signal-built mode"
+Assert-True ($untilSignalBuilt.Contains("[int]`$MaxTotalRuntimeSeconds = 7200")) "run-until-signal-built.ps1 must default to a two-hour bounded run"
+Assert-True ($untilSignalBuilt.Contains("Get-Date -Format 'yyyyMMdd-HHmmss'")) "run-until-signal-built.ps1 must create unique artifact paths per run"
+Assert-True ($untilSignalBuilt.Contains("`$RunPrefix = Join-Path `$ArtifactRoot")) "run-until-signal-built.ps1 must pass repo-relative artifact paths to downstream scripts"
+Assert-True (-not $untilSignalBuilt.Contains("`$RunPrefix = Join-Path `$ArtifactRootFullPath")) "run-until-signal-built.ps1 must not pass absolute artifact prefixes to downstream scripts"
+Assert-True ($untilSignalBuilt.Contains("[switch]`$PrintCommandsOnly")) "run-until-signal-built.ps1 must support dry-run command preview"
 Assert-True ($controlledReplayAnalyzer.Contains("[string]`$AggregateReportPath")) "analyze-controlled-replay.ps1 must accept an aggregate report path"
 Assert-True ($controlledReplayAnalyzer.Contains("Get-StageCounts")) "analyze-controlled-replay.ps1 must aggregate rejection reasons by stage"
 Assert-True ($controlledReplayAnalyzer.Contains("completedAttempts")) "analyze-controlled-replay.ps1 must distinguish completed attempts from failed attempts"

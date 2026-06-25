@@ -350,3 +350,63 @@ Run id: `20260625-023637`.
 bounded scan. Это полезный отрицательный результат: режим поиска первого
 сигнала работает, но в этой серии baseline не должен был строить сигнал.
 Снижать `liquidation_threshold_min_usd` по одной крошечной ликвидации нельзя.
+
+## Until Signal Built Live Result 2026-06-25
+
+После добавления лёгкого wrapper-а `scripts/run-until-signal-built.ps1` серия
+была запущена короткими контролируемыми циклами вместо одного слепого
+двухчасового процесса.
+
+Исправления во время live run:
+
+- wrapper сначала ошибочно передавал absolute artifact paths, из-за чего
+  downstream scripts строили путь вида `D:\...\D:\...`;
+- `no replay-ready liquidation window` теперь классифицируется как
+  controlled negative result, а не technical failure;
+- wrapper по умолчанию использует одну replay window на attempt, чтобы
+  15-minute monitoring cycle не зависал дольше ожидаемого.
+
+Успешный run id: `20260625-095554`.
+
+Market: `2664770`, `2026-06-25T06:55:00Z..2026-06-25T07:00:00Z`
+(`09:55..10:00` Minsk time).
+
+Collector facts:
+
+- Binance: `received_messages=9`, `canonical_inserted=9`;
+- Bybit: `received_messages=19`, `canonical_inserted=6`;
+- OKX: `received_messages=27`, `canonical_inserted=9`;
+- Polymarket quotes/trades were present;
+- Hyperliquid quotes/trades were present.
+
+Replay facts:
+
+- preflight: `ready_for_replay=true`;
+- `liquidations=24`;
+- `signal_count=1`;
+- `polymarket_orders=1`;
+- `polymarket_fills=0`;
+- `hedge_attempts=0`;
+- `net_pnl_usd=0`;
+- stopped reason: `signal_built_observed`.
+
+Entry-fill diagnostics:
+
+- signal: `short_liquidation`;
+- source notional: `36125.65980`;
+- outcome: `up`;
+- `signal_best_ask=0.53`;
+- `limit_price=0.371`;
+- `pullback_pct=0.3`;
+- `seconds_to_order_expiry=138`;
+- `trades_in_order_window=123`;
+- `best_trade_price_in_window=0.52`;
+- `trade_distance_to_fill=0.149`;
+- `books_in_order_window=13607`;
+- `book_distance_to_fill=0.159`;
+- classification: `pullback_too_deep_candidate`.
+
+Вывод: baseline signal gate наконец доказан на реальном окне. Проблема
+перешла на следующий этап: Polymarket entry fill. Это не late-signal case,
+потому что до forced cancel оставалось 138 секунд. Но менять `pullback_pct`
+по одному окну нельзя; нужен aggregate по нескольким signal windows.

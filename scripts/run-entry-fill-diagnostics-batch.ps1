@@ -302,6 +302,7 @@ $startedAt = [DateTime]::UtcNow
 $attempts = @()
 $completed = 0
 $failed = 0
+$noReplayReady = 0
 $stoppedReason = "max_attempts_reached"
 $attemptTimeoutSeconds = ($MaxWindowsPerAttempt * ($MaxRuntimeSeconds + $DelayBetweenWindowsSeconds + 30)) +
     $MaxWaitForFreshWindowSeconds +
@@ -322,6 +323,28 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $nestedResult = Invoke-NestedPowerShell -Args ([string[]]$planned.command_args) -TimeoutSeconds $attemptTimeoutSeconds
         $nestedResult.output | ForEach-Object { Write-Output ([string]$_) }
         if ([int]$nestedResult.exit_code -ne 0) {
+            $noReplayReadyWindow = @($nestedResult.output | Where-Object {
+                [string]$_ -match "No replay-ready liquidation window found"
+            }).Count -gt 0
+            if ($noReplayReadyWindow) {
+                $noReplayReady += 1
+                $attempts += [pscustomobject]@{
+                    attempt = $attempt
+                    status = "no_replay_ready_window"
+                    replay_artifact_path = [string]$planned.replay_artifact_path
+                    market_artifact_path = [string]$planned.market_artifact_path
+                    attempt_aggregate_path = [string]$planned.attempt_aggregate_path
+                    error = "No replay-ready liquidation window found"
+                    run_summary = @()
+                    signal_rejection_reasons = @()
+                    signal_count = 0
+                    polymarket_orders = 0
+                    polymarket_fills = 0
+                    hedge_attempts = 0
+                    hedge_fills = 0
+                }
+                continue
+            }
             throw "controlled replay attempt $attempt failed with exit code $($nestedResult.exit_code)"
         }
 
@@ -367,7 +390,7 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
     }
 }
 
-$status = if ($completed -gt 0) { "completed" } else { "failed" }
+$status = if ($completed -gt 0 -or $noReplayReady -gt 0) { "completed" } else { "failed" }
 $aggregate = [pscustomobject]@{
     generated_at = ([DateTime]::UtcNow.ToString("o"))
     status = $status
@@ -378,6 +401,7 @@ $aggregate = [pscustomobject]@{
     stop_on_entry_fill = [bool]$StopOnEntryFill
     max_attempts = $MaxAttempts
     attempts_completed = $completed
+    no_replay_ready_windows = $noReplayReady
     failed_attempts = $failed
     artifact_directory = [string]$artifactDirectoryFullPath
     attempts = $attempts
@@ -428,6 +452,7 @@ $finalReport = [pscustomobject]@{
     until_signal_built = [bool]$UntilSignalBuilt
     stop_on_entry_fill = [bool]$StopOnEntryFill
     attempts_completed = $completed
+    no_replay_ready_windows = $noReplayReady
     failed_attempts = $failed
     aggregate_report_path = [string]$aggregateReportFullPath
     trade_path_analysis_path = [string]$tradePathAnalysisFullPath
@@ -446,6 +471,7 @@ if ($entryFillAnalysis) {
     Write-Output "entry_fill_summary=signals=$($entryFillAnalysis.summary.signals) orders=$($entryFillAnalysis.summary.polymarket_orders) fills=$($entryFillAnalysis.summary.polymarket_fills) late_ratio=$($entryFillAnalysis.summary.late_entry_ratio) avg_trade_distance=$($entryFillAnalysis.summary.average_trade_distance_to_fill) avg_seconds_to_expiry=$($entryFillAnalysis.summary.average_seconds_to_order_expiry)"
 }
 
-if ($completed -eq 0) {
+if ($completed -eq 0 -and $noReplayReady -eq 0) {
     exit 1
 }
+exit 0
