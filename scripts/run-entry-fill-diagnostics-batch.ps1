@@ -22,6 +22,7 @@ param(
     [decimal]$PullbackPct = -1,
     [decimal]$PolymarketUsdPerPosition = -1,
     [int]$OrderCancelWindowSeconds = -1,
+    [switch]$UntilSignalBuilt,
     [switch]$StopOnEntryFill,
     [switch]$FailFast,
     [switch]$PrintCommandsOnly
@@ -83,6 +84,28 @@ function Add-OptionalReplayOverride {
     if ($Value -ge 0) {
         $Args.Add($Name) | Out-Null
         $Args.Add([string]$Value) | Out-Null
+    }
+}
+
+function Test-ShouldStopAfterAttempt {
+    param([Parameter(Mandatory = $true)]$Summary)
+
+    if ($UntilSignalBuilt -and [int]$Summary.signal_count -gt 0) {
+        return [pscustomobject]@{
+            should_stop = $true
+            stopped_reason = "signal_built_observed"
+        }
+    }
+    if ($StopOnEntryFill -and [int]$Summary.polymarket_fills -gt 0) {
+        return [pscustomobject]@{
+            should_stop = $true
+            stopped_reason = "entry_fill_observed"
+        }
+    }
+
+    [pscustomobject]@{
+        should_stop = $false
+        stopped_reason = $null
     }
 }
 
@@ -262,6 +285,8 @@ $analysisCommands = @($tradePathAnalysisCommand, $entryFillAnalysisCommand)
 if ($PrintCommandsOnly) {
     [pscustomobject]@{
         generated_at = ([DateTime]::UtcNow.ToString("o"))
+        until_signal_built = [bool]$UntilSignalBuilt
+        stop_on_entry_fill = [bool]$StopOnEntryFill
         planned_attempts = $plannedCommands
         planned_analysis_commands = $analysisCommands
         output_path = [string]$outputFullPath
@@ -308,8 +333,9 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $attempts += $summary
         $completed += 1
 
-        if ($StopOnEntryFill -and $summary.polymarket_fills -gt 0) {
-            $stoppedReason = "entry_fill_observed"
+        $stopDecision = Test-ShouldStopAfterAttempt -Summary $summary
+        if ($stopDecision.should_stop) {
+            $stoppedReason = [string]$stopDecision.stopped_reason
             break
         }
     } catch {
@@ -348,6 +374,8 @@ $aggregate = [pscustomobject]@{
     started_at = $startedAt.ToString("o")
     stopped_reason = $stoppedReason
     replay_profile = $ReplayProfile
+    until_signal_built = [bool]$UntilSignalBuilt
+    stop_on_entry_fill = [bool]$StopOnEntryFill
     max_attempts = $MaxAttempts
     attempts_completed = $completed
     failed_attempts = $failed
@@ -397,6 +425,8 @@ $finalReport = [pscustomobject]@{
     generated_at = ([DateTime]::UtcNow.ToString("o"))
     status = $status
     stopped_reason = $stoppedReason
+    until_signal_built = [bool]$UntilSignalBuilt
+    stop_on_entry_fill = [bool]$StopOnEntryFill
     attempts_completed = $completed
     failed_attempts = $failed
     aggregate_report_path = [string]$aggregateReportFullPath

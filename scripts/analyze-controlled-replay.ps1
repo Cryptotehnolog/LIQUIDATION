@@ -108,16 +108,20 @@ function Get-ResearchProfileRecommendation {
 
 $aggregate = Get-Content -Raw -LiteralPath $AggregateReportFullPath | ConvertFrom-Json
 $attempts = @($aggregate.attempts)
-$stageCounts = Get-StageCounts -Attempts $attempts
+$completedAttempts = @($attempts | Where-Object { $_.status -eq "completed" })
+$failedAttempts = @($attempts | Where-Object { $_.status -ne "completed" })
+$stageCounts = Get-StageCounts -Attempts $completedAttempts
 
 $totals = [pscustomobject]@{
-    attempts = $attempts.Count
-    liquidations = [int](@($attempts | ForEach-Object { Get-RunSummaryNumber -Attempt $_ -Id "liquidation_seen" -Prefix "liquidations" } | Measure-Object -Sum).Sum)
-    signals = [int](@($attempts | Measure-Object -Property signal_count -Sum).Sum)
-    polymarket_orders = [int](@($attempts | Measure-Object -Property polymarket_orders -Sum).Sum)
-    polymarket_fills = [int](@($attempts | Measure-Object -Property polymarket_fills -Sum).Sum)
-    hedge_attempts = [int](@($attempts | Measure-Object -Property hedge_attempts -Sum).Sum)
-    hedge_fills = [int](@($attempts | Measure-Object -Property hedge_fills -Sum).Sum)
+    attempts_total = $attempts.Count
+    attempts_completed = $completedAttempts.Count
+    attempts_failed = $failedAttempts.Count
+    liquidations = [int](@($completedAttempts | ForEach-Object { Get-RunSummaryNumber -Attempt $_ -Id "liquidation_seen" -Prefix "liquidations" } | Measure-Object -Sum).Sum)
+    signals = [int](@($completedAttempts | Measure-Object -Property signal_count -Sum).Sum)
+    polymarket_orders = [int](@($completedAttempts | Measure-Object -Property polymarket_orders -Sum).Sum)
+    polymarket_fills = [int](@($completedAttempts | Measure-Object -Property polymarket_fills -Sum).Sum)
+    hedge_attempts = [int](@($completedAttempts | Measure-Object -Property hedge_attempts -Sum).Sum)
+    hedge_fills = [int](@($completedAttempts | Measure-Object -Property hedge_fills -Sum).Sum)
 }
 
 $bottleneck = if ($stageCounts.by_stage.Count -gt 0) {
@@ -176,7 +180,7 @@ if ($Json) {
 }
 
 Write-Output "controlled replay aggregate analysis"
-Write-Output "status=$($analysis.aggregate_status) attempts=$($totals.attempts) liquidations=$($totals.liquidations) signals=$($totals.signals) orders=$($totals.polymarket_orders) fills=$($totals.polymarket_fills) hedge_attempts=$($totals.hedge_attempts) hedge_fills=$($totals.hedge_fills)"
+Write-Output "status=$($analysis.aggregate_status) attempts_total=$($totals.attempts_total) attempts_completed=$($totals.attempts_completed) attempts_failed=$($totals.attempts_failed) liquidations=$($totals.liquidations) signals=$($totals.signals) orders=$($totals.polymarket_orders) fills=$($totals.polymarket_fills) hedge_attempts=$($totals.hedge_attempts) hedge_fills=$($totals.hedge_fills)"
 Write-Output "bottleneck=$($bottleneck.stage) count=$($bottleneck.count)"
 Write-Output "trade_path_blocker=$($tradePathBlocker.stage) detail=$($tradePathBlocker.detail)"
 foreach ($reason in $stageCounts.by_reason) {

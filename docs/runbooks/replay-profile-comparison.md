@@ -274,6 +274,22 @@ Batch wrapper делает:
 - строит `analyze-entry-fill-diagnostics.ps1` report;
 - чистит зависшие `target/debug/liq.exe` при attempt timeout.
 
+Чтобы сначала искать не entry fill, а хотя бы один построенный сигнал,
+используйте режим `-UntilSignalBuilt`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-entry-fill-diagnostics-batch.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -UntilSignalBuilt `
+  -MaxAttempts 2 `
+  -MaxWindowsPerAttempt 3 `
+  -MaxRuntimeSeconds 260
+```
+
+Этот режим останавливает серию, когда replay artifact впервые показывает
+`signal_count > 0`. Это дешевле и честнее, чем сразу искать entry fill:
+сначала нужно доказать, что signal gate вообще пропускает окно.
+
 ## Controlled Batch Result 2026-06-25
 
 Run id: `20260625-022104`.
@@ -307,3 +323,30 @@ Entry-fill conclusion:
 - lowering `liquidation_threshold_min_usd` is not recommended from this run
   alone because below-threshold events are likely noise unless a research
   profile proves otherwise across many windows.
+
+## Until Signal Built Batch Result 2026-06-25
+
+Run id: `20260625-023637`.
+
+Параметры: `MaxAttempts=2`, `MaxWindowsPerAttempt=3`,
+`MaxRuntimeSeconds=260`, `UntilSignalBuilt=true`.
+
+Результат:
+
+- `attempts_total=2`;
+- `attempts_completed=1`;
+- `attempts_failed=1`;
+- `stopped_reason=max_attempts_reached`;
+- completed market: `2661409`,
+  `2026-06-24T23:35:00Z..2026-06-24T23:40:00Z`;
+- `liquidations=1`;
+- `signal_count=0`;
+- `polymarket_orders=0`;
+- `polymarket_fills=0`;
+- blocker: `signal_gate/liquidation_notional_below_threshold`;
+- detail: `dominant_notional_usd=121.58340`, при baseline minimum `25000`.
+
+Вторая попытка завершилась без replay-ready liquidation window в пределах
+bounded scan. Это полезный отрицательный результат: режим поиска первого
+сигнала работает, но в этой серии baseline не должен был строить сигнал.
+Снижать `liquidation_threshold_min_usd` по одной крошечной ликвидации нельзя.

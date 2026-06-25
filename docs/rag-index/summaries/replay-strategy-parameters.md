@@ -218,3 +218,34 @@ events, но baseline не дошёл до entry-fill стадии. Нельзя
 `pullback_pct` по этому окну. Следующий сбор должен продолжать искать windows,
 где `signal_count > 0`, и только потом анализировать
 `trade_distance_to_fill`/`seconds_to_order_expiry`.
+
+## Until Signal Built Batch
+
+Дата добавления: 2026-06-25.
+
+`scripts/run-entry-fill-diagnostics-batch.ps1` получил режим
+`-UntilSignalBuilt`. Он останавливает bounded replay series, когда первый
+completed attempt даёт `signal_count > 0`. Это снижает CPU/noise и отделяет
+две разные задачи:
+
+1. Сначала доказать, что baseline signal gate пропускает реальное окно.
+2. Только потом анализировать Polymarket entry fill quality.
+
+Первый запуск: `20260625-023637`.
+
+- `MaxAttempts=2`, `MaxWindowsPerAttempt=3`;
+- `attempts_total=2`;
+- `attempts_completed=1`;
+- `attempts_failed=1`;
+- `stopped_reason=max_attempts_reached`;
+- completed market: `2661409`,
+  `2026-06-24T23:35:00Z..2026-06-24T23:40:00Z`;
+- `liquidations=1`;
+- `signal_count=0`;
+- blocker: `signal_gate/liquidation_notional_below_threshold`;
+- observed notional: `121.58340`, far below baseline minimum `25000`.
+
+Вывод: режим работает, но серия не нашла baseline signal. Это не повод снижать
+`liquidation_threshold_min_usd`: единственная completed liquidation была
+слишком маленькой и похожа на noise. Следующий controlled run должен
+продолжать искать replay-ready windows с реальным `signal_count > 0`.
