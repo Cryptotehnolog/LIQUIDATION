@@ -28,6 +28,11 @@ if (-not $DatabaseUrl) {
     throw "DatabaseUrl or DATABASE_URL is required"
 }
 
+$minPolymarketWindowRuntimeSeconds = 300 + $PostWindowGraceSeconds
+if ($MaxRuntimeSeconds -lt $minPolymarketWindowRuntimeSeconds) {
+    throw "MaxRuntimeSeconds must be at least $minPolymarketWindowRuntimeSeconds for a complete 5-minute Polymarket window plus post-window grace"
+}
+
 function Invoke-MarketFetch {
     $fetchScript = Join-Path $PSScriptRoot "fetch-polymarket-markets.ps1"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $fetchScript `

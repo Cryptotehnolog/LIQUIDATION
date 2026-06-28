@@ -9,7 +9,7 @@ param(
     [int]$MaxCycleRuntimeSeconds = 900,
     [int]$MaxAttemptsPerCycle = 1,
     [int]$MaxWindowsPerAttempt = 1,
-    [int]$MaxRuntimeSeconds = 260,
+    [int]$MaxRuntimeSeconds = 330,
     [int]$MaxWaitForFreshWindowSeconds = 180,
     [int]$AttemptTimeoutBufferSeconds = 120,
     [int]$MinCycleBudgetSeconds = 420,

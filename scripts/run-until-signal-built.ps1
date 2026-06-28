@@ -5,7 +5,7 @@ param(
     [int]$MaxTotalRuntimeSeconds = 7200,
     [int]$MaxAttempts = 48,
     [int]$MaxWindowsPerAttempt = 1,
-    [int]$MaxRuntimeSeconds = 260,
+    [int]$MaxRuntimeSeconds = 330,
     [int]$MaxWaitForFreshWindowSeconds = 180,
     [int]$AttemptTimeoutBufferSeconds = 120,
     [int]$DelayBetweenAttemptsSeconds = 5,
