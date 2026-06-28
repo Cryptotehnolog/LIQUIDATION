@@ -478,3 +478,61 @@ Polymarket и Hyperliquid. Сигналов в этих windows нет по пр
 слишком близко к expiry. Это не повод менять `pullback_pct` или thresholds.
 Нужно продолжать collecting signal windows и сравнивать entry fill quality
 только после `signal_count > 0`.
+
+## Live Until-Signal Result 2026-06-29
+
+Run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-until-signal-built-aggregate.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -ArtifactRoot ".cache/replay/until-signal-built-aggregate-live/manual-cycle-005" `
+  -OutputPath ".cache/replay/until-signal-built-aggregate-live/manual-cycle-005-report.json" `
+  -EntryFillAnalysisPath ".cache/replay/until-signal-built-aggregate-live/manual-cycle-005-entry-analysis.json" `
+  -TargetSignalWindows 1 `
+  -MaxTotalRuntimeSeconds 900 `
+  -MaxCycleRuntimeSeconds 900 `
+  -MaxAttemptsPerCycle 1 `
+  -MaxWindowsPerAttempt 1 `
+  -MaxRuntimeSeconds 260 `
+  -MaxWaitForFreshWindowSeconds 180 `
+  -AttemptTimeoutBufferSeconds 120
+```
+
+Result:
+
+- status: `target_reached`;
+- `signal_windows_collected=1`;
+- `failed_cycles=0`;
+- signal artifact:
+  `.cache/replay/until-signal-built-aggregate-live/manual-cycle-005/cycle-003/`
+  `until-signal-built-20260629-010050/attempt-001/replay.json`;
+- market: `2713152`, `2026-06-28T22:00:00Z..2026-06-28T22:05:00Z`;
+- replay counts: `liquidations=44`, `signal_count=1`,
+  `polymarket_orders=1`, `polymarket_fills=0`, `hedge_attempts=0`;
+- signal source notional: `26271.85813`;
+- `signal_best_ask=0.89`;
+- `limit_price=0.623`;
+- `seconds_to_order_expiry=65`;
+- `trades_in_order_window=48`;
+- `best_trade_price_in_window=0.9`;
+- `trade_distance_to_fill=0.277`;
+- `book_distance_to_fill=0.277`.
+
+Entry-fill analysis:
+
+- classification: `pullback_too_deep_candidate`;
+- detail: `Average trade distance to fill is above the configured useful threshold`;
+- `avg_seconds_to_order_expiry=65`;
+- `avg_trade_distance_to_fill=0.277`;
+- `avg_book_distance_to_fill=0.277`.
+
+Interpretation:
+
+- baseline signal gate is working on real data;
+- the current blocker is Polymarket entry fill, not liquidation collection;
+- this is not primarily a late-signal case;
+- do not change `pullback_pct` from one window, but this is the second real
+  signal window where the stink bid is far below recorded Polymarket trades;
+- the next controlled series should collect more `signal_count > 0` windows,
+  then compare diagnostic pullback profiles on pinned windows.
