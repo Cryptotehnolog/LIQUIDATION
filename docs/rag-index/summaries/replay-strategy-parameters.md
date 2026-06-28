@@ -386,3 +386,42 @@ filled. Это не late-signal case: до expiry было `65` секунд, н
 diagnostic pullback profiles. Нельзя менять `pullback_pct` по одному окну, но уже
 есть второй independent signal window с похожим pattern: pullback слишком глубокий
 для recorded Polymarket liquidity.
+
+## Pullback Profile Comparison Memory
+
+Дата: 2026-06-29.
+
+Добавлен `scripts/compare-pullback-profiles.ps1`: diagnostic-only comparer,
+который replay-ит `pullback_pct=0.30/0.20/0.15/0.10` на одном pinned
+Polymarket market window. Он не собирает новые windows и не меняет baseline
+defaults.
+
+Проверены три signal windows:
+
+- `2664770`, `2026-06-25T06:55:00Z..07:00:00Z`;
+- `2664904`, `2026-06-25T07:35:00Z..07:40:00Z`;
+- `2713152`, `2026-06-28T22:00:00Z..22:05:00Z`.
+
+Во всех трёх windows:
+
+- `signal_count=1` для всех pullback profiles;
+- `polymarket_fills=0` для всех pullback profiles;
+- `best_by_entry_fills=tie`;
+- `best_by_net_pnl=tie`;
+- `pullback_pct=0.10` даёт минимальный `trade_distance_to_fill`.
+
+Дистанции до fill:
+
+- `2664770`: `0.30=0.1490`, `0.20=0.0960`, `0.15=0.0695`,
+  `0.10=0.0430`;
+- `2664904`: `0.30=0.1710`, `0.20=0.1140`, `0.15=0.0855`,
+  `0.10=0.0570`;
+- `2713152`: `0.30=0.2770`, `0.20=0.1880`, `0.15=0.1435`,
+  `0.10=0.0990`.
+
+Вывод: текущие данные поддерживают только research-гипотезу, что baseline
+`pullback_pct=0.30` слишком глубокий для observed Polymarket liquidity. Они
+не поддерживают изменение baseline, потому что ни один diagnostic profile не
+получил conservative `trade_cross` fill. Следующее улучшение - aggregate
+pullback comparator по нескольким pinned signal windows и дальнейший сбор
+окон до первого entry fill.

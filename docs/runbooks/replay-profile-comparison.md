@@ -138,6 +138,77 @@ Aggregate report содержит:
 одна команда запускает несколько profile comparisons и строит общий report по
 частоте сигналов, fills, net PnL и главным blockers.
 
+## Pullback Profile Comparison
+
+Для диагностики `pullback_pct` используйте отдельный pinned-window comparer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-pullback-profiles.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MarketArtifactPath ".cache/replay/until-signal-built-aggregate-live/manual-cycle-005/cycle-003/until-signal-built-20260629-010050/attempt-001/market.json" `
+  -OutputPath ".cache/replay/pullback-profile-comparison/manual-cycle-005/comparison.json" `
+  -ArtifactDirectory ".cache/replay/pullback-profile-comparison/manual-cycle-005"
+```
+
+Default profiles:
+
+- `pullback_pct=0.30` - baseline;
+- `pullback_pct=0.20` - diagnostic;
+- `pullback_pct=0.15` - diagnostic;
+- `pullback_pct=0.10` - diagnostic.
+
+Правила:
+
+- comparer не собирает новые данные и не вызывает
+  `wait-for-liquidation-replay.ps1`;
+- все profiles replay-ятся на одном и том же `market_id`, `up_token_id`,
+  `down_token_id`, `start_ts`, `end_ts`;
+- result всегда `diagnostic_only=true`;
+- `best_by_entry_fills=tie` означает, что менять baseline нельзя, даже если
+  один profile ближе к fill по `trade_distance_to_fill`;
+- `closest_trade_distance_profile` полезен только как research hint.
+
+Dry-run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-pullback-profiles.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MarketArtifactPath ".cache/replay/until-signal-built-aggregate-live/manual-cycle-005/cycle-003/until-signal-built-20260629-010050/attempt-001/market.json" `
+  -PrintCommandsOnly
+```
+
+## Pullback Comparison Series 2026-06-29
+
+Проверены три pinned signal windows:
+
+- `2664770`, `2026-06-25T06:55:00Z..07:00:00Z`;
+- `2664904`, `2026-06-25T07:35:00Z..07:40:00Z`;
+- `2713152`, `2026-06-28T22:00:00Z..22:05:00Z`.
+
+Результат по всем трём windows:
+
+- каждый profile строит `signal_count=1`;
+- ни один profile не даёт `polymarket_fills > 0` по conservative
+  `trade_cross`;
+- `best_by_entry_fills=tie`;
+- `best_by_net_pnl=tie`;
+- `closest_trade_distance_profile=pullback-0.10` во всех трёх windows.
+
+Дистанции до fill:
+
+- market `2664770`: `0.30 -> 0.1490`, `0.20 -> 0.0960`,
+  `0.15 -> 0.0695`, `0.10 -> 0.0430`, `seconds_to_expiry=138`;
+- market `2664904`: `0.30 -> 0.1710`, `0.20 -> 0.1140`,
+  `0.15 -> 0.0855`, `0.10 -> 0.0570`, `seconds_to_expiry=18`;
+- market `2713152`: `0.30 -> 0.2770`, `0.20 -> 0.1880`,
+  `0.15 -> 0.1435`, `0.10 -> 0.0990`, `seconds_to_expiry=65`.
+
+Вывод: `pullback_pct=0.10` consistently сокращает distance-to-fill, но пока
+не доказывает fill. Нельзя менять baseline `pullback_pct=0.30` без окна, где
+entry реально filled и hedge path/PnL посчитаны. Следующий шаг - продолжать
+сбор `signal_count > 0` windows и добавить aggregate pullback comparator,
+который суммирует эти результаты автоматически.
+
 ## Первый aggregate run
 
 Дата запуска: 2026-06-24.

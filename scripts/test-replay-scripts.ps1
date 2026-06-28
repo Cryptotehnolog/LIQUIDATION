@@ -12,7 +12,8 @@ $scripts = @(
     "scripts/analyze-controlled-replay.ps1",
     "scripts/analyze-entry-fill-diagnostics.ps1",
     "scripts/compare-replay-profiles.ps1",
-    "scripts/compare-replay-profiles-aggregate.ps1"
+    "scripts/compare-replay-profiles-aggregate.ps1",
+    "scripts/compare-pullback-profiles.ps1"
 )
 
 function Assert-True {
@@ -45,6 +46,7 @@ $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "
 $entryFillAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-entry-fill-diagnostics.ps1")
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
 $profileAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles-aggregate.ps1")
+$pullbackComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-pullback-profiles.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -164,5 +166,15 @@ Assert-True ($profileAggregateComparator.Contains("dominant_rejection_reasons"))
 Assert-True ($profileAggregateComparator.Contains("diagnostic_summary")) "compare-replay-profiles-aggregate.ps1 must write a concise aggregate conclusion"
 Assert-True ($profileAggregateComparator.Contains('$ErrorActionPreference = "Continue"')) "compare-replay-profiles-aggregate.ps1 must not fail solely on nested cargo stderr"
 Assert-True ($profileAggregateComparator.Contains('Write-Output ([string]$_)')) "compare-replay-profiles-aggregate.ps1 must print nested stderr as text"
+Assert-True ($pullbackComparator.Contains("[decimal[]]`$PullbackPct")) "compare-pullback-profiles.ps1 must compare a configurable pullback pct list"
+Assert-True ($pullbackComparator.Contains("@(0.30, 0.20, 0.15, 0.10)")) "compare-pullback-profiles.ps1 must default to baseline 0.30 vs diagnostic 0.20/0.15/0.10"
+Assert-True ($pullbackComparator.Contains("--pullback-pct")) "compare-pullback-profiles.ps1 must pass pullback pct override to replay"
+Assert-True ($pullbackComparator.Contains("--market-id")) "compare-pullback-profiles.ps1 must replay every profile against the same pinned market id"
+Assert-True ($pullbackComparator.Contains("Read-MarketArtifact")) "compare-pullback-profiles.ps1 must read pinned market metadata from artifact"
+Assert-True ($pullbackComparator.Contains("[switch]`$PrintCommandsOnly")) "compare-pullback-profiles.ps1 must support dry-run command preview"
+Assert-True ($pullbackComparator.Contains("entry_fill_diagnostics")) "compare-pullback-profiles.ps1 must summarize entry fill diagnostics by pullback pct"
+Assert-True ($pullbackComparator.Contains("best_by_entry_fills")) "compare-pullback-profiles.ps1 must report the profile with the most entry fills"
+Assert-True ($pullbackComparator.Contains("diagnostic_only")) "compare-pullback-profiles.ps1 must mark the result as diagnostic-only"
+Assert-True (-not $pullbackComparator.Contains("wait-for-liquidation-replay.ps1")) "compare-pullback-profiles.ps1 must not collect new windows while comparing pullback profiles"
 
 Write-Output "replay script checks passed"
