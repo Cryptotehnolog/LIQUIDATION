@@ -5,6 +5,7 @@ param(
     [string]$OutputPath = ".cache/replay/entry-fill-diagnostics-analysis.json",
     [int]$LateEntrySeconds = 30,
     [decimal]$MaxUsefulTradeDistance = 0.05,
+    [switch]$DisableReplayArtifactDirectory,
     [switch]$Json
 )
 
@@ -231,7 +232,7 @@ $paths = @{}
 foreach ($path in $ReplayArtifactPath) {
     Add-UniquePath -Set $paths -Path $path
 }
-if ($ReplayArtifactDirectory) {
+if (-not $DisableReplayArtifactDirectory -and $ReplayArtifactDirectory) {
     $directory = Resolve-RepoPath -Path $ReplayArtifactDirectory
     if (Test-Path -LiteralPath $directory) {
         Get-ChildItem -LiteralPath $directory -Recurse -Filter *.json | ForEach-Object {

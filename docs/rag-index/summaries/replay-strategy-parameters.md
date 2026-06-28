@@ -302,3 +302,34 @@ Signal details:
 достаточно. Но менять `pullback_pct` по одному signal window нельзя; нужен
 aggregate по нескольким реальным signal windows или отдельный диагностический
 pullback profile comparison.
+
+## Until-Signal Aggregate Runner And 2026-06-28 Recovery
+
+Добавлен `scripts/run-until-signal-built-aggregate.ps1` для накопления нескольких
+реальных signal windows. Runner запускает короткие controlled cycles, считает
+только `stopped_reason=signal_built_observed`, останавливается по умолчанию на
+technical failure, пропускает слишком короткие tail cycles и строит combined
+entry-fill analysis только по явно собранным replay artifacts. Старые cache
+artifacts больше не подмешиваются: analyzer получил
+`-DisableReplayArtifactDirectory`.
+
+После разрыва 2026-06-28 TimescaleDB сначала был `unhealthy`, потому что Postgres
+делал crash recovery и ещё не принимал соединения. После recovery `db
+check-schema` вернул `schema ok`.
+
+Свежие live windows 2026-06-28:
+
+- `2712375` (`20:35Z..20:40Z`): `liquidations=2`, `signal_count=0`,
+  notional около `118.95500`, ниже baseline minimum `25000`;
+- `2712537` (`20:40Z..20:45Z`): `liquidations=2`, `signal_count=0`,
+  notional около `179.64880`;
+- `2712554` (`20:45Z..20:50Z`): `liquidations=1`, `signal_count=0`,
+  notional около `179.72160`;
+- `2712560` (`20:50Z..20:55Z`): `liquidations=2`, `signal_count=0`,
+  blockers: below threshold and one `order_cancel_window`.
+
+Вывод: pipeline live data работает, но окна 2026-06-28 не являются signal
+windows. Нельзя менять thresholds или `pullback_pct` из этих результатов:
+события слишком мелкие или поздние. Следующий шаг - продолжать
+until-signal-built aggregate до нескольких реальных `signal_count > 0`, затем
+сравнивать entry fill quality.

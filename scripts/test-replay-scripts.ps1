@@ -8,6 +8,7 @@ $scripts = @(
     "scripts/controlled-replay.ps1",
     "scripts/run-entry-fill-diagnostics-batch.ps1",
     "scripts/run-until-signal-built.ps1",
+    "scripts/run-until-signal-built-aggregate.ps1",
     "scripts/analyze-controlled-replay.ps1",
     "scripts/analyze-entry-fill-diagnostics.ps1",
     "scripts/compare-replay-profiles.ps1",
@@ -39,6 +40,7 @@ $waitForLiquidation = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "script
 $controlledReplay = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/controlled-replay.ps1")
 $entryFillBatch = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-entry-fill-diagnostics-batch.ps1")
 $untilSignalBuilt = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-until-signal-built.ps1")
+$untilSignalBuiltAggregate = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-until-signal-built-aggregate.ps1")
 $controlledReplayAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-controlled-replay.ps1")
 $entryFillAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/analyze-entry-fill-diagnostics.ps1")
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
@@ -113,6 +115,18 @@ Assert-True ($untilSignalBuilt.Contains("Get-Date -Format 'yyyyMMdd-HHmmss'")) "
 Assert-True ($untilSignalBuilt.Contains("`$RunPrefix = Join-Path `$ArtifactRoot")) "run-until-signal-built.ps1 must pass repo-relative artifact paths to downstream scripts"
 Assert-True (-not $untilSignalBuilt.Contains("`$RunPrefix = Join-Path `$ArtifactRootFullPath")) "run-until-signal-built.ps1 must not pass absolute artifact prefixes to downstream scripts"
 Assert-True ($untilSignalBuilt.Contains("[switch]`$PrintCommandsOnly")) "run-until-signal-built.ps1 must support dry-run command preview"
+Assert-True ($untilSignalBuiltAggregate.Contains("run-until-signal-built.ps1")) "run-until-signal-built-aggregate.ps1 must delegate to the single signal-window runner"
+Assert-True ($untilSignalBuiltAggregate.Contains("analyze-entry-fill-diagnostics.ps1")) "run-until-signal-built-aggregate.ps1 must build a combined entry-fill report"
+Assert-True ($untilSignalBuiltAggregate.Contains("[int]`$TargetSignalWindows")) "run-until-signal-built-aggregate.ps1 must target multiple signal windows"
+Assert-True ($untilSignalBuiltAggregate.Contains("[int]`$MaxTotalRuntimeSeconds = 7200")) "run-until-signal-built-aggregate.ps1 must default to a two-hour bounded run"
+Assert-True ($untilSignalBuiltAggregate.Contains("[int]`$MinCycleBudgetSeconds = 420")) "run-until-signal-built-aggregate.ps1 must avoid starting short tail cycles that cannot close a market window"
+Assert-True ($untilSignalBuiltAggregate.Contains("short_tail_cycles_skipped")) "run-until-signal-built-aggregate.ps1 must report skipped short tail cycles"
+Assert-True ($untilSignalBuiltAggregate.Contains("[switch]`$ContinueOnTechnicalFailure")) "run-until-signal-built-aggregate.ps1 must stop on technical failures by default and continue only by explicit opt-in"
+Assert-True ($untilSignalBuiltAggregate.Contains("stopping after technical failure")) "run-until-signal-built-aggregate.ps1 must make fail-fast behavior visible"
+Assert-True ($untilSignalBuiltAggregate.Contains('"-DisableReplayArtifactDirectory"')) "run-until-signal-built-aggregate.ps1 must not let entry-fill analysis scan stale replay cache when explicit artifacts are passed"
+Assert-True ($untilSignalBuiltAggregate.Contains("signal_built_observed")) "run-until-signal-built-aggregate.ps1 must only count windows where signals were built"
+Assert-True ($untilSignalBuiltAggregate.Contains("combined_entry_fill_analysis")) "run-until-signal-built-aggregate.ps1 must publish combined entry-fill analysis"
+Assert-True ($untilSignalBuiltAggregate.Contains("[switch]`$PrintCommandsOnly")) "run-until-signal-built-aggregate.ps1 must support dry-run command preview"
 Assert-True ($controlledReplayAnalyzer.Contains("[string]`$AggregateReportPath")) "analyze-controlled-replay.ps1 must accept an aggregate report path"
 Assert-True ($controlledReplayAnalyzer.Contains("Get-StageCounts")) "analyze-controlled-replay.ps1 must aggregate rejection reasons by stage"
 Assert-True ($controlledReplayAnalyzer.Contains("completedAttempts")) "analyze-controlled-replay.ps1 must distinguish completed attempts from failed attempts"
@@ -121,6 +135,7 @@ Assert-True ($controlledReplayAnalyzer.Contains("trade_path_blocker")) "analyze-
 Assert-True ($controlledReplayAnalyzer.Contains("research-wide-threshold")) "analyze-controlled-replay.ps1 must explicitly flag when a diagnostic wide-threshold profile may be useful"
 Assert-True ($controlledReplayAnalyzer.Contains("ConvertTo-Json")) "analyze-controlled-replay.ps1 must support machine-readable JSON output"
 Assert-True ($entryFillAnalyzer.Contains("[string[]]`$ReplayArtifactPath")) "analyze-entry-fill-diagnostics.ps1 must accept explicit replay artifact paths"
+Assert-True ($entryFillAnalyzer.Contains("[switch]`$DisableReplayArtifactDirectory")) "analyze-entry-fill-diagnostics.ps1 must allow callers to disable directory scanning explicitly"
 Assert-True ($entryFillAnalyzer.Contains("[string]`$ReplayArtifactDirectory")) "analyze-entry-fill-diagnostics.ps1 must scan replay artifact directories"
 Assert-True ($entryFillAnalyzer.Contains("entry_fill_diagnostics")) "analyze-entry-fill-diagnostics.ps1 must aggregate entry fill diagnostics"
 Assert-True ($entryFillAnalyzer.Contains("trade_distance_to_fill")) "analyze-entry-fill-diagnostics.ps1 must report trade distance to fill"

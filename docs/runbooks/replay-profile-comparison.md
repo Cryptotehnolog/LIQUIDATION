@@ -410,3 +410,71 @@ Entry-fill diagnostics:
 перешла на следующий этап: Polymarket entry fill. Это не late-signal case,
 потому что до forced cancel оставалось 138 секунд. Но менять `pullback_pct`
 по одному окну нельзя; нужен aggregate по нескольким signal windows.
+
+## Until Signal Built Aggregate Runner
+
+Для накопления нескольких реальных signal windows используйте aggregate wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-until-signal-built-aggregate.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -TargetSignalWindows 3 `
+  -MaxTotalRuntimeSeconds 7200 `
+  -MaxCycleRuntimeSeconds 900 `
+  -MaxAttemptsPerCycle 1 `
+  -MaxWindowsPerAttempt 1
+```
+
+Правила runner-а:
+
+- запускает короткие controlled cycles, а не один слепой долгий процесс;
+- считает только windows, где `stopped_reason=signal_built_observed`;
+- после technical failure останавливается по умолчанию;
+- продолжение после technical failure разрешено только через
+  `-ContinueOnTechnicalFailure`;
+- не начинает короткий хвостовой cycle, если оставшегося времени меньше
+  `MinCycleBudgetSeconds`;
+- combined entry-fill analysis строится только по явно собранным signal
+  artifacts, без сканирования старого `.cache/replay`.
+
+## Live Aggregate Recovery 2026-06-28
+
+После разрыва соединения 2026-06-28 была проверена инфраструктура. Docker был
+доступен, но `liquidation-timescaledb` сначала был `unhealthy`: Postgres делал
+crash recovery после некорректного shutdown и отвечал `the database system is
+not yet accepting connections`. После завершения recovery контейнер стал
+`healthy`, `liq db check-schema` вернул `schema ok`.
+
+Исправления в replay automation:
+
+- `scripts/analyze-entry-fill-diagnostics.ps1` получил
+  `-DisableReplayArtifactDirectory`, чтобы aggregate analysis не подмешивал
+  старые smoke artifacts из `.cache/replay`;
+- `scripts/run-until-signal-built-aggregate.ps1` передаёт этот switch и строит
+  analysis только по собранным signal windows;
+- aggregate runner теперь fail-fast на technical failures и явно пишет
+  `stopping after technical failure`;
+- добавлен guard на `short_tail_cycles_skipped`, чтобы runner не запускал окно,
+  которому уже не хватит времени закрыться.
+
+Свежие controlled windows 2026-06-28:
+
+- `2712375`, `2026-06-28T20:35:00Z..20:40:00Z`: `liquidations=2`,
+  `signal_count=0`, blocker `liquidation_notional_below_threshold`,
+  observed notional около `118.95500`;
+- `2712537`, `2026-06-28T20:40:00Z..20:45:00Z`: `liquidations=2`,
+  `signal_count=0`, blocker `liquidation_notional_below_threshold`,
+  observed notional около `179.64880`;
+- `2712554`, `2026-06-28T20:45:00Z..20:50:00Z`: `liquidations=1`,
+  `signal_count=0`, blocker `liquidation_notional_below_threshold`,
+  observed notional около `179.72160`;
+- `2712560`, `2026-06-28T20:50:00Z..20:55:00Z`: `liquidations=2`,
+  `signal_count=0`, blockers `liquidation_notional_below_threshold` и
+  `order_cancel_window`.
+
+Вывод: 2026-06-28 pipeline снова пишет live data по Binance/Bybit/OKX,
+Polymarket и Hyperliquid. Сигналов в этих windows нет по правильной причине:
+ликвидации значительно ниже baseline minimum `25000`, а часть событий приходит
+слишком близко к expiry. Это не повод менять `pullback_pct` или thresholds.
+Нужно продолжать collecting signal windows и сравнивать entry fill quality
+только после `signal_count > 0`.
