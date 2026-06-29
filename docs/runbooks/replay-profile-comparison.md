@@ -607,3 +607,64 @@ Interpretation:
   signal window where the stink bid is far below recorded Polymarket trades;
 - the next controlled series should collect more `signal_count > 0` windows,
   then compare diagnostic pullback profiles on pinned windows.
+
+## Live Signal Aggregate 2026-06-29
+
+Important correction: do not run controlled replay with `MaxRuntimeSeconds=260`.
+That can stop collectors before a 5-minute Polymarket market is closed and then
+produce a false preflight `market_closed` failure. Use `330` seconds or more.
+`scripts/collect-paper-replay-window.ps1` now fails fast if runtime is too short.
+
+Run used:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-until-signal-built-aggregate.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -ArtifactRoot ".cache/replay/signal-aggregate-live/foreground-20260629-0210/cycles" `
+  -OutputPath ".cache/replay/signal-aggregate-live/foreground-20260629-0210/report.json" `
+  -EntryFillAnalysisPath ".cache/replay/signal-aggregate-live/foreground-20260629-0210/entry-analysis.json" `
+  -TargetSignalWindows 2 `
+  -MaxTotalRuntimeSeconds 2400 `
+  -MaxRuntimeSeconds 330
+```
+
+Result:
+
+- `target_reached`;
+- `signal_windows_collected=2`;
+- `failed_cycles=0`;
+- `no_replay_ready_windows=2`;
+- baseline built two real signals and zero baseline fills.
+
+Fixed combined entry-fill analysis, using manifest-based artifact list:
+
+- `artifacts=2`;
+- `signals=2`;
+- `polymarket_orders=2`;
+- `polymarket_fills=0`;
+- `average_trade_distance_to_fill=0.120`;
+- `average_seconds_to_order_expiry=86`.
+
+Pinned pullback comparisons:
+
+- `2713773`, `2026-06-28T23:15:00Z..23:20:00Z`: no profile filled.
+  Distances: `0.30=0.1410`, `0.20=0.0940`, `0.15=0.0705`, `0.10=0.0470`.
+  This window is late: `seconds_to_order_expiry=6`.
+- `2713800`, `2026-06-28T23:25:00Z..23:30:00Z`: diagnostic
+  `pullback_pct=0.10` filled and hedged. Distances:
+  `0.30=0.0990`, `0.20=0.0360`, `0.15=0.0045`, `0.10=0`.
+
+First diagnostic full paper path:
+
+- market: `2713800`;
+- profile: diagnostic `pullback_pct=0.10`;
+- `signal_count=1`;
+- `polymarket_fills=1`;
+- `hedge_fills=1`;
+- entry fill price: `0.54`;
+- hedge fill price: `59402.0`;
+- net PnL after fees, funding and slippage: `-0.1090`.
+
+Decision: keep baseline `pullback_pct=0.30`. The full path is proven only in a
+diagnostic profile and is negative after costs. Next step is more signal windows
+and aggregate pullback/PnL comparison, not immediate baseline change.
