@@ -497,6 +497,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\source-usefulness-re
 diagnostic source видел canonical liquidation events, а current primary source
 молчал. Это не полный replay proof, но честный signal-coverage proxy.
 
+Для текущего решения "продолжаем без HTX" используйте wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\source-signal-readiness-report.ps1 -WindowMinutes 120 -Json
+```
+
+Wrapper анализирует только `bybit`, `binance`, `okx`, `bitget`, `gate` и
+пишет `.cache/source-usefulness/signal-readiness.json`. Если
+`signal_ready_windows_proxy > 0`, HTX остаётся deferred и следующий шаг -
+controlled replay/entry fill/PnL, а не добавление ещё одного venue.
+
 Подробности:
 [source-usefulness-report.md](source-usefulness-report.md).
 

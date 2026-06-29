@@ -47,6 +47,14 @@ signal-ready благодаря source.
 diagnostic source дал canonical liquidation events, а primary source молчал.
 Это не полный PnL proof, но честный proxy для source coverage.
 
+Implementation update 2026-06-30: `scripts/source-signal-readiness-report.ps1`
+wraps `source-usefulness-report.ps1` and then runs
+`scripts/analyze-source-signal-readiness.ps1`. The current-source set is
+`bybit`, `binance`, `okx`, `bitget`, `gate`; HTX is intentionally excluded.
+The analyzer writes `.cache/source-usefulness/signal-readiness.json` with
+`signal_ready_windows_proxy` per source and an `htx_decision` classification.
+This is a coverage proxy, not a PnL proof.
+
 ## Hyperliquid Deferred Decision
 
 Decision 2026-06-29: pause Hyperliquid liquidation ingestion until strategy
