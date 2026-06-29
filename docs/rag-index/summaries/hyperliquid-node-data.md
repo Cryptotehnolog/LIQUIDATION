@@ -17,3 +17,13 @@ Python SDK note: Hyperliquid Python SDK supports `userEvents` and
 `userNonFundingLedgerUpdates` as user-specific paths. These can help a future
 account-risk monitor, but they do not replace node-data research for market-wide
 liquidation cascades.
+
+Bounded node-output probe: use `scripts/probe-hyperliquid-node-output.ps1`.
+Default mode is dry-run only. The script uses only fills/misc-events flags:
+`--write-fills`, `--write-misc-events`, `--batch-by-block`,
+`--stream-with-block-info`, `--disable-output-file-buffering`. It enforces
+`MaxRuntimeSeconds`, `MaxBytes`, isolated probe home, auto-cleanup unless
+`-KeepRaw`, and reports rows/files/bytes, liquidation markers,
+`notional_usd`, `liquidation_id`/candidate ids, dedup candidates and max
+notional. Test command:
+`scripts/test-hyperliquid-node-output-probe.ps1`.

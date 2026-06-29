@@ -301,6 +301,45 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\probe-hyperliquid-no
 production/diagnostic collector нужен official S3 requester-pays sample или
 bounded non-validating node output.
 
+Для bounded Hyperliquid node-output probe используйте отдельный safety wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\probe-hyperliquid-node-output.ps1
+```
+
+Default mode is dry-run only. Он показывает planned command и обязательные
+flags:
+
+- `--write-fills`;
+- `--write-misc-events`;
+- `--batch-by-block`;
+- `--stream-with-block-info`;
+- `--disable-output-file-buffering`.
+
+Для анализа уже полученного output:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\probe-hyperliquid-node-output.ps1 -ExistingDataPath <path-to-hl-data>
+```
+
+Для реального bounded run требуется явное `-Run` и explicit executable:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\probe-hyperliquid-node-output.ps1 -Run -NodeExecutable <hl-visor-or-runner> -MaxRuntimeSeconds 60 -MaxBytes 52428800
+```
+
+Wrapper пишет node output в isolated probe home, выставляя `HOME`/`USERPROFILE`
+на `.cache/hyperliquid-node-output/home`, мониторит `max runtime` и `max bytes`,
+останавливает процесс, считает `notional_usd`, `liquidation_id`/candidate ids,
+dedup candidates, max notional и удаляет raw probe home unless `-KeepRaw`.
+Без явного `-Run` он не запускает node.
+
+Regression test:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-hyperliquid-node-output-probe.ps1
+```
+
 Связанная research note:
 [hyperliquid-liquidation-feed-probe-2026-06-29.md](../research/hyperliquid-liquidation-feed-probe-2026-06-29.md).
 

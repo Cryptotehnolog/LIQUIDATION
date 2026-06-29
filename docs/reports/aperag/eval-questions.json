@@ -131,6 +131,19 @@
         "builder_fee",
         "not merged"
       ]
+    },
+    {
+      "id": "hyperliquid_bounded_node_output_probe",
+      "query": "Hyperliquid bounded node-output probe MaxRuntimeSeconds MaxBytes auto-cleanup write-fills write-misc-events",
+      "expected_source": "docs__rag-index__summaries__hyperliquid-node-data.md",
+      "expected_all": [
+        "probe-hyperliquid-node-output.ps1",
+        "MaxRuntimeSeconds",
+        "MaxBytes",
+        "auto-cleanup",
+        "write-fills",
+        "write-misc-events"
+      ]
     }
   ]
 }
