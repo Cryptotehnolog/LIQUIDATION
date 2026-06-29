@@ -238,6 +238,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\market-data-report-h
 `healthy-but-sparse`, `unreliable-metadata` или `unreliable-source`. Это
 по-прежнему не разрешает использовать OKX в сигналах автоматически.
 
+Для сравнения полезности всех текущих sources используйте source usefulness
+report:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\source-usefulness-report.ps1 -WindowMinutes 120 -Json
+```
+
+Ключевое поле для новых diagnostic sources:
+`liquidation_ready_buckets_without_primary`. Оно показывает buckets, где
+diagnostic source видел canonical liquidation events, а current primary source
+молчал. Это не полный replay proof, но честный signal-coverage proxy.
+
+Подробности:
+[source-usefulness-report.md](source-usefulness-report.md).
+
 ## Что улучшить или автоматизировать
 
 - Поддерживать official docs/changelog watch через

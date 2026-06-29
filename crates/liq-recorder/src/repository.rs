@@ -11,7 +11,8 @@ use crate::records::{
     CollectorDashboardHistory, CollectorDashboardMetrics, CollectorHealthRecord,
     CollectorHistorySample, CollectorSourceMetrics, CollectorStorageSignal,
     MarketDataReadinessRecord, PaperReplayDataRecord, PolymarketMarketRecord, RawSourceEvent,
-    SourceOverlapBucket, SourceOverlapReport, SourceOverlapSummary,
+    SourceOverlapBucket, SourceOverlapReport, SourceOverlapSummary, SourceUsefulnessReport,
+    SourceUsefulnessSummary,
 };
 
 /// Metrics aggregation window.
@@ -35,6 +36,124 @@ impl MetricsWindow {
         self.seconds
     }
 }
+
+const SOURCE_USEFULNESS_REPORT_SQL: &str = r"
+WITH sources AS (
+    SELECT source
+    FROM collector_health
+    WHERE checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    UNION
+    SELECT source
+    FROM raw_source_events
+    WHERE received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    UNION
+    SELECT source
+    FROM liquidation_events
+    WHERE received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+),
+canonical_buckets AS (
+    SELECT
+        source,
+        to_timestamp(floor(extract(epoch FROM received_ts) / $3::BIGINT) * $3::BIGINT) AS bucket_start,
+        COUNT(*)::BIGINT AS event_count
+    FROM liquidation_events
+    WHERE received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    GROUP BY source, bucket_start
+)
+SELECT
+    s.source,
+    COALESCE(
+        (
+            SELECT string_agg(symbol, ',' ORDER BY symbol)
+            FROM (
+                SELECT symbol
+                FROM collector_health
+                WHERE source = s.source
+                  AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+                UNION
+                SELECT symbol
+                FROM raw_source_events
+                WHERE source = s.source
+                  AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+                UNION
+                SELECT symbol
+                FROM liquidation_events
+                WHERE source = s.source
+                  AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+            ) symbols
+        ),
+        ''
+    ) AS symbols_csv,
+    (
+        SELECT COUNT(*)::BIGINT
+        FROM collector_health
+        WHERE source = s.source
+          AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    ) AS health_rows,
+    (
+        SELECT COUNT(*)::BIGINT
+        FROM raw_source_events
+        WHERE source = s.source
+          AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    ) AS raw_events,
+    (
+        SELECT COUNT(*)::BIGINT
+        FROM liquidation_events
+        WHERE source = s.source
+          AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    ) AS canonical_events,
+    (
+        SELECT MAX(notional_usd)
+        FROM liquidation_events
+        WHERE source = s.source
+          AND received_ts >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+    ) AS max_notional_usd,
+    (
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY last_latency_ms)::BIGINT
+        FROM collector_health
+        WHERE source = s.source
+          AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+          AND last_latency_ms IS NOT NULL
+    ) AS median_latency_ms,
+    (
+        SELECT percentile_disc(0.95) WITHIN GROUP (ORDER BY last_latency_ms)::BIGINT
+        FROM collector_health
+        WHERE source = s.source
+          AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+          AND last_latency_ms IS NOT NULL
+    ) AS p95_latency_ms,
+    (
+        SELECT COUNT(*)::BIGINT
+        FROM collector_health
+        WHERE source = s.source
+          AND checked_at >= NOW() - ($2::BIGINT * INTERVAL '1 second')
+          AND (
+              last_payload_ts IS NULL
+              OR checked_at - last_payload_ts > ($4::BIGINT * INTERVAL '1 second')
+          )
+    ) AS stale_health_rows,
+    (
+        SELECT COUNT(*)::BIGINT
+        FROM canonical_buckets source_bucket
+        JOIN canonical_buckets primary_bucket
+          ON primary_bucket.bucket_start = source_bucket.bucket_start
+         AND primary_bucket.source = $1
+        WHERE source_bucket.source = s.source
+          AND s.source <> $1
+    ) AS overlap_buckets_with_primary,
+    (
+        SELECT COUNT(*)::BIGINT
+        FROM canonical_buckets source_bucket
+        LEFT JOIN canonical_buckets primary_bucket
+          ON primary_bucket.bucket_start = source_bucket.bucket_start
+         AND primary_bucket.source = $1
+        WHERE source_bucket.source = s.source
+          AND s.source <> $1
+          AND primary_bucket.source IS NULL
+    ) AS liquidation_ready_buckets_without_primary
+FROM sources s
+ORDER BY s.source
+";
 
 /// Insert a raw source event.
 ///
@@ -891,6 +1010,44 @@ pub async fn source_overlap_report(
     })
 }
 
+/// Return a multi-source diagnostic usefulness report.
+///
+/// This report is read-only: it does not change source policy and does not make
+/// diagnostic sources participate in strategy signals.
+///
+/// # Errors
+///
+/// Returns an error when Postgres rejects the report query.
+pub async fn source_usefulness_report(
+    pool: &PgPool,
+    primary_source: &str,
+    window: MetricsWindow,
+    bucket_seconds: i64,
+    stale_after: time::Duration,
+) -> Result<SourceUsefulnessReport, sqlx::Error> {
+    let window_seconds = window.seconds().max(1);
+    let bucket_seconds = bucket_seconds.max(1);
+    let stale_after_seconds = stale_after.whole_seconds().max(1);
+    let rows = sqlx::query_as::<_, SourceUsefulnessSummaryRow>(SOURCE_USEFULNESS_REPORT_SQL)
+        .bind(primary_source)
+        .bind(window_seconds)
+        .bind(bucket_seconds)
+        .bind(stale_after_seconds)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(SourceUsefulnessReport {
+        window_seconds,
+        bucket_seconds,
+        primary_source: primary_source.to_owned(),
+        stale_after_seconds,
+        sources: rows
+            .into_iter()
+            .map(|row| SourceUsefulnessSummary::from_row(row, window_seconds))
+            .collect(),
+    })
+}
+
 /// Return market-data evidence for strategy readiness gates.
 ///
 /// # Errors
@@ -1515,6 +1672,21 @@ struct SourceOverlapBucketRow {
 }
 
 #[derive(sqlx::FromRow)]
+struct SourceUsefulnessSummaryRow {
+    source: String,
+    symbols_csv: String,
+    health_rows: i64,
+    raw_events: i64,
+    canonical_events: i64,
+    max_notional_usd: Option<rust_decimal::Decimal>,
+    median_latency_ms: Option<i64>,
+    p95_latency_ms: Option<i64>,
+    stale_health_rows: i64,
+    overlap_buckets_with_primary: i64,
+    liquidation_ready_buckets_without_primary: i64,
+}
+
+#[derive(sqlx::FromRow)]
 struct MarketDataReadinessRow {
     polymarket_quotes: i64,
     polymarket_trades: i64,
@@ -1674,12 +1846,88 @@ impl From<SourceOverlapBucketRow> for SourceOverlapBucket {
     }
 }
 
+impl SourceUsefulnessSummary {
+    fn from_row(row: SourceUsefulnessSummaryRow, window_seconds: i64) -> Self {
+        let policy = SourcePolicy::from_source(&row.source);
+        let events_per_hour = per_hour(row.raw_events, window_seconds);
+        let canonical_events_per_hour = per_hour(row.canonical_events, window_seconds);
+        let stale_rate_bps = rate_bps(row.stale_health_rows, row.health_rows);
+        let verdict =
+            source_usefulness_verdict(&row, policy.participates_in_signals, stale_rate_bps);
+        Self {
+            source: row.source,
+            symbols: split_symbols_csv(&row.symbols_csv),
+            source_quality: policy.source_quality.to_owned(),
+            coverage_role: policy.coverage_role.to_owned(),
+            participates_in_signals: policy.participates_in_signals,
+            health_rows: row.health_rows,
+            raw_events: row.raw_events,
+            canonical_events: row.canonical_events,
+            events_per_hour,
+            canonical_events_per_hour,
+            max_notional_usd: row.max_notional_usd,
+            median_latency_ms: row.median_latency_ms,
+            p95_latency_ms: row.p95_latency_ms,
+            stale_health_rows: row.stale_health_rows,
+            stale_rate_bps,
+            overlap_buckets_with_primary: row.overlap_buckets_with_primary,
+            liquidation_ready_buckets_without_primary: row
+                .liquidation_ready_buckets_without_primary,
+            verdict,
+        }
+    }
+}
+
 fn split_symbols_csv(symbols: &str) -> Vec<String> {
     if symbols.is_empty() {
         return Vec::new();
     }
 
     symbols.split(',').map(str::to_owned).collect()
+}
+
+fn per_hour(count: i64, window_seconds: i64) -> rust_decimal::Decimal {
+    if window_seconds <= 0 {
+        return rust_decimal::Decimal::ZERO;
+    }
+
+    rust_decimal::Decimal::from(count) * rust_decimal::Decimal::from(3_600)
+        / rust_decimal::Decimal::from(window_seconds)
+}
+
+fn rate_bps(numerator: i64, denominator: i64) -> i64 {
+    if denominator <= 0 {
+        return 0;
+    }
+
+    numerator.saturating_mul(10_000) / denominator
+}
+
+fn source_usefulness_verdict(
+    row: &SourceUsefulnessSummaryRow,
+    participates_in_signals: bool,
+    stale_rate_bps: i64,
+) -> String {
+    if row.health_rows == 0 && row.raw_events == 0 && row.canonical_events == 0 {
+        return "insufficient-data".to_owned();
+    }
+    if stale_rate_bps >= 5_000 {
+        return "unreliable-stale".to_owned();
+    }
+    if participates_in_signals {
+        return "strategy-primary".to_owned();
+    }
+    if row.liquidation_ready_buckets_without_primary > 0 {
+        return "useful-diagnostic".to_owned();
+    }
+    if row.canonical_events > 0 {
+        return "overlapping-diagnostic".to_owned();
+    }
+    if row.raw_events > 0 {
+        return "raw-only-diagnostic".to_owned();
+    }
+
+    "healthy-but-empty".to_owned()
 }
 
 fn parse_source(value: &str) -> Result<Source, sqlx::Error> {

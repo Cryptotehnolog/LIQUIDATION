@@ -30,3 +30,8 @@ quality.
 Нужная автоматизация: source usefulness report с events/hour, max notional,
 latency, stale rate, overlap buckets и количеством replay windows, которые стали
 signal-ready благодаря source.
+
+Реализованный report должен использоваться до включения новых venues в сигналы.
+Ключевое поле: `liquidation_ready_buckets_without_primary` - buckets, где
+diagnostic source дал canonical liquidation events, а primary source молчал.
+Это не полный PnL proof, но честный proxy для source coverage.

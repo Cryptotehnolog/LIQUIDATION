@@ -73,6 +73,17 @@
         "htx",
         "diagnostic-only"
       ]
+    },
+    {
+      "id": "source_usefulness_report",
+      "query": "Source Usefulness Report source-usefulness-report.ps1 liquidation_ready_buckets_without_primary diagnostic sources strategy signals",
+      "expected_source": "docs__runbooks__source-usefulness-report.md",
+      "expected_all": [
+        "source-usefulness-report.ps1",
+        "liquidation_ready_buckets_without_primary",
+        "diagnostic sources",
+        "strategy signals"
+      ]
     }
   ]
 }

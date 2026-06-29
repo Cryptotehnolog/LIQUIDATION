@@ -419,6 +419,30 @@ enum CollectorCommand {
         #[arg(long, default_value_t = 60)]
         bucket_seconds: i64,
     },
+    /// Print multi-source diagnostic usefulness report.
+    UsefulnessReport {
+        /// Postgres connection URL. Defaults to `DATABASE_URL`.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        /// Primary source used as the current strategy baseline.
+        #[arg(long, default_value = "bybit")]
+        primary_source: String,
+        /// Metrics aggregation window in minutes.
+        #[arg(long, default_value_t = 60)]
+        window_minutes: i64,
+        /// Bucket size in seconds for additive coverage counts.
+        #[arg(long, default_value_t = 60)]
+        bucket_seconds: i64,
+        /// Mark health rows stale when payload age exceeds this many seconds.
+        #[arg(long, default_value_t = 120)]
+        stale_after_seconds: i64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Optional path to write JSON report artifact.
+        #[arg(long)]
+        artifact_path: Option<PathBuf>,
+    },
     /// Serve a read-only collector dashboard backed by the status JSON contract.
     Dashboard {
         /// Bind address for the local dashboard server.
@@ -1425,6 +1449,26 @@ async fn handle_collector_inspection_command(command: CollectorCommand) -> anyho
             )
             .await?;
         }
+        CollectorCommand::UsefulnessReport {
+            database_url,
+            primary_source,
+            window_minutes,
+            bucket_seconds,
+            stale_after_seconds,
+            json,
+            artifact_path,
+        } => {
+            print_collector_usefulness_report(
+                database_url,
+                primary_source,
+                window_minutes,
+                bucket_seconds,
+                stale_after_seconds,
+                json,
+                artifact_path,
+            )
+            .await?;
+        }
         CollectorCommand::Dashboard {
             bind,
             database_url,
@@ -1707,6 +1751,75 @@ async fn print_collector_overlap_report(
         "{}",
         serde_json::to_string_pretty(&report).context("failed to serialize overlap report")?
     );
+    Ok(())
+}
+
+async fn print_collector_usefulness_report(
+    database_url: String,
+    primary_source: String,
+    window_minutes: i64,
+    bucket_seconds: i64,
+    stale_after_seconds: i64,
+    json: bool,
+    artifact_path: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    parse_collector_source(&primary_source)?;
+    let pool = connect(&database_url).await?;
+    let report = repository::source_usefulness_report(
+        &pool,
+        &primary_source,
+        repository::MetricsWindow::minutes(window_minutes.max(1)),
+        bucket_seconds.max(1),
+        time::Duration::seconds(stale_after_seconds.max(1)),
+    )
+    .await
+    .context("failed to read source usefulness report")?;
+    if let Some(path) = artifact_path.as_ref() {
+        write_json_artifact(path, &report).await?;
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .context("failed to serialize source usefulness report")?
+        );
+    } else {
+        println!(
+            "source usefulness: primary={} window={}s bucket={}s stale_after={}s",
+            report.primary_source,
+            report.window_seconds,
+            report.bucket_seconds,
+            report.stale_after_seconds
+        );
+        println!(
+            "source\tsymbols\trole\tquality\tsignals\traw_events\tcanonical_events\tmax_notional_usd\tlatency_p50_ms\tlatency_p95_ms\tstale_bps\tadditive_buckets\tverdict"
+        );
+        for row in &report.sources {
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                row.source,
+                if row.symbols.is_empty() {
+                    "-".to_owned()
+                } else {
+                    row.symbols.join(",")
+                },
+                row.coverage_role,
+                row.source_quality,
+                row.participates_in_signals,
+                row.raw_events,
+                row.canonical_events,
+                row.max_notional_usd
+                    .map_or_else(|| "-".to_owned(), |value| value.to_string()),
+                row.median_latency_ms
+                    .map_or_else(|| "-".to_owned(), |value| value.to_string()),
+                row.p95_latency_ms
+                    .map_or_else(|| "-".to_owned(), |value| value.to_string()),
+                row.stale_rate_bps,
+                row.liquidation_ready_buckets_without_primary,
+                row.verdict
+            );
+        }
+    }
     Ok(())
 }
 

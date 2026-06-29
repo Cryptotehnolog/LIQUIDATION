@@ -1,6 +1,7 @@
 //! Recorder input and read-model records.
 
 use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -229,6 +230,62 @@ pub struct SourceOverlapBucket {
     pub diagnostic_raw_events: i64,
     /// Diagnostic canonical rows in this bucket.
     pub diagnostic_canonical_events: i64,
+}
+
+/// Multi-source diagnostic report used before enabling new liquidation sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceUsefulnessReport {
+    /// Metrics window in seconds.
+    pub window_seconds: i64,
+    /// Bucket size in seconds.
+    pub bucket_seconds: i64,
+    /// Primary source used as current strategy baseline.
+    pub primary_source: String,
+    /// Payload age threshold used to classify stale health rows.
+    pub stale_after_seconds: i64,
+    /// Per-source usefulness summaries.
+    pub sources: Vec<SourceUsefulnessSummary>,
+}
+
+/// Per-source usefulness summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceUsefulnessSummary {
+    /// Source venue id.
+    pub source: String,
+    /// Symbols observed in the report window.
+    pub symbols: Vec<String>,
+    /// Source quality semantics used by replay/dashboard policy.
+    pub source_quality: String,
+    /// Dashboard coverage role, e.g. `strategy_primary` or `diagnostic_only`.
+    pub coverage_role: String,
+    /// Whether this source is allowed to participate in strategy signals.
+    pub participates_in_signals: bool,
+    /// Health rows observed in the window.
+    pub health_rows: i64,
+    /// Raw source rows observed in the window.
+    pub raw_events: i64,
+    /// Canonical liquidation rows observed in the window.
+    pub canonical_events: i64,
+    /// Raw rows per hour over the requested window.
+    pub events_per_hour: Decimal,
+    /// Canonical liquidation rows per hour over the requested window.
+    pub canonical_events_per_hour: Decimal,
+    /// Largest canonical liquidation notional observed in the window.
+    pub max_notional_usd: Option<Decimal>,
+    /// Median observed latency from collector health rows.
+    pub median_latency_ms: Option<i64>,
+    /// p95 observed latency from collector health rows.
+    pub p95_latency_ms: Option<i64>,
+    /// Health rows whose payload timestamp was missing or older than the stale threshold.
+    pub stale_health_rows: i64,
+    /// Stale health rows as basis points of all health rows.
+    pub stale_rate_bps: i64,
+    /// Buckets where this source and the primary source both had canonical rows.
+    pub overlap_buckets_with_primary: i64,
+    /// Buckets where this source had canonical rows while the primary source had none.
+    pub liquidation_ready_buckets_without_primary: i64,
+    /// Diagnostic verdict. This never changes source policy automatically.
+    pub verdict: String,
 }
 
 /// Durable market-data evidence used by strategy readiness gates.

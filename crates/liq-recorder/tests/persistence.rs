@@ -249,6 +249,49 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             |bucket| bucket.primary_canonical_events >= 1 && bucket.diagnostic_raw_events >= 1
         ));
 
+        let usefulness = repository::source_usefulness_report(
+            &pool,
+            "bybit",
+            repository::MetricsWindow::minutes(60),
+            60,
+            time::Duration::seconds(120),
+        )
+        .await
+        .expect("source usefulness report must be queryable");
+        assert_eq!(usefulness.primary_source, "bybit");
+        let bybit_usefulness = usefulness
+            .sources
+            .iter()
+            .find(|row| row.source == "bybit")
+            .expect("bybit usefulness row must exist");
+        assert_eq!(bybit_usefulness.coverage_role, "strategy_primary");
+        assert!(bybit_usefulness.participates_in_signals);
+        assert!(bybit_usefulness.raw_events >= 2);
+        assert!(bybit_usefulness.canonical_events >= 1);
+        assert_eq!(
+            bybit_usefulness.max_notional_usd,
+            Some(Decimal::new(650_000, 2))
+        );
+        assert_eq!(bybit_usefulness.stale_health_rows, 0);
+        assert!(bybit_usefulness.median_latency_ms.is_some());
+        assert!(bybit_usefulness.p95_latency_ms.is_some());
+        assert!(
+            bybit_usefulness.liquidation_ready_buckets_without_primary == 0,
+            "primary source should not count as additive diagnostic coverage"
+        );
+
+        let okx_usefulness = usefulness
+            .sources
+            .iter()
+            .find(|row| row.source == "okx")
+            .expect("okx usefulness row must exist");
+        assert_eq!(okx_usefulness.coverage_role, "diagnostic_only");
+        assert!(!okx_usefulness.participates_in_signals);
+        assert_eq!(okx_usefulness.raw_events, 1);
+        assert_eq!(okx_usefulness.canonical_events, 0);
+        assert_eq!(okx_usefulness.max_notional_usd, None);
+        assert_eq!(okx_usefulness.verdict, "raw-only-diagnostic");
+
         let quote_source_event_id = format!("polymarket:quote:{suffix}");
         let quote = MarketQuote {
             event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, quote_source_event_id.as_bytes()),
