@@ -1,5 +1,6 @@
 param(
     [string[]]$ReplayArtifactPath = @(),
+    [string]$ReplayArtifactListPath = "",
     [string]$ReplayArtifactDirectory = ".cache/replay",
     [string]$ProfileComparisonAggregatePath = "",
     [string]$OutputPath = ".cache/replay/entry-fill-diagnostics-analysis.json",
@@ -231,6 +232,18 @@ function New-Decision {
 $paths = @{}
 foreach ($path in $ReplayArtifactPath) {
     Add-UniquePath -Set $paths -Path $path
+}
+if ($ReplayArtifactListPath) {
+    $listFullPath = Resolve-RepoPath -Path $ReplayArtifactListPath
+    if (-not (Test-Path -LiteralPath $listFullPath)) {
+        throw "Replay artifact list not found: $listFullPath"
+    }
+    Get-Content -LiteralPath $listFullPath | ForEach-Object {
+        $line = ([string]$_).Trim()
+        if ($line) {
+            Add-UniquePath -Set $paths -Path $line
+        }
+    }
 }
 if (-not $DisableReplayArtifactDirectory -and $ReplayArtifactDirectory) {
     $directory = Resolve-RepoPath -Path $ReplayArtifactDirectory

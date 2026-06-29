@@ -273,16 +273,18 @@ while ($signalWindows -lt $TargetSignalWindows) {
 
 $combinedEntryFillAnalysis = $null
 if ($replayArtifactPaths.Count -gt 0) {
+    $artifactListPath = [System.IO.Path]::ChangeExtension($entryAnalysisFullPath, ".artifacts.txt")
+    @($replayArtifactPaths | ForEach-Object { [string]$_ }) |
+        Set-Content -LiteralPath $artifactListPath -Encoding utf8
+
     $analysisArgs = @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
         "-File", $EntryFillAnalyzerScript,
-        "-ReplayArtifactPath"
+        "-ReplayArtifactListPath", $artifactListPath,
+        "-DisableReplayArtifactDirectory",
+        "-OutputPath", $EntryFillAnalysisPath
     )
-    foreach ($path in @($replayArtifactPaths)) {
-        $analysisArgs += [string]$path
-    }
-    $analysisArgs += @("-DisableReplayArtifactDirectory", "-OutputPath", $EntryFillAnalysisPath)
 
     $analysisResult = Invoke-NestedPowerShell -Args ([string[]]$analysisArgs) -TimeoutSeconds 180
     $analysisResult.output | ForEach-Object { Write-Output ([string]$_) }
