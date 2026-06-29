@@ -668,3 +668,65 @@ First diagnostic full paper path:
 Decision: keep baseline `pullback_pct=0.30`. The full path is proven only in a
 diagnostic profile and is negative after costs. Next step is more signal windows
 and aggregate pullback/PnL comparison, not immediate baseline change.
+
+## Aggregate Pullback Comparator
+
+Для сравнения `pullback_pct` по нескольким pinned signal windows используйте:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-pullback-profiles-aggregate.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MarketArtifactDirectory ".cache/replay/signal-aggregate-live/foreground-20260629-0210/cycles" `
+  -OutputPath ".cache/replay/signal-aggregate-live/foreground-20260629-0210/pullback-aggregate.json" `
+  -ArtifactDirectory ".cache/replay/signal-aggregate-live/foreground-20260629-0210/pullback-aggregate" `
+  -SkipPreflight
+```
+
+Можно передавать и явный список market artifacts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compare-pullback-profiles-aggregate.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -MarketArtifactPath ".cache/replay/window-a/market.json,.cache/replay/window-b/market.json" `
+  -OutputPath ".cache/replay/pullback-aggregate.json" `
+  -ArtifactDirectory ".cache/replay/pullback-aggregate" `
+  -SkipPreflight
+```
+
+Aggregate report суммирует по каждому profile:
+
+- `signal_count`;
+- `polymarket_orders`;
+- `polymarket_fills` и `fill_rate`;
+- `hedge_attempts`, `hedge_fills` и `hedge_fill_rate`;
+- `gross_pnl_usd`, fees/funding/slippage и `net_pnl_usd`;
+- `average_trade_distance_to_fill`;
+- `average_seconds_to_order_expiry`;
+- `best_by_entry_fills`, `best_by_net_pnl` и
+  `closest_trade_distance_profile`.
+
+Правило: этот report всегда `diagnostic_only=true`. Он помогает понять, какой
+pullback чаще достигает entry, но не меняет baseline сам по себе. Для изменения
+baseline нужны несколько pinned windows, entry fills, hedge fills и net PnL
+после комиссий/фандинга/проскальзывания.
+
+## Aggregate Pullback Result 2026-06-29
+
+Запуск по двум pinned signal windows из
+`.cache/replay/signal-aggregate-live/foreground-20260629-0210`:
+
+- `pullback-0.10`: `signals=2`, `orders=2`, `fills=1`,
+  `fill_rate=0.5`, `hedge_fills=1`, `net_pnl_usd=-0.1090`,
+  `average_trade_distance_to_fill=0.0235`,
+  `average_seconds_to_order_expiry=86`;
+- `pullback-0.15`: `signals=2`, `orders=2`, `fills=0`,
+  `net_pnl_usd=0`, `average_trade_distance_to_fill=0.0375`;
+- `pullback-0.20`: `signals=2`, `orders=2`, `fills=0`,
+  `net_pnl_usd=0`, `average_trade_distance_to_fill=0.0650`;
+- `pullback-0.30`: `signals=2`, `orders=2`, `fills=0`,
+  `net_pnl_usd=0`, `average_trade_distance_to_fill=0.1200`.
+
+Вывод: `pullback_pct=0.10` пока лучший по entry fills и distance-to-fill, но
+единственный full paper path дал `net_pnl_usd=-0.1090` после fees/funding/
+slippage. Baseline `pullback_pct=0.30` не меняем. Следующий шаг - собирать
+ещё signal windows и смотреть cost-sensitive aggregate PnL.

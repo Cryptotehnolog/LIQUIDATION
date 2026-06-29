@@ -209,6 +209,39 @@ coverage деградирует по nightly diagnostics.
 - `docs/runbooks/source-addition.md`
 - `docs/runbooks/strategy-readiness.md`
 
+### Replay Market Quotes Query Optimization
+
+**Статус:** deferred.
+
+**Что это:** оптимизировать чтение `market_quotes` в replay: проверить запросы,
+индексы и explain plan для окон Polymarket, где batch comparison читает много
+quotes/books.
+
+**Почему не сейчас:** slow SQL warnings появились во время paper-analysis, но
+текущие controlled windows и aggregate pullback comparison уже проходят. Сейчас
+важнее собрать больше signal windows и понять entry fill/PnL, чем преждевременно
+переписывать replay query path.
+
+**Когда возвращаемся:** перед крупными batch/backtest runs, scheduled replay
+artifacts или если controlled replay начинает регулярно упираться в timeout.
+
+**Готовность начать:**
+
+- есть несколько replay artifacts с slow query warnings;
+- есть representative Polymarket windows с плотными `market_quotes`;
+- можно сравнить latency до/после через один и тот же pinned market window.
+
+**Ожидаемый результат:**
+
+- индекс или запрос, который снижает latency чтения `market_quotes`;
+- regression test или smoke benchmark на pinned fixture/window;
+- runbook note, когда warning считается критичным.
+
+**Связанные файлы:**
+
+- `crates/liq-cli/src/replay.rs`
+- `docs/runbooks/replay-profile-comparison.md`
+
 ## Что улучшить или автоматизировать
 
 Добавить guard, который ищет слова `later`, `deferred`, `postponed`, `nice to

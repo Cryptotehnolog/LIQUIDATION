@@ -13,7 +13,8 @@ $scripts = @(
     "scripts/analyze-entry-fill-diagnostics.ps1",
     "scripts/compare-replay-profiles.ps1",
     "scripts/compare-replay-profiles-aggregate.ps1",
-    "scripts/compare-pullback-profiles.ps1"
+    "scripts/compare-pullback-profiles.ps1",
+    "scripts/compare-pullback-profiles-aggregate.ps1"
 )
 
 function Assert-True {
@@ -47,6 +48,7 @@ $entryFillAnalyzer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts
 $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles.ps1")
 $profileAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles-aggregate.ps1")
 $pullbackComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-pullback-profiles.ps1")
+$pullbackAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-pullback-profiles-aggregate.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -175,6 +177,7 @@ Assert-True ($profileAggregateComparator.Contains("diagnostic_summary")) "compar
 Assert-True ($profileAggregateComparator.Contains('$ErrorActionPreference = "Continue"')) "compare-replay-profiles-aggregate.ps1 must not fail solely on nested cargo stderr"
 Assert-True ($profileAggregateComparator.Contains('Write-Output ([string]$_)')) "compare-replay-profiles-aggregate.ps1 must print nested stderr as text"
 Assert-True ($pullbackComparator.Contains("[decimal[]]`$PullbackPct")) "compare-pullback-profiles.ps1 must compare a configurable pullback pct list"
+Assert-True ($pullbackComparator.Contains("[string]`$PullbackPctCsv")) "compare-pullback-profiles.ps1 must accept pullback pct csv for wrapper scripts"
 Assert-True ($pullbackComparator.Contains("@(0.30, 0.20, 0.15, 0.10)")) "compare-pullback-profiles.ps1 must default to baseline 0.30 vs diagnostic 0.20/0.15/0.10"
 Assert-True ($pullbackComparator.Contains("--pullback-pct")) "compare-pullback-profiles.ps1 must pass pullback pct override to replay"
 Assert-True ($pullbackComparator.Contains("--market-id")) "compare-pullback-profiles.ps1 must replay every profile against the same pinned market id"
@@ -184,5 +187,18 @@ Assert-True ($pullbackComparator.Contains("entry_fill_diagnostics")) "compare-pu
 Assert-True ($pullbackComparator.Contains("best_by_entry_fills")) "compare-pullback-profiles.ps1 must report the profile with the most entry fills"
 Assert-True ($pullbackComparator.Contains("diagnostic_only")) "compare-pullback-profiles.ps1 must mark the result as diagnostic-only"
 Assert-True (-not $pullbackComparator.Contains("wait-for-liquidation-replay.ps1")) "compare-pullback-profiles.ps1 must not collect new windows while comparing pullback profiles"
+Assert-True ($pullbackAggregateComparator.Contains("compare-pullback-profiles.ps1")) "compare-pullback-profiles-aggregate.ps1 must reuse the single-window pullback comparator"
+Assert-True ($pullbackAggregateComparator.Contains("[string[]]`$MarketArtifactPath")) "compare-pullback-profiles-aggregate.ps1 must accept multiple pinned market artifacts"
+Assert-True ($pullbackAggregateComparator.Contains("-split `",`"")) "compare-pullback-profiles-aggregate.ps1 must accept comma-separated market artifact paths from CLI"
+Assert-True ($pullbackAggregateComparator.Contains("[string]`$MarketArtifactDirectory")) "compare-pullback-profiles-aggregate.ps1 must discover pinned market artifacts from a directory"
+Assert-True ($pullbackAggregateComparator.Contains("PullbackPct values must be greater than or equal to 0 and less than 1")) "compare-pullback-profiles-aggregate.ps1 must reject invalid pullback pct values"
+Assert-True ($pullbackAggregateComparator.Contains("PullbackPct values must be unique")) "compare-pullback-profiles-aggregate.ps1 must reject duplicate pullback pct values"
+Assert-True ($pullbackAggregateComparator.Contains('"-PullbackPctCsv", (($PullbackPct')) "compare-pullback-profiles-aggregate.ps1 must pass pullback pct values through csv wrapper parameter"
+Assert-True ($pullbackAggregateComparator.Contains("profile_totals")) "compare-pullback-profiles-aggregate.ps1 must aggregate profile totals across windows"
+Assert-True ($pullbackAggregateComparator.Contains("average_trade_distance_to_fill")) "compare-pullback-profiles-aggregate.ps1 must aggregate distance-to-fill metrics"
+Assert-True ($pullbackAggregateComparator.Contains("average_seconds_to_order_expiry")) "compare-pullback-profiles-aggregate.ps1 must aggregate expiry metrics"
+Assert-True ($pullbackAggregateComparator.Contains("net_pnl_usd")) "compare-pullback-profiles-aggregate.ps1 must aggregate net PnL by pullback profile"
+Assert-True ($pullbackAggregateComparator.Contains("diagnostic_only")) "compare-pullback-profiles-aggregate.ps1 must mark results as diagnostic-only"
+Assert-True ($pullbackAggregateComparator.Contains("[switch]`$PrintCommandsOnly")) "compare-pullback-profiles-aggregate.ps1 must support dry-run command preview"
 
 Write-Output "replay script checks passed"

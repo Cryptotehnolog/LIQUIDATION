@@ -4,6 +4,7 @@ param(
     [string]$OutputPath = ".cache/replay/pullback-profile-comparison.json",
     [string]$ArtifactDirectory = ".cache/replay/pullback-profile-comparison",
     [decimal[]]$PullbackPct = @(0.30, 0.20, 0.15, 0.10),
+    [string]$PullbackPctCsv = "",
     [string]$ReplayProfile = "baseline",
     [decimal]$LiquidationThresholdMinUsd = 25000,
     [decimal]$LiquidationThresholdMaxUsd = 100000,
@@ -25,15 +26,31 @@ $InvariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 if (-not $DatabaseUrl) {
     throw "DatabaseUrl or DATABASE_URL is required"
 }
-if ($PullbackPct.Count -lt 2) {
+$ResolvedPullbackPct = @($PullbackPct)
+if ($PullbackPctCsv) {
+    $ResolvedPullbackPct = @(
+        [string]$PullbackPctCsv -split "," |
+            ForEach-Object { ([string]$_).Trim() } |
+            Where-Object { $_ } |
+            ForEach-Object {
+                [decimal]::Parse(
+                    [string]$_,
+                    [System.Globalization.NumberStyles]::Any,
+                    $InvariantCulture
+                )
+            }
+    )
+}
+
+if ($ResolvedPullbackPct.Count -lt 2) {
     throw "At least two pullback pct values are required"
 }
-foreach ($value in $PullbackPct) {
+foreach ($value in $ResolvedPullbackPct) {
     if ($value -lt 0 -or $value -ge 1) {
         throw "PullbackPct values must be greater than or equal to 0 and less than 1"
     }
 }
-if (@($PullbackPct | Sort-Object -Unique).Count -ne $PullbackPct.Count) {
+if (@($ResolvedPullbackPct | Sort-Object -Unique).Count -ne $ResolvedPullbackPct.Count) {
     throw "PullbackPct values must be unique"
 }
 
@@ -278,7 +295,7 @@ if (-not $PrintCommandsOnly -and -not (Test-Path -LiteralPath $ArtifactFullDirec
     New-Item -ItemType Directory -Force -Path $ArtifactFullDirectory | Out-Null
 }
 
-foreach ($pullback in $PullbackPct) {
+foreach ($pullback in $ResolvedPullbackPct) {
     $pullbackText = Format-Decimal $pullback
     $pullbackId = $pullbackText -replace "[^0-9A-Za-z]+", "_"
     $artifactPath = Join-Path $ArtifactFullDirectory "pullback-$pullbackId.json"

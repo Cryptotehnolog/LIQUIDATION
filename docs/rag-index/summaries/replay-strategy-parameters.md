@@ -503,3 +503,41 @@ fill proves the system can replay the full paper path, but the fill was only
 shown by a diagnostic profile and net PnL was negative after costs. Need more
 pinned signal windows, aggregate pullback comparison and cost-sensitive PnL
 analysis before changing defaults.
+
+## Aggregate Pullback Comparator Memory
+
+Дата: 2026-06-29 Minsk time.
+
+Добавлен `scripts/compare-pullback-profiles-aggregate.ps1`. Это одна команда
+для нескольких pinned signal windows: она вызывает single-window
+`scripts/compare-pullback-profiles.ps1`, суммирует результаты по
+`pullback_pct` и пишет aggregate JSON для дальнейшего dashboard/CI анализа.
+
+Также single-window comparator получил `-PullbackPctCsv`, чтобы wrapper не
+передавал повторяющийся PowerShell parameter `-PullbackPct` и не ломался на
+array binding.
+
+Первый aggregate run по двум pinned windows из
+`.cache/replay/signal-aggregate-live/foreground-20260629-0210`:
+
+- `pullback-0.10`: `comparisons=2`, `signal_count=2`,
+  `polymarket_orders=2`, `polymarket_fills=1`, `fill_rate=0.5`,
+  `hedge_fills=1`, `net_pnl_usd=-0.1090`,
+  `average_trade_distance_to_fill=0.0235`,
+  `average_seconds_to_order_expiry=86`;
+- `pullback-0.15`: `signal_count=2`, `polymarket_fills=0`,
+  `average_trade_distance_to_fill=0.0375`, `net_pnl_usd=0`;
+- `pullback-0.20`: `signal_count=2`, `polymarket_fills=0`,
+  `average_trade_distance_to_fill=0.0650`, `net_pnl_usd=0`;
+- `pullback-0.30`: `signal_count=2`, `polymarket_fills=0`,
+  `average_trade_distance_to_fill=0.1200`, `net_pnl_usd=0`.
+
+Решение: baseline `pullback_pct=0.30` остаётся без изменений. Diagnostic
+`pullback_pct=0.10` улучшает fill probability на этой маленькой выборке и дал
+один full paper path, но этот путь был отрицательным после fees/funding/slippage
+(`net_pnl_usd=-0.1090`). Нужно больше pinned windows и cost-sensitive aggregate
+PnL перед изменением defaults.
+
+Performance note: replay показал slow SQL warnings при чтении `market_quotes`.
+Это не блокирует текущий paper-analysis, но replay query/index optimization
+нужно сделать перед большими batch/backtest runs.
