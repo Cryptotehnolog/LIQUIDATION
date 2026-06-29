@@ -26,6 +26,12 @@ quality = "snapshot_only"
 symbols = ["BTCUSDT"]
 max_reconnects_per_5min = 5
 
+[sources.gate]
+enabled = false
+quality = "websocket_only"
+symbols = ["BTC_USDT"]
+max_reconnects_per_5min = 5
+
 [sources.polymarket]
 enabled = false
 quality = "websocket_only"

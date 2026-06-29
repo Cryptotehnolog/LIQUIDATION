@@ -58,6 +58,10 @@ pub struct CollectorSettings {
     pub min_messages: usize,
     /// Per-message read timeout.
     pub read_timeout: Duration,
+    /// Optional probe runtime limit.
+    pub max_runtime: Option<Duration>,
+    /// Stop after this many canonical rows have been inserted.
+    pub until_canonical_events: Option<usize>,
     /// Maximum time to wait when the recorder channel is full.
     pub channel_send_timeout: Duration,
     /// Source reconnect policy.
@@ -71,6 +75,8 @@ impl Default for CollectorSettings {
             max_messages: 1,
             min_messages: 0,
             read_timeout: Duration::from_secs(30),
+            max_runtime: None,
+            until_canonical_events: None,
             channel_send_timeout: Duration::from_secs(5),
             reconnect: ReconnectPolicy::default(),
         }
@@ -192,6 +198,21 @@ impl CollectorSettings {
         if self.read_timeout.is_zero() {
             return Err(CollectorError::InvalidSetting(
                 "read_timeout must be greater than zero",
+            ));
+        }
+        if self.max_runtime.is_some_and(|limit| limit.is_zero()) {
+            return Err(CollectorError::InvalidSetting(
+                "max_runtime must be greater than zero",
+            ));
+        }
+        if self.until_canonical_events == Some(0) {
+            return Err(CollectorError::InvalidSetting(
+                "until_canonical_events must be greater than zero",
+            ));
+        }
+        if self.until_canonical_events.is_some() && self.max_runtime.is_none() {
+            return Err(CollectorError::InvalidSetting(
+                "max_runtime is required when until_canonical_events is set",
             ));
         }
         if self.channel_send_timeout.is_zero() {
@@ -381,15 +402,39 @@ pub async fn run_live_probe(
     let (sender, receiver) = mpsc::channel(settings.channel_capacity);
     let producer_probe = probe.clone();
     let producer_settings = settings.clone();
+    let started_at = Instant::now();
 
     let producer = tokio::spawn(async move {
         read_with_reconnects(producer_probe, producer_settings, sender).await
     });
 
-    let mut stats = record_payloads(&pool, &probe, receiver).await?;
-    let producer_stats = producer.await??;
-    stats.received_messages = producer_stats.received_messages;
-    stats.reconnects = producer_stats.reconnects;
+    let mut stats = record_payloads(
+        &pool,
+        &probe,
+        receiver,
+        settings.until_canonical_events,
+        settings.max_runtime,
+        started_at,
+    )
+    .await?;
+    if canonical_target_reached(&stats, settings.until_canonical_events)
+        || runtime_limit_elapsed(started_at, settings.max_runtime)
+    {
+        producer.abort();
+        match producer.await {
+            Ok(Ok(producer_stats)) => {
+                stats.received_messages = producer_stats.received_messages;
+                stats.reconnects = producer_stats.reconnects;
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(error) if !error.is_cancelled() => return Err(error.into()),
+            Err(_) => {}
+        }
+    } else {
+        let producer_stats = producer.await??;
+        stats.received_messages = producer_stats.received_messages;
+        stats.reconnects = producer_stats.reconnects;
+    }
 
     Ok(stats)
 }
@@ -702,7 +747,14 @@ async fn read_once(
     }
 
     let mut last_heartbeat = Instant::now();
+    let started_at = Instant::now();
     while stats.received_messages < settings.max_messages as u64 {
+        if settings
+            .max_runtime
+            .is_some_and(|limit| started_at.elapsed() >= limit)
+        {
+            return Ok(());
+        }
         let read_wait = read_wait_with_heartbeat(settings.read_timeout, probe, last_heartbeat);
         let timeout_result = tokio::time::timeout(read_wait, socket.next()).await;
         let Some(message) = (match timeout_result {
@@ -712,6 +764,7 @@ async fn read_once(
                 last_heartbeat = Instant::now();
                 continue;
             }
+            Err(_) if settings.until_canonical_events.is_some() => continue,
             Err(_) if stats.received_messages >= settings.min_messages as u64 => return Ok(()),
             Err(_) => return Err(CollectorError::ReadTimeout(settings.read_timeout)),
         }) else {
@@ -815,9 +868,15 @@ async fn record_payloads(
     pool: &PgPool,
     probe: &SourceProbe,
     mut receiver: mpsc::Receiver<ReceivedPayload>,
+    until_canonical_events: Option<usize>,
+    max_runtime: Option<Duration>,
+    started_at: Instant,
 ) -> Result<CollectorStats, CollectorError> {
     let mut stats = CollectorStats::default();
-    while let Some(received) = receiver.recv().await {
+    while let Some(received) =
+        receive_payload_with_runtime_limit(&mut receiver, max_runtime, started_at).await
+    {
+        stats.received_messages += 1;
         stats.observe_payload(received.received_ts);
         let events = probe.normalize_payload(&received.payload, received.received_ts)?;
         let raw_only = probe.raw_only_events(&received.payload)?;
@@ -844,9 +903,39 @@ async fn record_payloads(
             stats.raw_inserted += repository::insert_raw_source_event(pool, &raw).await?;
             stats.canonical_inserted += repository::insert_market_trade(pool, &trade).await?;
         }
+        if canonical_target_reached(&stats, until_canonical_events) {
+            break;
+        }
     }
 
     Ok(stats)
+}
+
+fn canonical_target_reached(stats: &CollectorStats, target: Option<usize>) -> bool {
+    target.is_some_and(|target| stats.canonical_inserted >= target as u64)
+}
+
+async fn receive_payload_with_runtime_limit(
+    receiver: &mut mpsc::Receiver<ReceivedPayload>,
+    max_runtime: Option<Duration>,
+    started_at: Instant,
+) -> Option<ReceivedPayload> {
+    let Some(limit) = max_runtime else {
+        return receiver.recv().await;
+    };
+    let remaining = limit.checked_sub(started_at.elapsed())?;
+    if remaining.is_zero() {
+        return None;
+    }
+
+    tokio::time::timeout(remaining, receiver.recv())
+        .await
+        .ok()
+        .flatten()
+}
+
+fn runtime_limit_elapsed(started_at: Instant, max_runtime: Option<Duration>) -> bool {
+    max_runtime.is_some_and(|limit| started_at.elapsed() >= limit)
 }
 
 async fn record_payloads_batched(
@@ -1134,6 +1223,34 @@ mod tests {
             .validate()
             .expect_err("min_messages above max_messages must fail");
         assert!(err.to_string().contains("min_messages"));
+    }
+
+    #[test]
+    fn rejects_zero_until_canonical_events() {
+        let settings = CollectorSettings {
+            until_canonical_events: Some(0),
+            max_runtime: Some(Duration::from_secs(1)),
+            ..CollectorSettings::default()
+        };
+
+        let err = settings
+            .validate()
+            .expect_err("zero canonical target must fail");
+        assert!(err.to_string().contains("until_canonical_events"));
+    }
+
+    #[test]
+    fn until_canonical_events_requires_runtime_limit() {
+        let settings = CollectorSettings {
+            until_canonical_events: Some(1),
+            max_runtime: None,
+            ..CollectorSettings::default()
+        };
+
+        let err = settings
+            .validate()
+            .expect_err("canonical target without runtime limit must fail");
+        assert!(err.to_string().contains("max_runtime"));
     }
 
     #[test]

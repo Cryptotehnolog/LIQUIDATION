@@ -38,6 +38,8 @@ pub struct SourcesConfig {
     pub okx: SourceConfig,
     /// Bitget source configuration.
     pub bitget: SourceConfig,
+    /// Gate source configuration.
+    pub gate: SourceConfig,
     /// Polymarket public CLOB market-data configuration.
     pub polymarket: SourceConfig,
     /// Hyperliquid public market-data configuration.
@@ -190,6 +192,7 @@ impl AppConfig {
         validate_source("sources.binance", &self.sources.binance)?;
         validate_source("sources.okx", &self.sources.okx)?;
         validate_source("sources.bitget", &self.sources.bitget)?;
+        validate_source("sources.gate", &self.sources.gate)?;
         validate_source("sources.polymarket", &self.sources.polymarket)?;
         validate_source("sources.hyperliquid", &self.sources.hyperliquid)?;
 
@@ -215,6 +218,7 @@ impl AppConfig {
             "binance" => self.sources.binance.enabled,
             "okx" => self.sources.okx.enabled,
             "bitget" => self.sources.bitget.enabled,
+            "gate" => self.sources.gate.enabled,
             "polymarket" => self.sources.polymarket.enabled,
             "hyperliquid" => self.sources.hyperliquid.enabled,
             _ => false,
@@ -251,6 +255,12 @@ impl AppConfig {
                     enabled: false,
                     quality: "snapshot_only".to_owned(),
                     symbols: vec!["BTCUSDT".to_owned()],
+                    max_reconnects_per_5min: 5,
+                },
+                gate: SourceConfig {
+                    enabled: false,
+                    quality: "websocket_only".to_owned(),
+                    symbols: vec!["BTC_USDT".to_owned()],
                     max_reconnects_per_5min: 5,
                 },
                 polymarket: SourceConfig {

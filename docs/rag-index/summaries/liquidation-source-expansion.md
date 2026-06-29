@@ -8,9 +8,10 @@ official docs, fixtures, live probe, overlap and source usefulness gates pass.
 
 Текущий приоритет расширения liquidation sources после решения 2026-06-29:
 
-1. `bitget` - diagnostic-only source; official public UTA liquidation channel,
-   aggregated by one-second buckets.
-2. `gate` - diagnostic-only source; official public futures liquidates channel.
+1. `bitget` - implemented diagnostic-only source; official public UTA
+   liquidation channel, aggregated by one-second buckets.
+2. `gate` - implemented diagnostic-only source with metadata-gated canonical
+   normalization; official public futures liquidates channel.
 3. `htx` - diagnostic-only source; official public USDT-M liquidation_orders
    channel.
 4. `hyperliquid_liquidations` - deferred node research candidate, not simple
@@ -138,12 +139,17 @@ Gate official futures public liquidates channel:
 - channel `futures.public_liquidates`;
 - payload includes `price`, `size`, `time`, `contract`;
 - source is public and symbol-scoped;
-- `size` semantics need fixture/contract verification before canonical
-  `notional_usd`.
+- `size` is contract quantity, not quote notional;
+- canonical `notional_usd` requires contract metadata with `quanto_multiplier`;
+- MVP formula: `quantity_base = abs(size) * quanto_multiplier`,
+  `notional_usd = quantity_base * price`.
 
-Gate limitation: if `size` is contract size rather than quote notional, canonical
-normalization must use contract metadata. Until verified, Gate may be raw-only or
-canonical-with-metadata.
+Implementation note 2026-06-29: Gate was added as `diagnostic_only` source with
+`source_quality=websocket_only`. Without `--gate-contracts-path`, the collector
+keeps Gate liquidation payloads as raw-only. With a validated contract metadata
+cache, canonical normalization is allowed for supported contracts such as
+`BTC_USDT`. Gate does not participate in strategy signals until live probe,
+overlap/usefulness and replay usefulness gates pass.
 
 ## HTX Candidate
 

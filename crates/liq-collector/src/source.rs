@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use liq_connectors::{ConnectorError, binance, bitget, bybit, hyperliquid, okx, polymarket};
+use liq_connectors::{ConnectorError, binance, bitget, bybit, gate, hyperliquid, okx, polymarket};
 use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade, Source};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -18,6 +18,8 @@ pub enum CollectorSource {
     Okx,
     /// Bitget UTA public liquidation snapshot stream.
     Bitget,
+    /// Gate futures public liquidation stream.
+    Gate,
     /// Polymarket CLOB public market-data stream.
     Polymarket,
     /// Hyperliquid public market-data stream.
@@ -33,6 +35,7 @@ impl CollectorSource {
             "binance" => Some(Self::Binance),
             "okx" => Some(Self::Okx),
             "bitget" => Some(Self::Bitget),
+            "gate" => Some(Self::Gate),
             "polymarket" => Some(Self::Polymarket),
             "hyperliquid" => Some(Self::Hyperliquid),
             _ => None,
@@ -47,6 +50,7 @@ impl CollectorSource {
             Self::Binance => Source::Binance,
             Self::Okx => Source::Okx,
             Self::Bitget => Source::Bitget,
+            Self::Gate => Source::Gate,
             Self::Polymarket => Source::Polymarket,
             Self::Hyperliquid => Source::Hyperliquid,
         }
@@ -59,6 +63,7 @@ pub struct SourceProbe {
     source: CollectorSource,
     symbol: String,
     okx_instrument_cache: Option<okx::OkxInstrumentCache>,
+    gate_contract_cache: Option<gate::GateContractCache>,
 }
 
 impl SourceProbe {
@@ -69,6 +74,7 @@ impl SourceProbe {
             source: CollectorSource::Bybit,
             symbol: symbol.into().to_ascii_uppercase(),
             okx_instrument_cache: None,
+            gate_contract_cache: None,
         }
     }
 
@@ -79,6 +85,7 @@ impl SourceProbe {
             source: CollectorSource::Binance,
             symbol: symbol.into().to_ascii_lowercase(),
             okx_instrument_cache: None,
+            gate_contract_cache: None,
         }
     }
 
@@ -89,6 +96,7 @@ impl SourceProbe {
             source: CollectorSource::Okx,
             symbol: symbol.into().to_ascii_uppercase(),
             okx_instrument_cache: None,
+            gate_contract_cache: None,
         }
     }
 
@@ -99,6 +107,18 @@ impl SourceProbe {
             source: CollectorSource::Bitget,
             symbol: symbol.into().to_ascii_uppercase(),
             okx_instrument_cache: None,
+            gate_contract_cache: None,
+        }
+    }
+
+    /// Build a Gate futures public liquidation probe.
+    #[must_use]
+    pub fn gate(symbol: impl Into<String>) -> Self {
+        Self {
+            source: CollectorSource::Gate,
+            symbol: symbol.into().to_ascii_uppercase(),
+            okx_instrument_cache: None,
+            gate_contract_cache: None,
         }
     }
 
@@ -109,6 +129,7 @@ impl SourceProbe {
             source: CollectorSource::Polymarket,
             symbol: asset_id.into(),
             okx_instrument_cache: None,
+            gate_contract_cache: None,
         }
     }
 
@@ -119,6 +140,7 @@ impl SourceProbe {
             source: CollectorSource::Hyperliquid,
             symbol: coin.into().to_ascii_uppercase(),
             okx_instrument_cache: None,
+            gate_contract_cache: None,
         }
     }
 
@@ -126,6 +148,13 @@ impl SourceProbe {
     #[must_use]
     pub fn with_okx_instrument_cache(mut self, cache: okx::OkxInstrumentCache) -> Self {
         self.okx_instrument_cache = Some(cache);
+        self
+    }
+
+    /// Attach Gate contract metadata required for canonical normalization.
+    #[must_use]
+    pub fn with_gate_contract_cache(mut self, cache: gate::GateContractCache) -> Self {
+        self.gate_contract_cache = Some(cache);
         self
     }
 
@@ -137,6 +166,7 @@ impl SourceProbe {
             CollectorSource::Binance => Self::binance(symbol),
             CollectorSource::Okx => Self::okx(symbol),
             CollectorSource::Bitget => Self::bitget(symbol),
+            CollectorSource::Gate => Self::gate(symbol),
             CollectorSource::Polymarket => Self::polymarket(symbol),
             CollectorSource::Hyperliquid => Self::hyperliquid(symbol),
         }
@@ -167,6 +197,7 @@ impl SourceProbe {
             }
             CollectorSource::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_owned(),
             CollectorSource::Bitget => "wss://ws.bitget.com/v3/ws/public".to_owned(),
+            CollectorSource::Gate => "wss://fx-ws.gateio.ws/v4/ws/usdt".to_owned(),
             CollectorSource::Polymarket => {
                 "wss://ws-subscriptions-clob.polymarket.com/ws/market".to_owned()
             }
@@ -197,6 +228,11 @@ impl SourceProbe {
                 r#"{{"op":"subscribe","args":[{{"instType":"usdt-futures","topic":"liquidation","symbol":"{}"}}]}}"#,
                 self.symbol
             )],
+            CollectorSource::Gate => vec![format!(
+                r#"{{"time":{},"channel":"futures.public_liquidates","event":"subscribe","payload":["{}"]}}"#,
+                OffsetDateTime::now_utc().unix_timestamp(),
+                self.symbol
+            )],
             CollectorSource::Polymarket => vec![format!(
                 r#"{{"assets_ids":["{}"],"type":"market","custom_feature_enabled":true}}"#,
                 self.symbol
@@ -223,6 +259,7 @@ impl SourceProbe {
             CollectorSource::Binance
             | CollectorSource::Okx
             | CollectorSource::Bitget
+            | CollectorSource::Gate
             | CollectorSource::Hyperliquid => None,
         }
     }
@@ -236,6 +273,7 @@ impl SourceProbe {
             CollectorSource::Binance
             | CollectorSource::Okx
             | CollectorSource::Bitget
+            | CollectorSource::Gate
             | CollectorSource::Hyperliquid => None,
         }
     }
@@ -276,6 +314,14 @@ impl SourceProbe {
                         .collect()
                 })
             }
+            CollectorSource::Gate => self.gate_contract_cache.as_ref().map_or_else(
+                || Ok(Vec::new()),
+                |cache| match gate::normalize_public_liquidates(payload, received_ts, cache) {
+                    Ok(events) => Ok(events),
+                    Err(ConnectorError::Missing("gate.contract_metadata")) => Ok(Vec::new()),
+                    Err(error) => Err(error),
+                },
+            ),
             CollectorSource::Polymarket | CollectorSource::Hyperliquid => Ok(Vec::new()),
         }
     }
@@ -302,7 +348,8 @@ impl SourceProbe {
             CollectorSource::Bybit
             | CollectorSource::Binance
             | CollectorSource::Okx
-            | CollectorSource::Bitget => Ok((Vec::new(), Vec::new())),
+            | CollectorSource::Bitget
+            | CollectorSource::Gate => Ok((Vec::new(), Vec::new())),
         }
     }
 
@@ -322,6 +369,37 @@ impl SourceProbe {
             | CollectorSource::Bitget
             | CollectorSource::Polymarket
             | CollectorSource::Hyperliquid => Ok(Vec::new()),
+            CollectorSource::Gate if self.gate_contract_cache.is_some() => {
+                if let Some(cache) = self.gate_contract_cache.as_ref() {
+                    gate::parse_public_liquidates(payload).map(|items| {
+                        items
+                            .into_iter()
+                            .filter(|item| !cache.supports_canonical_contract(&item.symbol))
+                            .map(|item| RawOnlySourceEvent {
+                                source: Source::Gate,
+                                source_event_id: item.source_event_id,
+                                source_quality: "websocket_only",
+                                symbol: item.symbol,
+                                exchange_ts: item.exchange_ts,
+                            })
+                            .collect()
+                    })
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            CollectorSource::Gate => gate::parse_public_liquidates(payload).map(|items| {
+                items
+                    .into_iter()
+                    .map(|item| RawOnlySourceEvent {
+                        source: Source::Gate,
+                        source_event_id: item.source_event_id,
+                        source_quality: "websocket_only",
+                        symbol: item.symbol,
+                        exchange_ts: item.exchange_ts,
+                    })
+                    .collect()
+            }),
             CollectorSource::Okx if self.okx_instrument_cache.is_some() => {
                 if let Some(cache) = self.okx_instrument_cache.as_ref() {
                     okx::parse_liquidation_orders(payload).map(|items| {
@@ -406,6 +484,14 @@ mod tests {
         assert_eq!(
             SourceProbe::bitget("btcusdt").websocket_url(),
             "wss://ws.bitget.com/v3/ws/public"
+        );
+        assert_eq!(
+            SourceProbe::gate("btc_usdt").websocket_url(),
+            "wss://fx-ws.gateio.ws/v4/ws/usdt"
+        );
+        assert!(
+            SourceProbe::gate("btc_usdt").subscribe_messages()[0]
+                .contains(r#""channel":"futures.public_liquidates""#)
         );
         assert!(
             SourceProbe::bitget("btcusdt").subscribe_messages()[0]
@@ -581,5 +667,47 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(raw_only.len(), 1);
         assert_eq!(raw_only[0].symbol, "ETH-USDT-SWAP");
+    }
+
+    #[test]
+    fn keeps_gate_payload_raw_only_without_contract_metadata() {
+        let probe = SourceProbe::gate("BTC_USDT");
+        let payload =
+            include_str!("../../liq-connectors/tests/fixtures/gate_public_liquidates.json");
+
+        let events = probe
+            .normalize_payload(payload, OffsetDateTime::UNIX_EPOCH)
+            .expect("missing Gate metadata should not fail collector routing");
+        let raw_only = probe
+            .raw_only_events(payload)
+            .expect("Gate raw-only parser should not fail");
+
+        assert!(events.is_empty());
+        assert_eq!(raw_only.len(), 1);
+        assert_eq!(raw_only[0].source, Source::Gate);
+        assert_eq!(raw_only[0].source_quality, "websocket_only");
+        assert_eq!(raw_only[0].symbol, "BTC_USDT");
+    }
+
+    #[test]
+    fn normalizes_gate_payload_when_contract_cache_is_attached() {
+        let cache = gate::GateContractCache::from_contract_response(include_str!(
+            "../../liq-connectors/tests/fixtures/gate_contract_btc_usdt.json"
+        ))
+        .expect("fixture should parse");
+        let probe = SourceProbe::gate("BTC_USDT").with_gate_contract_cache(cache);
+        let payload =
+            include_str!("../../liq-connectors/tests/fixtures/gate_public_liquidates.json");
+
+        let events = probe
+            .normalize_payload(payload, OffsetDateTime::UNIX_EPOCH)
+            .expect("fixture should normalize");
+        let raw_only = probe
+            .raw_only_events(payload)
+            .expect("raw-only parser should not fail");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source, Source::Gate);
+        assert!(raw_only.is_empty());
     }
 }

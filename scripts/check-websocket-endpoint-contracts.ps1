@@ -42,6 +42,13 @@ $contracts = @(
         fixture = "bitget-liquidation-channel.html"
         code_terms = @("wss://ws.bitget.com/v3/ws/public", "`"topic`":`"liquidation`"")
         docs_terms = @("wss://ws.bitget.com/v3/ws/public", "liquidation")
+    },
+    [ordered]@{
+        name = "gate_futures_public_liquidates"
+        docs_url = "https://www.gate.com/docs/developers/futures/ws/en/#public-liquidates-subscription"
+        fixture = "gate-public-liquidates.html"
+        code_terms = @("wss://fx-ws.gateio.ws/v4/ws/usdt", "futures.public_liquidates")
+        docs_terms = @("fx-ws.gateio.ws/v4/ws/usdt", "futures.public_liquidates")
     }
 )
 

@@ -31,11 +31,13 @@ try {
     $stableBybit = "# Bybit changelog`nNo relevant changes."
     $stableOkx = "# OKX changelog`nNo relevant changes."
     $stableBitget = "# Bitget liquidation channel`nNo relevant changes."
+    $stableGate = "# Gate public liquidates`nNo relevant changes."
 
     Set-Content -LiteralPath (Join-Path $fixtureDir "binance-change-log.html") -Value $changedBinance -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $fixtureDir "bybit-v5-changelog.html") -Value $stableBybit -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $fixtureDir "okx-log-en.html") -Value $stableOkx -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $fixtureDir "bitget-liquidation-channel.html") -Value $stableBitget -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $fixtureDir "gate-public-liquidates.html") -Value $stableGate -Encoding UTF8
 
     $baselinePath = Join-Path $tempDir "baseline.json"
     @{
@@ -44,7 +46,8 @@ try {
             @{ name = "binance"; content_sha256 = Get-TestSha256 $stableBinance },
             @{ name = "bybit"; content_sha256 = Get-TestSha256 $stableBybit },
             @{ name = "okx"; content_sha256 = Get-TestSha256 $stableOkx },
-            @{ name = "bitget"; content_sha256 = Get-TestSha256 $stableBitget }
+            @{ name = "bitget"; content_sha256 = Get-TestSha256 $stableBitget },
+            @{ name = "gate"; content_sha256 = Get-TestSha256 $stableGate }
         )
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $baselinePath -Encoding UTF8
 

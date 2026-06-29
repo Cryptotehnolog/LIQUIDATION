@@ -37,6 +37,12 @@ $sources = @(
         url = "https://www.bitget.com/api-doc/uta/websocket/public/Liquidation-Channel"
         fixture = "bitget-liquidation-channel.html"
         risk_terms = @("breaking", "deprecated", "decommission", "delisted", "removed", "liquidation", "websocket", "topic", "amount", "side")
+    },
+    [ordered]@{
+        name = "gate"
+        url = "https://www.gate.com/docs/developers/futures/ws/en/#public-liquidates-subscription"
+        fixture = "gate-public-liquidates.html"
+        risk_terms = @("breaking", "deprecated", "decommission", "delisted", "removed", "liquidation", "websocket", "futures.public_liquidates", "quanto_multiplier", "size")
     }
 )
 

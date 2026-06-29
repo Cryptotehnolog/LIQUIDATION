@@ -1,6 +1,6 @@
 //! Fixture-based connector normalization tests.
 
-use liq_connectors::{binance, bitget, bybit, okx};
+use liq_connectors::{binance, bitget, bybit, gate, okx};
 use liq_domain::{LiquidationSide, Source, SourceQuality};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -79,6 +79,66 @@ fn ignores_bitget_non_liquidation_service_payload() {
     .expect("non-liquidation JSON should be ignored");
 
     assert!(events.is_empty());
+}
+
+#[test]
+fn parses_gate_public_liquidates_as_raw_metadata() {
+    let events =
+        gate::parse_public_liquidates(include_str!("fixtures/gate_public_liquidates.json"))
+            .expect("fixture must parse");
+
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.symbol, "BTC_USDT");
+    assert_eq!(
+        event.source_event_id,
+        "gate:BTC_USDT:1718750001000:1000:65000"
+    );
+    assert_eq!(
+        event.exchange_ts,
+        OffsetDateTime::from_unix_timestamp(1_718_750_001)
+            .expect("fixture timestamp must be valid")
+    );
+}
+
+#[test]
+fn normalizes_gate_public_liquidates_when_contract_metadata_is_supported() {
+    let cache = gate::GateContractCache::from_contract_response(include_str!(
+        "fixtures/gate_contract_btc_usdt.json"
+    ))
+    .expect("contract fixture must parse");
+    let received_ts = OffsetDateTime::from_unix_timestamp(1_718_750_002)
+        .expect("fixture timestamp must be valid");
+
+    let events = gate::normalize_public_liquidates(
+        include_str!("fixtures/gate_public_liquidates.json"),
+        received_ts,
+        &cache,
+    )
+    .expect("supported contract must normalize canonically");
+
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.source, Source::Gate);
+    assert_eq!(event.source_quality, SourceQuality::WebsocketOnly);
+    assert_eq!(event.symbol, "BTC_USDT");
+    assert_eq!(event.side, LiquidationSide::Long);
+    assert_eq!(event.price, Decimal::new(6_500_000, 2));
+    assert_eq!(event.quantity, Decimal::new(1, 1));
+    assert_eq!(event.notional_usd, Decimal::new(650_000, 2));
+}
+
+#[test]
+fn rejects_gate_canonical_normalization_without_metadata() {
+    let cache = gate::GateContractCache::default();
+    let err = gate::normalize_public_liquidates(
+        include_str!("fixtures/gate_public_liquidates.json"),
+        OffsetDateTime::UNIX_EPOCH,
+        &cache,
+    )
+    .expect_err("missing contract metadata must block canonical normalization");
+
+    assert!(err.to_string().contains("gate.contract_metadata"));
 }
 
 #[test]

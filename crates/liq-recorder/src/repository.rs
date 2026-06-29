@@ -1936,6 +1936,7 @@ fn parse_source(value: &str) -> Result<Source, sqlx::Error> {
         "binance" => Ok(Source::Binance),
         "okx" => Ok(Source::Okx),
         "bitget" => Ok(Source::Bitget),
+        "gate" => Ok(Source::Gate),
         "polymarket" => Ok(Source::Polymarket),
         "hyperliquid" => Ok(Source::Hyperliquid),
         _ => Err(storage_decode_error("source", value)),
@@ -2019,7 +2020,7 @@ impl SourcePolicy {
                 coverage_role: "diagnostic_only",
                 participates_in_signals: false,
             },
-            "okx" => Self {
+            "okx" | "gate" => Self {
                 source_quality: "websocket_only",
                 coverage_role: "diagnostic_only",
                 participates_in_signals: false,

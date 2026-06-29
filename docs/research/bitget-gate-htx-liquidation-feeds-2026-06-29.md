@@ -71,6 +71,19 @@ Gate is a good second source, but canonical `notional_usd` depends on exact
 `size` semantics and contract metadata. Until verified with fixture and live
 sample, Gate should be raw-only or canonical-with-metadata.
 
+Implementation update 2026-06-29:
+
+- Gate connector module added.
+- Official WebSocket channel routed as `futures.public_liquidates`.
+- Contract metadata fetcher added for
+  `GET /api/v4/futures/{settle}/contracts/{contract}`.
+- Canonical normalization is metadata-gated and uses
+  `abs(size) * quanto_multiplier * price`.
+- Gate remains `diagnostic_only` and `participates_in_signals=false`.
+- Bounded probes should use `--until-canonical-events 1` plus
+  `--max-runtime-seconds` so broad/quiet feeds do not stop after arbitrary
+  non-useful messages.
+
 ## HTX
 
 Official source: Huobi/HTX USDT-margined swaps API docs/history.

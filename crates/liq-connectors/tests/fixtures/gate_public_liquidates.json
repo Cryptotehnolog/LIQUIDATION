@@ -1,0 +1,15 @@
+{
+  "time": 1718750001,
+  "time_ms": 1718750001000,
+  "channel": "futures.public_liquidates",
+  "event": "update",
+  "result": [
+    {
+      "time": 1718750001,
+      "time_ms": 1718750001000,
+      "contract": "BTC_USDT",
+      "size": 1000,
+      "price": "65000"
+    }
+  ]
+}

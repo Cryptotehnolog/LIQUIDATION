@@ -45,6 +45,12 @@ wss://ws.bitget.com/v3/ws/public
 topic liquidation
 "@ | Set-Content -LiteralPath (Join-Path $fixtureDir "bitget-liquidation-channel.html") -Encoding UTF8
 
+    @"
+Gate Futures Public Liquidates
+wss://fx-ws.gateio.ws/v4/ws/usdt
+futures.public_liquidates
+"@ | Set-Content -LiteralPath (Join-Path $fixtureDir "gate-public-liquidates.html") -Encoding UTF8
+
     $result = & $scriptPath -FixtureDir $fixtureDir -OutputDir $outputDir
     $json = $result | ConvertFrom-Json
 
@@ -53,6 +59,8 @@ topic liquidation
     Assert-True (($json.contracts | Where-Object { $_.name -eq "binance_force_order" }).docs_ok) "expected Binance docs contract to pass"
     Assert-True (($json.contracts | Where-Object { $_.name -eq "bitget_uta_liquidation" }).code_ok) "expected Bitget code contract to pass"
     Assert-True (($json.contracts | Where-Object { $_.name -eq "bitget_uta_liquidation" }).docs_ok) "expected Bitget docs contract to pass"
+    Assert-True (($json.contracts | Where-Object { $_.name -eq "gate_futures_public_liquidates" }).code_ok) "expected Gate code contract to pass"
+    Assert-True (($json.contracts | Where-Object { $_.name -eq "gate_futures_public_liquidates" }).docs_ok) "expected Gate docs contract to pass"
 
     foreach ($path in @("websocket-endpoint-contracts.json", "websocket-endpoint-contracts.md")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $outputDir $path)) "expected $path to be written"

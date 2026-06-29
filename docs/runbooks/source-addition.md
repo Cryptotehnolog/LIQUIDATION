@@ -27,6 +27,8 @@ normalizer test, source policy, dashboard visibility и CI guard.
   `participates_in_signals=false`.
 - `bitget`: `source_quality=snapshot_only`, `coverage_role=diagnostic_only`,
   `participates_in_signals=false`.
+- `gate`: `source_quality=websocket_only`, `coverage_role=diagnostic_only`,
+  `participates_in_signals=false`.
 - `polymarket`: `source_quality=websocket_only`,
   `coverage_role=market_data_leg`, `participates_in_signals=false`.
 - `hyperliquid`: `source_quality=websocket_only`,
@@ -142,6 +144,40 @@ cargo run -p liq-cli -- collector usefulness-report --window-minutes 120 --json
 - `participates_in_signals=false`;
 - если в окне были liquidation payloads, `canonical_events` и `max_notional_usd`
   считаются по USDT quote amount.
+
+## Gate notes
+
+Official decision:
+
+- Gate futures public liquidates channel добавлен как `diagnostic_only`.
+- Endpoint для USDT futures: `wss://fx-ws.gateio.ws/v4/ws/usdt`.
+- Subscribe channel: `futures.public_liquidates`, payload `["BTC_USDT"]`.
+- WebSocket payload содержит `contract`, `size`, `price`, `time`/`time_ms`.
+- `size` является количеством contracts, а не USD-notional.
+- Canonical normalization разрешается только при явном Gate contract metadata
+  cache с `name` и `quanto_multiplier`.
+- Формула MVP: `quantity_base = abs(size) * quanto_multiplier`,
+  `notional_usd = quantity_base * price`.
+- Без metadata Gate остается raw-only: payload сохраняется, но
+  `liquidation_events` не пишутся.
+- Gate не участвует в сигналах до source usefulness/overlap/replay decision.
+
+Минимальная bounded probe после настройки БД и contract metadata:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fetch-gate-contract.ps1 -Contract BTC_USDT
+cargo run -p liq-cli -- collector probe --source gate --symbol BTC_USDT --gate-contracts-path .cache\gate\contract-BTC_USDT.json --max-messages 500 --min-messages 0 --max-runtime-seconds 180 --read-timeout-seconds 60 --until-canonical-events 1
+cargo run -p liq-cli -- collector usefulness-report --window-minutes 120 --json
+```
+
+Ожидаемо:
+
+- `gate` отображается как `diagnostic_only`;
+- `source_quality=websocket_only`;
+- `participates_in_signals=false`;
+- canonical rows появляются только если metadata есть и в bounded window
+  реально пришёл `BTC_USDT` liquidation payload.
 
 ## Checklist добавления нового источника
 

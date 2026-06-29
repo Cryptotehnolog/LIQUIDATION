@@ -21,6 +21,7 @@ mod tests {
         assert_eq!(Source::Binance.as_str(), "binance");
         assert_eq!(Source::Okx.as_str(), "okx");
         assert_eq!(Source::Bitget.as_str(), "bitget");
+        assert_eq!(Source::Gate.as_str(), "gate");
         assert_eq!(Source::Polymarket.as_str(), "polymarket");
         assert_eq!(Source::Hyperliquid.as_str(), "hyperliquid");
     }

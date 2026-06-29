@@ -28,6 +28,16 @@ rate-limited.
 canonical events/hour, max notional, latency, stale rate, overlap buckets и
 replay windows made signal-ready.
 
+Дополнение по implementation 2026-06-29:
+
+- Bitget добавлен как `diagnostic_only`, `source_quality=snapshot_only`.
+- Gate добавлен как `diagnostic_only`, `source_quality=websocket_only`.
+- Gate canonical normalization разрешается только при явном contract metadata
+  cache с `quanto_multiplier`; иначе Gate payloads остаются raw-only.
+- Новый probe guard `--until-canonical-events N --max-runtime-seconds N`
+  нужен для broad feeds, чтобы bounded probe ждал именно canonical BTC event,
+  но не зависал бесконечно.
+
 Дополнение после probe 2026-06-29: official WebSocket docs и live probe не
 подтвердили public all-market Hyperliquid liquidation subscription. Текущий
 `hyperliquid` source остается hedge market-data leg; production

@@ -10,7 +10,7 @@ use liq_collector::{
     CollectorRunSettings, CollectorSettings, CollectorSource, SourceProbe, run_live_collector,
     run_live_collectors, run_live_probe,
 };
-use liq_connectors::okx::OkxInstrumentCache;
+use liq_connectors::{gate::GateContractCache, okx::OkxInstrumentCache};
 use liq_recorder::{
     migrations,
     records::{PaperReplayDataRecord, PolymarketMarketRecord},
@@ -310,7 +310,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit, binance, okx, bitget, polymarket, or hyperliquid.
+        /// Source id: bybit, binance, okx, bitget, gate, polymarket, or hyperliquid.
         #[arg(long)]
         source: String,
         /// Exchange symbol, e.g. BTCUSDT.
@@ -319,6 +319,9 @@ enum CollectorCommand {
         /// Optional OKX instruments response JSON used to enable canonical OKX normalization.
         #[arg(long)]
         okx_instruments_path: Option<PathBuf>,
+        /// Optional Gate contract response JSON used to enable canonical Gate normalization.
+        #[arg(long)]
+        gate_contracts_path: Option<PathBuf>,
         /// Stop after this many raw WebSocket messages.
         #[arg(long, default_value_t = 1)]
         max_messages: usize,
@@ -331,13 +334,19 @@ enum CollectorCommand {
         /// Per-message read timeout in seconds.
         #[arg(long, default_value_t = 30)]
         read_timeout_seconds: u64,
+        /// Optional probe runtime limit in seconds.
+        #[arg(long)]
+        max_runtime_seconds: Option<u64>,
+        /// Stop after this many canonical rows have been inserted.
+        #[arg(long)]
+        until_canonical_events: Option<usize>,
     },
     /// Run a long-running collector until Ctrl+C or configured run limits.
     Run {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Source id: bybit, binance, okx, bitget, polymarket, or hyperliquid. Repeat for multi-source runs.
+        /// Source id: bybit, binance, okx, bitget, gate, polymarket, or hyperliquid. Repeat for multi-source runs.
         #[arg(long = "source", required = true)]
         source: Vec<String>,
         /// Exchange symbol, e.g. BTCUSDT.
@@ -346,6 +355,9 @@ enum CollectorCommand {
         /// Optional OKX instruments response JSON used to enable canonical OKX normalization.
         #[arg(long)]
         okx_instruments_path: Option<PathBuf>,
+        /// Optional Gate contract response JSON used to enable canonical Gate normalization.
+        #[arg(long)]
+        gate_contracts_path: Option<PathBuf>,
         /// Bounded recorder channel capacity.
         #[arg(long, default_value_t = 1024)]
         channel_capacity: usize,
@@ -376,7 +388,7 @@ enum CollectorCommand {
         /// Postgres connection URL. Defaults to `DATABASE_URL`.
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        /// Optional source id: bybit, binance, okx, bitget, polymarket, or hyperliquid.
+        /// Optional source id: bybit, binance, okx, bitget, gate, polymarket, or hyperliquid.
         #[arg(long)]
         source: Option<String>,
         /// Maximum rows to print.
@@ -1356,20 +1368,26 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             source,
             symbol,
             okx_instruments_path,
+            gate_contracts_path,
             max_messages,
             min_messages,
             channel_capacity,
             read_timeout_seconds,
+            max_runtime_seconds,
+            until_canonical_events,
         } => {
             run_collector_probe(CollectorProbeArgs {
                 database_url,
                 source,
                 symbol,
                 okx_instruments_path,
+                gate_contracts_path,
                 max_messages,
                 min_messages,
                 channel_capacity,
                 read_timeout_seconds,
+                max_runtime_seconds,
+                until_canonical_events,
             })
             .await?;
         }
@@ -1378,6 +1396,7 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
             source,
             symbol,
             okx_instruments_path,
+            gate_contracts_path,
             channel_capacity,
             read_timeout_seconds,
             channel_send_timeout_seconds,
@@ -1392,6 +1411,7 @@ async fn handle_collector_command(command: CollectorCommand) -> anyhow::Result<(
                 source,
                 symbol,
                 okx_instruments_path,
+                gate_contracts_path,
                 channel_capacity,
                 read_timeout_seconds,
                 channel_send_timeout_seconds,
@@ -1503,26 +1523,37 @@ struct CollectorProbeArgs {
     source: String,
     symbol: String,
     okx_instruments_path: Option<PathBuf>,
+    gate_contracts_path: Option<PathBuf>,
     max_messages: usize,
     min_messages: usize,
     channel_capacity: usize,
     read_timeout_seconds: u64,
+    max_runtime_seconds: Option<u64>,
+    until_canonical_events: Option<usize>,
 }
 
 async fn run_collector_probe(args: CollectorProbeArgs) -> anyhow::Result<()> {
     let source = parse_collector_source(&args.source)?;
     let okx_instrument_cache = load_okx_instrument_cache(args.okx_instruments_path.as_ref())?;
+    let gate_contract_cache = load_gate_contract_cache(args.gate_contracts_path.as_ref())?;
     let pool = connect(&args.database_url).await?;
     let settings = CollectorSettings {
         channel_capacity: args.channel_capacity,
         max_messages: args.max_messages,
         min_messages: args.min_messages,
         read_timeout: Duration::from_secs(args.read_timeout_seconds),
+        max_runtime: args.max_runtime_seconds.map(Duration::from_secs),
+        until_canonical_events: args.until_canonical_events,
         ..CollectorSettings::default()
     };
     let stats = run_live_probe(
         pool,
-        source_probe(source, args.symbol, okx_instrument_cache.as_ref()),
+        source_probe(
+            source,
+            args.symbol,
+            okx_instrument_cache.as_ref(),
+            gate_contract_cache.as_ref(),
+        ),
         settings,
     )
     .await
@@ -1543,6 +1574,7 @@ struct CollectorRunArgs {
     source: Vec<String>,
     symbol: String,
     okx_instruments_path: Option<PathBuf>,
+    gate_contracts_path: Option<PathBuf>,
     channel_capacity: usize,
     read_timeout_seconds: u64,
     channel_send_timeout_seconds: u64,
@@ -1556,6 +1588,7 @@ struct CollectorRunArgs {
 async fn run_collector_service(args: CollectorRunArgs) -> anyhow::Result<()> {
     let sources = parse_collector_sources(&args.source)?;
     let okx_instrument_cache = load_okx_instrument_cache(args.okx_instruments_path.as_ref())?;
+    let gate_contract_cache = load_gate_contract_cache(args.gate_contracts_path.as_ref())?;
     let pool = connect(&args.database_url).await?;
     let settings = CollectorRunSettings {
         channel_capacity: args.channel_capacity,
@@ -1577,7 +1610,14 @@ async fn run_collector_service(args: CollectorRunArgs) -> anyhow::Result<()> {
 
     let probes = sources
         .into_iter()
-        .map(|source| source_probe(source, args.symbol.clone(), okx_instrument_cache.as_ref()))
+        .map(|source| {
+            source_probe(
+                source,
+                args.symbol.clone(),
+                okx_instrument_cache.as_ref(),
+                gate_contract_cache.as_ref(),
+            )
+        })
         .collect::<Vec<_>>();
     let reports = if probes.len() == 1 {
         let probe = probes
@@ -1641,12 +1681,18 @@ fn source_probe(
     source: CollectorSource,
     symbol: impl Into<String>,
     okx_instrument_cache: Option<&OkxInstrumentCache>,
+    gate_contract_cache: Option<&GateContractCache>,
 ) -> SourceProbe {
     let probe = SourceProbe::new(source, symbol);
     if source == CollectorSource::Okx
         && let Some(cache) = okx_instrument_cache
     {
         return probe.with_okx_instrument_cache(cache.clone());
+    }
+    if source == CollectorSource::Gate
+        && let Some(cache) = gate_contract_cache
+    {
+        return probe.with_gate_contract_cache(cache.clone());
     }
 
     probe
@@ -1660,6 +1706,17 @@ fn load_okx_instrument_cache(path: Option<&PathBuf>) -> anyhow::Result<Option<Ok
         .with_context(|| format!("failed to read OKX instruments file: {}", path.display()))?;
     let cache = OkxInstrumentCache::from_instruments_response(&payload)
         .context("failed to parse OKX instruments metadata")?;
+    Ok(Some(cache))
+}
+
+fn load_gate_contract_cache(path: Option<&PathBuf>) -> anyhow::Result<Option<GateContractCache>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let payload = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read Gate contracts file: {}", path.display()))?;
+    let cache = GateContractCache::from_contract_response(&payload)
+        .context("failed to parse Gate contract metadata")?;
     Ok(Some(cache))
 }
 
