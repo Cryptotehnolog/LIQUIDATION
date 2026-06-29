@@ -9,8 +9,8 @@
    data path найден.
 2. Bitget добавляется следующим как `diagnostic_only`.
 3. Gate добавляется после Bitget как `diagnostic_only`.
-4. HTX добавляется после Hyperliquid/Bitget/Gate как `research_candidate`, затем
-   `diagnostic_only`.
+4. HTX не добавляется в текущем цикле. Он остается `deferred_research_candidate`
+   и возвращается в работу только при явном coverage blocker.
 
 Причина: по наблюдениям через Coinglass, когда Binance/Bybit/OKX молчат, больше
 всего событий может давать Hyperliquid, затем Bitget, Gate и HTX.
@@ -58,3 +58,20 @@ WebSocket/REST feed schema.
 `--write-fills`, `--write-misc-events`, `--batch-by-block` и
 `--stream-with-block-info`. Следующий шаг - historical/node sample fixture, а
 не WebSocket collector.
+
+Дополнение 2026-06-30: после добавления Bitget и Gate как diagnostic-only
+источников HTX намеренно отложен. Причина: сейчас главный вопрос - не собрать
+еще один venue, а проверить экономику стратегии на уже доступных liquidation
+sources, Polymarket fills и Hyperliquid hedge simulation. Добавление HTX сейчас
+рискует превратить разработку в бесконечное расширение collector coverage.
+
+Вернуться к HTX нужно, если выполняется хотя бы одно условие:
+
+- controlled replay series по текущим sources не набирает достаточно
+  `signal_count > 0` окон;
+- source usefulness report показывает, что Bitget/Gate/OKX редко создают
+  `liquidation_ready_buckets_without_primary`;
+- наблюдения Coinglass в нескольких сессиях подряд показывают material BTC
+  liquidation events на HTX, пока Binance/Bybit/OKX/Bitget/Gate молчат;
+- перед server/paper-soak окажется, что coverage gap, а не entry fill/PnL,
+  является главным bottleneck.

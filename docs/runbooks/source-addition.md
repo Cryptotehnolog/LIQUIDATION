@@ -42,8 +42,8 @@ normalizer test, source policy, dashboard visibility и CI guard.
    liquidation channel.
 2. `gate`: следующий diagnostic liquidation source после Bitget; official
    public futures liquidates channel.
-3. `htx`: diagnostic source после Gate; official USDT-M liquidation_orders
-   channel.
+3. `htx`: deferred research candidate; official USDT-M liquidation_orders
+   channel, но не строить сейчас без доказанного coverage blocker.
 4. `hyperliquid_liquidations`: deferred `node_research_candidate`; не WebSocket
    collector, не включать в сигналы и не смешивать с текущим hedge market-data
    leg.
@@ -52,8 +52,15 @@ normalizer test, source policy, dashboard visibility и CI guard.
 больше всего событий может давать Hyperliquid, затем Bitget, Gate и HTX. Это
 операционный сигнал, но не доказательство. Hyperliquid временно отложен,
 потому что official market-wide path требует node output и тяжелее локальной
-итерации. Каждый источник проходит official docs review, fixture tests, bounded
-live probe и source usefulness report.
+итерации. HTX временно отложен, потому что после Bitget/Gate следующий bottleneck
+нужно искать в controlled replay, entry fill, hedge fill и net PnL, а не в
+механическом добавлении еще одного venue. Каждый источник проходит official docs
+review, fixture tests, bounded live probe и source usefulness report.
+
+Вернуться к HTX можно только если controlled replay/source usefulness показывает,
+что текущих sources недостаточно для signal-ready windows, или если повторные
+наблюдения Coinglass показывают material HTX BTC liquidations при тишине
+Binance/Bybit/OKX/Bitget/Gate.
 
 Все новые источники по умолчанию:
 

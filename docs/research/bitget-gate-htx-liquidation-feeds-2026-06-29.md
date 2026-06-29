@@ -9,10 +9,16 @@ coverage work with cheaper public liquidation feeds in this order:
 
 1. Bitget diagnostic.
 2. Gate diagnostic.
-3. HTX diagnostic.
+3. HTX deferred until coverage is a proven blocker.
 
 Do not enable any of these sources in strategy signals until docs, fixtures,
 bounded live probe, overlap validation and source usefulness gates pass.
+
+Update 2026-06-30: after implementing Bitget and Gate as diagnostic-only
+sources, pause HTX. This is intentional scope control. The next question is
+whether existing sources produce enough replayable signal windows and whether
+the strategy can get entry fills/net edge, not whether one more exchange can be
+collected.
 
 ## Why Hyperliquid Is Deferred
 
@@ -23,7 +29,7 @@ For strategy economics, cheaper public exchange feeds are a better next step.
 
 Return to Hyperliquid when:
 
-- Bitget/Gate/HTX replay windows show whether the baseline strategy has edge;
+- Bitget/Gate replay windows show whether the baseline strategy has edge;
 - a server is available for longer bounded node-output research;
 - Rust parser fixtures and dedup policy are ready.
 
@@ -103,6 +109,11 @@ HTX can be a useful diagnostic source. For USDT-margined contracts,
 Bitget/Gate because HTX docs are older/fragmented and require careful fixture
 verification.
 
+Current decision: HTX is not part of the immediate build. Revisit it if source
+usefulness reports show too few signal-ready windows without HTX, or if
+multi-session Coinglass observations repeatedly show material BTC liquidations
+on HTX while existing collected sources are quiet.
+
 ## Source Policy
 
 All three sources start as:
@@ -142,7 +153,8 @@ Build Bitget first:
 4. Run bounded live probe.
 5. Add Bitget to source usefulness report.
 
-Then repeat for Gate and HTX.
+Then repeat for Gate. Do not start HTX until the deferred-return conditions
+above are met.
 
 ## References
 

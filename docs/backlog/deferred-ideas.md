@@ -199,8 +199,8 @@ Binance и OKX.
 
 **Новое решение от 2026-06-29:** после real controlled replay windows и
 наблюдений через Coinglass приоритет расширения зафиксирован так:
-`Hyperliquid research/probe -> Bitget diagnostic -> Gate diagnostic -> HTX
-diagnostic`.
+`Hyperliquid research/probe -> Bitget diagnostic -> Gate diagnostic`, а HTX
+отложен до доказанного coverage blocker.
 
 **Почему это не удалено из backlog:** сам пункт больше не является расплывчатой
 идеей, но реализация остается staged. Новые источники нельзя сразу включать в
@@ -212,6 +212,41 @@ report.
 - `docs/runbooks/source-addition.md`
 - `docs/runbooks/strategy-readiness.md`
 - `docs/research/liquidation-source-expansion-2026-06-29.md`
+
+### HTX Diagnostic Source
+
+**Статус:** deferred.
+
+**Что это:** добавить HTX USDT-M liquidation_orders как diagnostic-only source
+для BTC liquidation coverage.
+
+**Почему не сейчас:** Bitget и Gate уже добавлены как diagnostic-only источники.
+Следующий bottleneck нужно искать в controlled replay, entry fill, hedge fill,
+fees/slippage и net PnL. Добавление HTX сейчас может затянуть нас в бесконечное
+расширение collector coverage до проверки экономики стратегии.
+
+**Когда возвращаемся:**
+
+- controlled replay series по текущим sources не набирает достаточно
+  `signal_count > 0` окон;
+- source usefulness report показывает мало
+  `liquidation_ready_buckets_without_primary`;
+- несколько независимых наблюдений Coinglass показывают material HTX BTC
+  liquidations, когда Binance/Bybit/OKX/Bitget/Gate молчат;
+- перед server/paper-soak source coverage окажется главным bottleneck.
+
+**Готовность начать:**
+
+- official HTX docs/changelog review;
+- fixture payload для USDT-M BTC liquidation_orders;
+- parser/normalizer test с доказанным `notional_usd`;
+- bounded live probe и dashboard/source policy visibility.
+
+**Связанные файлы:**
+
+- `docs/runbooks/source-addition.md`
+- `docs/research/bitget-gate-htx-liquidation-feeds-2026-06-29.md`
+- `docs/rag-index/summaries/liquidation-source-expansion.md`
 
 ### Hyperliquid Market-Wide Liquidations
 

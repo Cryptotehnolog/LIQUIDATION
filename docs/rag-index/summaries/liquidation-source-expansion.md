@@ -2,9 +2,10 @@
 
 Retrieval summary: Hyperliquid market-wide liquidations are deferred because
 official access requires node output / `hl-visor` research, not a lightweight
-public liquidation-only feed. Current low-cost diagnostic source order is
-`bitget`, `gate`, `htx`. These remain `diagnostic-only` candidates until
-official docs, fixtures, live probe, overlap and source usefulness gates pass.
+public liquidation-only feed. `bitget` and `gate` are implemented as
+diagnostic-only sources. `htx` is deferred until source coverage becomes a real
+blocker. These sources remain outside strategy signals until official docs,
+fixtures, live probe, overlap and source usefulness gates pass.
 
 Текущий приоритет расширения liquidation sources после решения 2026-06-29:
 
@@ -12,8 +13,8 @@ official docs, fixtures, live probe, overlap and source usefulness gates pass.
    liquidation channel, aggregated by one-second buckets.
 2. `gate` - implemented diagnostic-only source with metadata-gated canonical
    normalization; official public futures liquidates channel.
-3. `htx` - diagnostic-only source; official public USDT-M liquidation_orders
-   channel.
+3. `htx` - deferred research candidate; do not build now unless coverage
+   blockers are proven by controlled replay/source usefulness reports.
 4. `hyperliquid_liquidations` - deferred node research candidate, not simple
    WebSocket collector.
 
@@ -152,6 +153,11 @@ cache, canonical normalization is allowed for supported contracts such as
 overlap/usefulness and replay usefulness gates pass.
 
 ## HTX Candidate
+
+Decision update 2026-06-30: do not implement HTX in the current cycle. The
+current priority is to run controlled replay windows and evaluate signal,
+entry-fill, hedge-fill and net-PnL quality using existing sources. HTX returns
+only if coverage, not fill quality or economics, is proven to be the bottleneck.
 
 HTX official USDT-M liquidation_orders:
 
