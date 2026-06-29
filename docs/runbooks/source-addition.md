@@ -30,6 +30,36 @@ normalizer test, source policy, dashboard visibility и CI guard.
 - `hyperliquid`: `source_quality=websocket_only`,
   `coverage_role=hedge_market_data`, `participates_in_signals=false`.
 
+## Приоритет расширения liquidation sources
+
+Решение от 2026-06-29:
+
+1. `hyperliquid_liquidations`: сначала `research/probe`, не включать в сигналы
+   и не смешивать с текущим hedge market-data leg.
+2. `bitget`: следующий diagnostic liquidation source.
+3. `gate`: следующий diagnostic liquidation source после Bitget.
+4. `htx`: research candidate после Hyperliquid, Bitget и Gate.
+
+Причина: по наблюдениям через Coinglass, когда Binance/Bybit/OKX молчат,
+больше всего событий может давать Hyperliquid, затем Bitget, Gate и HTX. Это
+операционный сигнал, но не доказательство. Каждый источник проходит official
+docs review, fixture tests, bounded live probe и source usefulness report.
+
+Все новые источники по умолчанию:
+
+- `coverage_role=diagnostic_only`;
+- `participates_in_signals=false`;
+- не получают signal weight;
+- не пишут canonical `liquidation_events`, если `notional_usd` нельзя посчитать
+  честно из payload и verified metadata.
+
+Перевод diagnostic source в signal-eligible запрещен без отдельного documented
+decision. Нельзя просто суммировать liquidation notional across venues: feeds
+могут быть all-events, snapshot-only, aggregated или rate-limited.
+
+Связанная research note:
+[liquidation-source-expansion-2026-06-29.md](../research/liquidation-source-expansion-2026-06-29.md).
+
 `okx` намеренно не участвует в сигналах по умолчанию: OKX
 `liquidation-orders` WebSocket дает liquidation details, но безопасный
 `notional_usd` требует instrument metadata/contract value.
@@ -81,6 +111,8 @@ Guard проверяет:
    в default fixture.
 9. Добавить source в `scripts/check-source-addition.ps1`.
 10. Запустить guard и targeted tests.
+11. Добавить source usefulness report fields: events/hour, max notional,
+    latency, stale rate, overlap buckets и replay windows made signal-ready.
 
 ## OKX notes
 

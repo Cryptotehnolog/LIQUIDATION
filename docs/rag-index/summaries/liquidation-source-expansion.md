@@ -1,0 +1,32 @@
+# Liquidation Source Expansion Summary
+
+Текущий приоритет расширения liquidation sources:
+
+1. `hyperliquid_liquidations` - research/probe first.
+2. `bitget` - diagnostic-only source.
+3. `gate` - diagnostic-only source.
+4. `htx` - later research/diagnostic source.
+
+Нельзя сразу включать эти sources в strategy signals. Все новые venues сначала
+пишутся как diagnostic-only, без signal weight. Для canonical events обязателен
+честный `notional_usd`; если его нельзя доказать из payload и metadata,
+источник остается raw-only.
+
+Причина приоритета: пользователь заметил по Coinglass, что когда
+Binance/Bybit/OKX молчат, больше всего событий может давать Hyperliquid, затем
+Bitget, Gate и HTX. Это полезный операционный сигнал, но не proof of feed
+quality.
+
+Перед участием в сигналах source должен пройти:
+
+- official docs/changelog review;
+- fixtures and normalizer tests;
+- bounded live probe;
+- latency/stale/source health checks;
+- overlap validation against Bybit/Binance/OKX;
+- source usefulness report;
+- отдельное documented policy decision.
+
+Нужная автоматизация: source usefulness report с events/hour, max notional,
+latency, stale rate, overlap buckets и количеством replay windows, которые стали
+signal-ready благодаря source.

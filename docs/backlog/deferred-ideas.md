@@ -192,22 +192,26 @@ noise/spam. Пока достаточно artifact/report warning.
 
 ### Extra Diagnostic Exchanges After OKX
 
-**Статус:** deferred.
+**Статус:** promoted to scoped source-expansion design.
 
 **Что это:** добавление новых diagnostic liquidation sources сверх Bybit,
 Binance и OKX.
 
-**Почему не сейчас:** текущий bottleneck не в количестве liquidation sources, а
-в отсутствии второй стороны стратегии: Polymarket data, Hyperliquid hedge model,
-fees/funding и replay.
+**Новое решение от 2026-06-29:** после real controlled replay windows и
+наблюдений через Coinglass приоритет расширения зафиксирован так:
+`Hyperliquid research/probe -> Bitget diagnostic -> Gate diagnostic -> HTX
+diagnostic`.
 
-**Когда возвращаемся:** после strategy replay foundation или если current source
-coverage деградирует по nightly diagnostics.
+**Почему это не удалено из backlog:** сам пункт больше не является расплывчатой
+идеей, но реализация остается staged. Новые источники нельзя сразу включать в
+strategy signals; они идут через diagnostic-only gates и source usefulness
+report.
 
 **Связанные файлы:**
 
 - `docs/runbooks/source-addition.md`
 - `docs/runbooks/strategy-readiness.md`
+- `docs/research/liquidation-source-expansion-2026-06-29.md`
 
 ### Replay Market Quotes Query Optimization
 

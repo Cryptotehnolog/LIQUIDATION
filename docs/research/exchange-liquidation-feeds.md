@@ -2,6 +2,10 @@
 
 Дата проверки: 2026-06-19.
 
+Обновление 2026-06-29: добавлен отдельный source expansion decision для
+Hyperliquid, Bitget, Gate и HTX:
+[liquidation-source-expansion-2026-06-29.md](liquidation-source-expansion-2026-06-29.md).
+
 ## Что проверяли
 
 - Binance liquidation streams.
@@ -100,3 +104,5 @@ OKX WebSocket docs также важны для collector design:
 - Добавить collector health metric: source coverage, reconnects, heartbeat age,
   event rate, stale source.
 - Добавить nightly check API changelog для Binance/Bybit/OKX.
+- Добавить source usefulness report для Hyperliquid/Bitget/Gate/HTX перед
+  любым решением об участии этих источников в strategy signals.

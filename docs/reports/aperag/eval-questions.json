@@ -61,6 +61,18 @@
         "readback",
         "parquet_schema_version"
       ]
+    },
+    {
+      "id": "liquidation_source_expansion",
+      "query": "Какой текущий приоритет расширения liquidation sources Hyperliquid Bitget Gate HTX?",
+      "expected_source": "docs__rag-index__summaries__liquidation-source-expansion.md",
+      "expected_all": [
+        "hyperliquid_liquidations",
+        "bitget",
+        "gate",
+        "htx",
+        "diagnostic-only"
+      ]
     }
   ]
 }
