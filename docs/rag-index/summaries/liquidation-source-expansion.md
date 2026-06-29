@@ -47,3 +47,9 @@ events не являются all-market feed. Поэтому текущий `hyp
 Official `userEvents` with `user=<address>` can emit liquidation events for that
 address only. Это можно использовать позже как hedge account risk monitor, но
 нельзя использовать как source рыночных liquidation cascades.
+
+Official `Trading / Liquidations` page подтверждает механику: ликвидации могут
+отправляться как market orders to the book, partial liquidation threshold is
+100k USDC, есть liquidator vault и mark-price liquidation logic. Но эта страница
+не содержит public market-wide WebSocket/REST feed schema. Поэтому она усиливает
+microstructure thesis, но не снимает API blocker.

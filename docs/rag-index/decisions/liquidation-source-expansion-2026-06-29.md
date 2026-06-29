@@ -36,3 +36,7 @@ decision.
 Уточнение: official `userEvents` subscription может вернуть `liquidation` для
 конкретного address. Это будущий safety monitor для собственной Hyperliquid
 hedge account, а не source для market-wide liquidation cascade signals.
+
+Дополнительное уточнение: official `Trading / Liquidations` page подтверждает
+механику ликвидаций и market orders to the book, но не даёт public market-wide
+feed schema. Это не снимает `research_blocked` статус.

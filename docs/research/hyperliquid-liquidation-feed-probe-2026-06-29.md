@@ -32,9 +32,26 @@ not market-wide liquidation cascade signals.
 
 ## Official docs review
 
-Проверенная official docs страница:
+Проверенные official docs страницы:
 
 - https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions
+- https://hyperliquid.gitbook.io/hyperliquid-docs/trading/liquidations
+
+Страница `Trading / Liquidations` подтверждает, что Hyperliquid отдельно
+документирует механику ликвидаций:
+
+- liquidation event occurs when account equity falls below maintenance margin;
+- positions are first attempted to be closed by sending market orders to the
+  book;
+- if the account drops below 2/3 of maintenance margin, backstop liquidation can
+  happen through the liquidator vault;
+- for positions larger than 100k USDC, only 20% can be sent as a market
+  liquidation order first, followed by a cooldown rule;
+- liquidations use mark price.
+
+Эта страница важна для понимания market microstructure Hyperliquid, но она не
+публикует точный public WebSocket channel, REST endpoint или live JSON schema
+для market-wide liquidation feed.
 
 Документация перечисляет market-data subscriptions вроде:
 
@@ -116,6 +133,38 @@ Error parsing JSON into valid websocket request
 `explorerTxs`/`explorerBlock` нельзя использовать как production source без
 отдельной official contract/schema проверки. Даже если там позднее появятся
 похожие события, это будет raw research stream, а не canonical liquidation feed.
+
+## Что можно и нельзя вывести из Liquidations page
+
+Можно вывести:
+
+- Hyperliquid liquidations часто превращаются в market orders to the book.
+- Теоретически часть liquidation flow может быть видна как обычные trades.
+- Для стратегии это объясняет, почему Coinglass может видеть активность
+  Hyperliquid liquidation flow.
+
+Нельзя вывести:
+
+- что ordinary public `trades` payload содержит explicit liquidation marker;
+- что каждый market order during liquidation можно отличить от обычного market
+  order;
+- что есть public all-market `liquidations` subscription;
+- что можно честно построить canonical `liquidation_events` без documented
+  event marker или payload schema.
+
+Поэтому текущий blocker не в том, что Hyperliquid не документирует ликвидации
+как торговую механику. Blocker в том, что official API docs пока не показывают
+документированный public market-wide feed с liquidation event payload.
+
+## Почему Hyperliquid liquidation collector не добавлен
+
+Hyperliquid liquidation collector не добавлен, потому что
+`hyperliquid_liquidations` остается `research_blocked`: public
+`liquidations`/`liquidation` market-wide subscription не подтвержден. Official
+`userEvents` является `user-specific` stream для конкретного address. Текущий
+Hyperliquid connector остается `hedge market-data` leg. Future `userEvents`
+usage - это account risk monitor для нашей hedge-ноги, а не источник рыночных
+liquidation cascades.
 
 ## Почему Coinglass недостаточно
 
