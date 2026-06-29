@@ -84,6 +84,19 @@
         "diagnostic sources",
         "strategy signals"
       ]
+    },
+    {
+      "id": "hyperliquid_liquidation_probe",
+      "query": "Почему Hyperliquid liquidation collector не добавлен после проверки public liquidation feed?",
+      "expected_source": "docs__research__hyperliquid-liquidation-feed-probe-2026-06-29.md",
+      "expected_all": [
+        "research_blocked",
+        "liquidations",
+        "liquidation",
+        "user-specific",
+        "hedge market-data",
+        "account risk monitor"
+      ]
     }
   ]
 }

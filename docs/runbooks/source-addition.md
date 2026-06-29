@@ -34,8 +34,9 @@ normalizer test, source policy, dashboard visibility и CI guard.
 
 Решение от 2026-06-29:
 
-1. `hyperliquid_liquidations`: сначала `research/probe`, не включать в сигналы
-   и не смешивать с текущим hedge market-data leg.
+1. `hyperliquid_liquidations`: `research_blocked` до подтверждения official
+   public liquidation feed; не включать в сигналы и не смешивать с текущим
+   hedge market-data leg.
 2. `bitget`: следующий diagnostic liquidation source.
 3. `gate`: следующий diagnostic liquidation source после Bitget.
 4. `htx`: research candidate после Hyperliquid, Bitget и Gate.
@@ -201,6 +202,46 @@ cargo run -p liq-cli -- collector probe --source polymarket --symbol <polymarket
 cargo run -p liq-cli -- collector probe --source hyperliquid --symbol BTC --max-messages 40 --min-messages 1 --read-timeout-seconds 60
 cargo run -p liq-cli -- strategy readiness --database-url $env:DATABASE_URL --window-minutes 60 --json
 ```
+
+## Hyperliquid liquidation source status
+
+`hyperliquid` в текущем collector - это hedge market-data source, не liquidation
+source.
+
+Проверка 2026-06-29:
+
+- official WebSocket subscriptions docs не показывают public all-market
+  `liquidations` stream;
+- live probe подтвердил `bbo` market data;
+- live probe отклонил subscriptions `liquidations` и `liquidation`;
+- `liquidation` events в docs относятся к user-specific event streams, а не к
+  public market-wide feed.
+
+Важно: official `userEvents` subscription:
+
+```json
+{"method":"subscribe","subscription":{"type":"userEvents","user":"<address>"}}
+```
+
+может вернуть `liquidation` для указанного address. Это пригодно для будущего
+Hyperliquid hedge account risk monitor, но не для market-wide liquidation
+collector. Наша стратегия ищет каскады ликвидаций по рынку, а не только события
+собственного адреса.
+
+Следствие: production `hyperliquid_liquidations` collector не добавлять, пока
+не найден official public feed или documented raw public stream с explicit
+liquidation marker.
+
+Запрещено:
+
+- нормализовать ordinary Hyperliquid `trades` как ликвидации;
+- выводить liquidation notional из orderbook/trade prints без marker;
+- использовать user-specific streams как global liquidation source.
+- использовать own-account `userEvents` как proxy для market-wide liquidation
+  cascades.
+
+Связанная research note:
+[hyperliquid-liquidation-feed-probe-2026-06-29.md](../research/hyperliquid-liquidation-feed-probe-2026-06-29.md).
 
 Для overlap validation используйте read-only report:
 

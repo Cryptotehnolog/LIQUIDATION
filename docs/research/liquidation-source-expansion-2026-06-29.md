@@ -25,7 +25,8 @@ report.
 
 Новый порядок исследования и добавления источников:
 
-1. `hyperliquid_liquidations`: research/probe candidate.
+1. `hyperliquid_liquidations`: research blocked until official public feed is
+   confirmed.
 2. `bitget`: diagnostic liquidation source.
 3. `gate`: diagnostic liquidation source.
 4. `htx`: diagnostic liquidation source.
@@ -56,15 +57,23 @@ Hyperliquid уже используется как hedge market-data leg для 
 simulation. Новая идея - отдельно исследовать Hyperliquid как источник
 ликвидаций.
 
-Текущий статус: `research/probe`, не готовый diagnostic source.
+Текущий статус: `research_blocked`, не готовый diagnostic source.
 
-Причина: в public WebSocket subscriptions Hyperliquid очевидно описаны market
-data streams вроде `trades`, `l2Book`, `allMids`, но public all-market
-liquidation stream нужно подтвердить отдельно по official docs/API behavior.
+Причина: проверка official WebSocket docs и live probe 2026-06-29 не подтвердили
+public all-market liquidation stream. Public `bbo` работает, но subscriptions
+`liquidations` и `liquidation` отклоняются endpoint'ом. `liquidation` есть в
+user-specific event schema, но это не общий market feed.
+
+Связанная проверка:
+[hyperliquid-liquidation-feed-probe-2026-06-29.md](hyperliquid-liquidation-feed-probe-2026-06-29.md).
+
+До появления official public liquidation feed запрещено нормализовать обычные
+Hyperliquid trades/orderbook как ликвидации.
 
 Gate для включения:
 
-- найден official public liquidation feed или надежный public payload source;
+- найден official public liquidation feed или documented public payload source
+  с explicit liquidation marker;
 - есть fixture с реальным liquidation payload;
 - normalizer доказывает side, price, quantity и `notional_usd`;
 - bounded live probe показывает raw events;

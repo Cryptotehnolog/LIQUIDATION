@@ -2,7 +2,8 @@
 
 Текущий приоритет расширения liquidation sources:
 
-1. `hyperliquid_liquidations` - research/probe first.
+1. `hyperliquid_liquidations` - research blocked until official public
+   liquidation feed is confirmed.
 2. `bitget` - diagnostic-only source.
 3. `gate` - diagnostic-only source.
 4. `htx` - later research/diagnostic source.
@@ -35,3 +36,14 @@ signal-ready благодаря source.
 Ключевое поле: `liquidation_ready_buckets_without_primary` - buckets, где
 diagnostic source дал canonical liquidation events, а primary source молчал.
 Это не полный PnL proof, но честный proxy для source coverage.
+
+Hyperliquid liquidation probe от 2026-06-29: official WebSocket docs и live
+probe не подтвердили public all-market liquidation subscription. `bbo` работает,
+но `liquidations`/`liquidation` endpoint отклоняет. User-specific liquidation
+events не являются all-market feed. Поэтому текущий `hyperliquid` source
+остается только hedge market-data leg, а `hyperliquid_liquidations` нельзя
+добавлять в canonical collector до нового documented decision.
+
+Official `userEvents` with `user=<address>` can emit liquidation events for that
+address only. Это можно использовать позже как hedge account risk monitor, но
+нельзя использовать как source рыночных liquidation cascades.

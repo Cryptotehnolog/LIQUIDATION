@@ -4,7 +4,8 @@
 
 Решение:
 
-1. Hyperliquid liquidation source сначала исследуется как `research/probe`.
+1. Hyperliquid liquidation source остается `research_blocked`, пока official
+   public liquidation feed не подтвержден.
 2. Bitget добавляется следующим как `diagnostic_only`.
 3. Gate добавляется после Bitget как `diagnostic_only`.
 4. HTX добавляется после Hyperliquid/Bitget/Gate как `research_candidate`, затем
@@ -25,3 +26,13 @@ rate-limited.
 Следующая автоматизация: source usefulness report с metrics events/hour,
 canonical events/hour, max notional, latency, stale rate, overlap buckets и
 replay windows made signal-ready.
+
+Дополнение после probe 2026-06-29: official WebSocket docs и live probe не
+подтвердили public all-market Hyperliquid liquidation subscription. Текущий
+`hyperliquid` source остается hedge market-data leg; production
+`hyperliquid_liquidations` collector не добавлять без нового documented
+decision.
+
+Уточнение: official `userEvents` subscription может вернуть `liquidation` для
+конкретного address. Это будущий safety monitor для собственной Hyperliquid
+hedge account, а не source для market-wide liquidation cascade signals.
