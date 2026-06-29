@@ -20,6 +20,12 @@ quality = "websocket_only"
 symbols = ["BTC-USDT-SWAP"]
 max_reconnects_per_5min = 5
 
+[sources.bitget]
+enabled = false
+quality = "snapshot_only"
+symbols = ["BTCUSDT"]
+max_reconnects_per_5min = 5
+
 [sources.polymarket]
 enabled = false
 quality = "websocket_only"

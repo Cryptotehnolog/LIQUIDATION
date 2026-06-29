@@ -25,6 +25,8 @@ normalizer test, source policy, dashboard visibility и CI guard.
   `coverage_role=diagnostic_only`, `participates_in_signals=false`.
 - `okx`: `source_quality=websocket_only`, `coverage_role=diagnostic_only`,
   `participates_in_signals=false`.
+- `bitget`: `source_quality=snapshot_only`, `coverage_role=diagnostic_only`,
+  `participates_in_signals=false`.
 - `polymarket`: `source_quality=websocket_only`,
   `coverage_role=market_data_leg`, `participates_in_signals=false`.
 - `hyperliquid`: `source_quality=websocket_only`,
@@ -103,6 +105,43 @@ Guard проверяет:
 - `liq-collector` routing;
 - dashboard/source policy в `liq-recorder`;
 - наличие источника в этом runbook.
+
+## Bitget notes
+
+Official decision:
+
+- Bitget UTA public liquidation channel добавлен как `diagnostic_only`.
+- Endpoint: `wss://ws.bitget.com/v3/ws/public`.
+- Subscribe args: `instType=usdt-futures`, `topic=liquidation`, `symbol=BTCUSDT`.
+- Push interval: 1s.
+- Feed aggregated: за каждую пару приходит максимум largest long и largest
+  short liquidation за предыдущую секунду.
+- `side=buy` означает long position liquidation, `side=sell` означает short
+  position liquidation.
+- `amount` описан как quote coin, поэтому для USDT futures canonical
+  `notional_usd=amount` разрешён.
+- Collector обязан фильтровать canonical events по requested `symbol`: live
+  probe 2026-06-29 показал, что Bitget может прислать broader liquidation
+  payloads, даже если подписка отправлена с `symbol=BTCUSDT`.
+
+Ограничение: это не all-events feed. Bitget не участвует в сигналах до source
+usefulness/overlap/replay decision.
+
+Минимальная bounded probe:
+
+```powershell
+$env:DATABASE_URL="postgres://liquidation:liquidation@127.0.0.1:15433/liquidation"
+cargo run -p liq-cli -- collector probe --source bitget --symbol BTCUSDT --max-messages 5 --min-messages 0 --read-timeout-seconds 60
+cargo run -p liq-cli -- collector usefulness-report --window-minutes 120 --json
+```
+
+Ожидаемо:
+
+- `bitget` отображается как `diagnostic_only`;
+- `source_quality=snapshot_only`;
+- `participates_in_signals=false`;
+- если в окне были liquidation payloads, `canonical_events` и `max_notional_usd`
+  считаются по USDT quote amount.
 
 ## Checklist добавления нового источника
 

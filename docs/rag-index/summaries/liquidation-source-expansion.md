@@ -104,13 +104,16 @@ dependency while unmerged.
 
 Bitget official UTA liquidation channel:
 
+- public WebSocket endpoint `wss://ws.bitget.com/v3/ws/public`;
 - public WebSocket topic `liquidation`;
-- request uses `instType=usdt-futures`;
+- request uses `instType=usdt-futures` and `topic=liquidation`;
 - push interval 1s;
 - each push contains aggregated liquidation data for previous second;
 - for each pair, at most two records: largest long and largest short
   liquidation quantity;
 - payload has `symbol`, `side`, `price`, `amount`, `ts`;
+- docs define `side=buy` as long position liquidation and `side=sell` as short
+  position liquidation;
 - `amount` is quote coin, so `notional_usd` can be mapped directly for
   USDT-futures, subject to fixture verification.
 
@@ -118,6 +121,14 @@ Bitget limitation: because the feed is aggregated and only keeps the largest
 long/short liquidation per pair per second, it is not full all-events coverage.
 It is useful as `diagnostic_only` and may improve signal-ready windows, but it
 must not be treated as exact venue notional without source policy.
+
+Implementation note 2026-06-29: bounded live probe connected to
+`wss://ws.bitget.com/v3/ws/public`. A first probe received liquidation payloads
+for non-BTC symbols despite a BTCUSDT subscription, so collector routing must
+filter canonical events by the requested symbol. After adding the filter, a
+second short probe received 5 messages, normalized 0 BTCUSDT events, inserted 0
+raw/canonical rows, and had 1 reconnect. This is acceptable for a quiet BTC
+window and prevents non-BTC contamination of BTC replay.
 
 ## Gate Candidate
 

@@ -1935,6 +1935,7 @@ fn parse_source(value: &str) -> Result<Source, sqlx::Error> {
         "bybit" => Ok(Source::Bybit),
         "binance" => Ok(Source::Binance),
         "okx" => Ok(Source::Okx),
+        "bitget" => Ok(Source::Bitget),
         "polymarket" => Ok(Source::Polymarket),
         "hyperliquid" => Ok(Source::Hyperliquid),
         _ => Err(storage_decode_error("source", value)),
@@ -2013,7 +2014,7 @@ impl SourcePolicy {
                 coverage_role: "strategy_primary",
                 participates_in_signals: true,
             },
-            "binance" => Self {
+            "binance" | "bitget" => Self {
                 source_quality: "snapshot_only",
                 coverage_role: "diagnostic_only",
                 participates_in_signals: false,

@@ -39,12 +39,20 @@ wss://ws.okx.com:8443/ws/v5/public
 liquidation-orders
 "@ | Set-Content -LiteralPath (Join-Path $fixtureDir "okx-liquidation-orders.html") -Encoding UTF8
 
+    @"
+Bitget UTA Liquidation Channel
+wss://ws.bitget.com/v3/ws/public
+topic liquidation
+"@ | Set-Content -LiteralPath (Join-Path $fixtureDir "bitget-liquidation-channel.html") -Encoding UTF8
+
     $result = & $scriptPath -FixtureDir $fixtureDir -OutputDir $outputDir
     $json = $result | ConvertFrom-Json
 
     Assert-True ($json.status -eq "ok") "expected endpoint contract status ok, got $($json.status)"
     Assert-True (($json.contracts | Where-Object { $_.name -eq "binance_force_order" }).code_ok) "expected Binance code contract to pass"
     Assert-True (($json.contracts | Where-Object { $_.name -eq "binance_force_order" }).docs_ok) "expected Binance docs contract to pass"
+    Assert-True (($json.contracts | Where-Object { $_.name -eq "bitget_uta_liquidation" }).code_ok) "expected Bitget code contract to pass"
+    Assert-True (($json.contracts | Where-Object { $_.name -eq "bitget_uta_liquidation" }).docs_ok) "expected Bitget docs contract to pass"
 
     foreach ($path in @("websocket-endpoint-contracts.json", "websocket-endpoint-contracts.md")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $outputDir $path)) "expected $path to be written"

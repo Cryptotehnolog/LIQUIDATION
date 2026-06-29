@@ -1,0 +1,24 @@
+{
+  "action": "snapshot",
+  "arg": {
+    "instType": "usdt-futures",
+    "topic": "liquidation"
+  },
+  "data": [
+    {
+      "symbol": "BTCUSDT",
+      "side": "buy",
+      "price": "50000",
+      "amount": "25000",
+      "ts": "1718750001000"
+    },
+    {
+      "symbol": "BTCUSDT",
+      "side": "sell",
+      "price": "64000",
+      "amount": "12800",
+      "ts": "1718750001000"
+    }
+  ],
+  "ts": 1718750001000
+}

@@ -31,6 +31,12 @@ $sources = @(
         url = "https://www.okx.com/docs-v5/log_en/"
         fixture = "okx-log-en.html"
         risk_terms = @("breaking", "deprecated", "decommission", "delisted", "removed", "liquidation", "liquidation-orders", "websocket")
+    },
+    [ordered]@{
+        name = "bitget"
+        url = "https://www.bitget.com/api-doc/uta/websocket/public/Liquidation-Channel"
+        fixture = "bitget-liquidation-channel.html"
+        risk_terms = @("breaking", "deprecated", "decommission", "delisted", "removed", "liquidation", "websocket", "topic", "amount", "side")
     }
 )
 

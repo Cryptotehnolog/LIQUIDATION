@@ -35,6 +35,13 @@ $contracts = @(
         fixture = "okx-liquidation-orders.html"
         code_terms = @("wss://ws.okx.com:8443/ws/v5/public", "liquidation-orders")
         docs_terms = @("ws.okx.com:8443/ws/v5/public", "liquidation-orders")
+    },
+    [ordered]@{
+        name = "bitget_uta_liquidation"
+        docs_url = "https://www.bitget.com/api-doc/uta/websocket/public/Liquidation-Channel"
+        fixture = "bitget-liquidation-channel.html"
+        code_terms = @("wss://ws.bitget.com/v3/ws/public", "`"topic`":`"liquidation`"")
+        docs_terms = @("wss://ws.bitget.com/v3/ws/public", "liquidation")
     }
 )
 

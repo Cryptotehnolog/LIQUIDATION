@@ -1,5 +1,5 @@
 param(
-    [string[]]$Source = @("bybit", "binance", "okx", "polymarket", "hyperliquid")
+    [string[]]$Source = @("bybit", "binance", "okx", "bitget", "polymarket", "hyperliquid")
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,6 +64,16 @@ $sourceMatrix = @{
         role = "diagnostic_only"
         signal = "participates_in_signals: false"
         docs = "okx"
+        test_file = "crates/liq-connectors/tests/normalization.rs"
+    }
+    bitget = @{
+        "enum" = "Bitget"
+        module = "bitget"
+        fixture = "crates/liq-connectors/tests/fixtures/bitget_liquidation.json"
+        quality = "snapshot_only"
+        role = "diagnostic_only"
+        signal = "participates_in_signals: false"
+        docs = "bitget"
         test_file = "crates/liq-connectors/tests/normalization.rs"
     }
     polymarket = @{

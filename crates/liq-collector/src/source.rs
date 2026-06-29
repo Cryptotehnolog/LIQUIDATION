@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use liq_connectors::{ConnectorError, binance, bybit, hyperliquid, okx, polymarket};
+use liq_connectors::{ConnectorError, binance, bitget, bybit, hyperliquid, okx, polymarket};
 use liq_domain::{LiquidationEvent, MarketQuote, MarketTrade, Source};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -16,6 +16,8 @@ pub enum CollectorSource {
     Binance,
     /// OKX public liquidation-orders stream.
     Okx,
+    /// Bitget UTA public liquidation snapshot stream.
+    Bitget,
     /// Polymarket CLOB public market-data stream.
     Polymarket,
     /// Hyperliquid public market-data stream.
@@ -30,6 +32,7 @@ impl CollectorSource {
             "bybit" => Some(Self::Bybit),
             "binance" => Some(Self::Binance),
             "okx" => Some(Self::Okx),
+            "bitget" => Some(Self::Bitget),
             "polymarket" => Some(Self::Polymarket),
             "hyperliquid" => Some(Self::Hyperliquid),
             _ => None,
@@ -43,6 +46,7 @@ impl CollectorSource {
             Self::Bybit => Source::Bybit,
             Self::Binance => Source::Binance,
             Self::Okx => Source::Okx,
+            Self::Bitget => Source::Bitget,
             Self::Polymarket => Source::Polymarket,
             Self::Hyperliquid => Source::Hyperliquid,
         }
@@ -88,6 +92,16 @@ impl SourceProbe {
         }
     }
 
+    /// Build a Bitget UTA liquidation probe.
+    #[must_use]
+    pub fn bitget(symbol: impl Into<String>) -> Self {
+        Self {
+            source: CollectorSource::Bitget,
+            symbol: symbol.into().to_ascii_uppercase(),
+            okx_instrument_cache: None,
+        }
+    }
+
     /// Build a Polymarket CLOB market-data probe.
     #[must_use]
     pub fn polymarket(asset_id: impl Into<String>) -> Self {
@@ -122,6 +136,7 @@ impl SourceProbe {
             CollectorSource::Bybit => Self::bybit(symbol),
             CollectorSource::Binance => Self::binance(symbol),
             CollectorSource::Okx => Self::okx(symbol),
+            CollectorSource::Bitget => Self::bitget(symbol),
             CollectorSource::Polymarket => Self::polymarket(symbol),
             CollectorSource::Hyperliquid => Self::hyperliquid(symbol),
         }
@@ -151,6 +166,7 @@ impl SourceProbe {
                 )
             }
             CollectorSource::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_owned(),
+            CollectorSource::Bitget => "wss://ws.bitget.com/v3/ws/public".to_owned(),
             CollectorSource::Polymarket => {
                 "wss://ws-subscriptions-clob.polymarket.com/ws/market".to_owned()
             }
@@ -177,6 +193,10 @@ impl SourceProbe {
                 r#"{{"op":"subscribe","args":[{{"channel":"liquidation-orders","instType":"SWAP","instId":"{}"}}]}}"#,
                 self.symbol
             )],
+            CollectorSource::Bitget => vec![format!(
+                r#"{{"op":"subscribe","args":[{{"instType":"usdt-futures","topic":"liquidation","symbol":"{}"}}]}}"#,
+                self.symbol
+            )],
             CollectorSource::Polymarket => vec![format!(
                 r#"{{"assets_ids":["{}"],"type":"market","custom_feature_enabled":true}}"#,
                 self.symbol
@@ -200,7 +220,10 @@ impl SourceProbe {
         match self.source {
             CollectorSource::Bybit => Some(r#"{"op":"ping"}"#),
             CollectorSource::Polymarket => Some("PING"),
-            CollectorSource::Binance | CollectorSource::Okx | CollectorSource::Hyperliquid => None,
+            CollectorSource::Binance
+            | CollectorSource::Okx
+            | CollectorSource::Bitget
+            | CollectorSource::Hyperliquid => None,
         }
     }
 
@@ -210,7 +233,10 @@ impl SourceProbe {
         match self.source {
             CollectorSource::Bybit => Some(Duration::from_secs(20)),
             CollectorSource::Polymarket => Some(Duration::from_secs(10)),
-            CollectorSource::Binance | CollectorSource::Okx | CollectorSource::Hyperliquid => None,
+            CollectorSource::Binance
+            | CollectorSource::Okx
+            | CollectorSource::Bitget
+            | CollectorSource::Hyperliquid => None,
         }
     }
 
@@ -242,6 +268,14 @@ impl SourceProbe {
                     Err(error) => Err(error),
                 },
             ),
+            CollectorSource::Bitget => {
+                bitget::normalize_liquidations(payload, received_ts).map(|events| {
+                    events
+                        .into_iter()
+                        .filter(|event| event.symbol.eq_ignore_ascii_case(&self.symbol))
+                        .collect()
+                })
+            }
             CollectorSource::Polymarket | CollectorSource::Hyperliquid => Ok(Vec::new()),
         }
     }
@@ -265,9 +299,10 @@ impl SourceProbe {
                 hyperliquid::normalize_market_quotes(payload, received_ts)?,
                 hyperliquid::normalize_market_trades(payload, received_ts)?,
             )),
-            CollectorSource::Bybit | CollectorSource::Binance | CollectorSource::Okx => {
-                Ok((Vec::new(), Vec::new()))
-            }
+            CollectorSource::Bybit
+            | CollectorSource::Binance
+            | CollectorSource::Okx
+            | CollectorSource::Bitget => Ok((Vec::new(), Vec::new())),
         }
     }
 
@@ -284,6 +319,7 @@ impl SourceProbe {
         match self.source {
             CollectorSource::Bybit
             | CollectorSource::Binance
+            | CollectorSource::Bitget
             | CollectorSource::Polymarket
             | CollectorSource::Hyperliquid => Ok(Vec::new()),
             CollectorSource::Okx if self.okx_instrument_cache.is_some() => {
@@ -367,6 +403,18 @@ mod tests {
             SourceProbe::okx("btc-usdt-swap").websocket_url(),
             "wss://ws.okx.com:8443/ws/v5/public"
         );
+        assert_eq!(
+            SourceProbe::bitget("btcusdt").websocket_url(),
+            "wss://ws.bitget.com/v3/ws/public"
+        );
+        assert!(
+            SourceProbe::bitget("btcusdt").subscribe_messages()[0]
+                .contains(r#""topic":"liquidation""#)
+        );
+        assert!(
+            SourceProbe::bitget("btcusdt").subscribe_messages()[0]
+                .contains(r#""instType":"usdt-futures""#)
+        );
     }
 
     #[test]
@@ -403,6 +451,36 @@ mod tests {
         assert_eq!(raw[0].source, Source::Okx);
         assert_eq!(raw[0].source_quality, "websocket_only");
         assert_eq!(raw[0].symbol, "BTC-USDT-SWAP");
+    }
+
+    #[test]
+    fn routes_bitget_payloads_to_canonical_liquidations() {
+        let probe = SourceProbe::bitget("BTCUSDT");
+        let received_ts = OffsetDateTime::from_unix_timestamp(1_718_750_002)
+            .expect("fixture timestamp must be valid");
+
+        let events = probe
+            .normalize_payload(
+                include_str!("../../liq-connectors/tests/fixtures/bitget_liquidation.json"),
+                received_ts,
+            )
+            .expect("fixture should normalize");
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].source, Source::Bitget);
+    }
+
+    #[test]
+    fn filters_bitget_liquidations_to_requested_symbol() {
+        let probe = SourceProbe::bitget("BTCUSDT");
+        let payload = include_str!("../../liq-connectors/tests/fixtures/bitget_liquidation.json")
+            .replace("BTCUSDT", "ETHUSDT");
+
+        let events = probe
+            .normalize_payload(&payload, OffsetDateTime::UNIX_EPOCH)
+            .expect("non-matching symbols should not fail");
+
+        assert!(events.is_empty());
     }
 
     #[test]

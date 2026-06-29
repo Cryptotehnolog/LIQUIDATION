@@ -34,6 +34,7 @@ Official source: Bitget UTA WebSocket public Liquidation Channel.
 Important details:
 
 - channel name: `liquidation`;
+- public WebSocket endpoint: `wss://ws.bitget.com/v3/ws/public`;
 - public WebSocket channel;
 - data is pushed once per second;
 - each push contains aggregated liquidation data for the previous second;
@@ -41,7 +42,10 @@ Important details:
   largest short liquidation;
 - UTA and Classic Account liquidation data are covered;
 - request uses `instType=usdt-futures`;
+- subscription uses `topic=liquidation`;
 - payload fields include `symbol`, `side`, `price`, `amount`, `ts`;
+- docs define `side=buy` as long position liquidation and `side=sell` as short
+  position liquidation;
 - docs describe `amount` as quote coin.
 
 Implication:

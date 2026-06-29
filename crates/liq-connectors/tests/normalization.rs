@@ -1,6 +1,6 @@
 //! Fixture-based connector normalization tests.
 
-use liq_connectors::{binance, bybit, okx};
+use liq_connectors::{binance, bitget, bybit, okx};
 use liq_domain::{LiquidationSide, Source, SourceQuality};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -43,6 +43,42 @@ fn normalizes_bybit_all_liquidation_event() {
     assert_eq!(event.price, Decimal::new(6_500_000, 2));
     assert_eq!(event.quantity, Decimal::new(100, 3));
     assert_eq!(event.notional_usd, Decimal::new(650_000, 2));
+}
+
+#[test]
+fn normalizes_bitget_liquidation_snapshot_when_quote_amount_is_usdt() {
+    let received_ts = OffsetDateTime::from_unix_timestamp(1_718_750_002)
+        .expect("fixture timestamp must be valid");
+    let events = bitget::normalize_liquidations(
+        include_str!("fixtures/bitget_liquidation.json"),
+        received_ts,
+    )
+    .expect("fixture must normalize");
+
+    assert_eq!(events.len(), 2);
+    let event = &events[0];
+    assert_eq!(event.source, Source::Bitget);
+    assert_eq!(event.source_quality, SourceQuality::SnapshotOnly);
+    assert_eq!(event.symbol, "BTCUSDT");
+    assert_eq!(event.side, LiquidationSide::Long);
+    assert_eq!(event.price, Decimal::new(5_000_000, 2));
+    assert_eq!(event.quantity, Decimal::new(5, 1));
+    assert_eq!(event.notional_usd, Decimal::new(25_000, 0));
+    assert_eq!(
+        event.source_event_id,
+        "bitget:BTCUSDT:1718750001000:buy:50000:25000"
+    );
+}
+
+#[test]
+fn ignores_bitget_non_liquidation_service_payload() {
+    let events = bitget::normalize_liquidations(
+        r#"{"event":"subscribe","arg":{"channel":"orders"},"data":[]}"#,
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .expect("non-liquidation JSON should be ignored");
+
+    assert!(events.is_empty());
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! Exchange connector normalizers.
 
 pub mod binance;
+pub mod bitget;
 pub mod bybit;
 pub mod hyperliquid;
 pub mod okx;

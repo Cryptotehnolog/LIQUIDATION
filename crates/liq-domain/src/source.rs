@@ -12,6 +12,8 @@ pub enum Source {
     Binance,
     /// OKX public derivatives liquidation stream.
     Okx,
+    /// Bitget UTA public liquidation snapshot stream.
+    Bitget,
     /// Polymarket CLOB market data.
     Polymarket,
     /// Hyperliquid market data for hedge simulation.
@@ -40,6 +42,7 @@ impl Source {
             Self::Bybit => "bybit",
             Self::Binance => "binance",
             Self::Okx => "okx",
+            Self::Bitget => "bitget",
             Self::Polymarket => "polymarket",
             Self::Hyperliquid => "hyperliquid",
         }

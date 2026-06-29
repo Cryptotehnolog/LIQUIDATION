@@ -231,6 +231,42 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             .expect("okx health insert must succeed");
         assert_eq!(inserted, 1);
 
+        let bitget_exchange_ts = exchange_ts + time::Duration::minutes(2);
+        let bitget_received_ts = received_ts + time::Duration::minutes(2);
+        let bitget_source_event_id = format!("bitget:test:{suffix}");
+        let bitget_raw = RawSourceEvent {
+            source: "bitget".to_owned(),
+            source_event_id: bitget_source_event_id.clone(),
+            source_quality: "snapshot_only".to_owned(),
+            symbol: "BTCUSDT".to_owned(),
+            exchange_ts: bitget_exchange_ts,
+            received_ts: bitget_received_ts,
+            payload: json!({"fixture": suffix, "source": "bitget"}),
+            payload_sha256: "3".repeat(64),
+        };
+        let inserted = repository::insert_raw_source_event(&pool, &bitget_raw)
+            .await
+            .expect("bitget raw event insert must succeed");
+        assert_eq!(inserted, 1);
+
+        let bitget_canonical = LiquidationEvent {
+            event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, bitget_source_event_id.as_bytes()),
+            source: Source::Bitget,
+            source_event_id: bitget_source_event_id,
+            source_quality: SourceQuality::SnapshotOnly,
+            symbol: "BTCUSDT".to_owned(),
+            side: LiquidationSide::Long,
+            price: Decimal::new(5_000_000, 2),
+            quantity: Decimal::new(5, 1),
+            notional_usd: Decimal::new(25_000, 0),
+            exchange_ts: bitget_exchange_ts,
+            received_ts: bitget_received_ts,
+        };
+        let inserted = repository::insert_liquidation_event(&pool, &bitget_canonical)
+            .await
+            .expect("bitget canonical event insert must succeed");
+        assert_eq!(inserted, 1);
+
         let overlap = repository::source_overlap_report(
             &pool,
             "bybit",
@@ -287,10 +323,23 @@ fn persists_raw_and_canonical_events_when_database_url_is_set() {
             .expect("okx usefulness row must exist");
         assert_eq!(okx_usefulness.coverage_role, "diagnostic_only");
         assert!(!okx_usefulness.participates_in_signals);
-        assert_eq!(okx_usefulness.raw_events, 1);
-        assert_eq!(okx_usefulness.canonical_events, 0);
-        assert_eq!(okx_usefulness.max_notional_usd, None);
-        assert_eq!(okx_usefulness.verdict, "raw-only-diagnostic");
+        assert!(okx_usefulness.raw_events >= 1);
+
+        let bitget_usefulness = usefulness
+            .sources
+            .iter()
+            .find(|row| row.source == "bitget")
+            .expect("bitget usefulness row must exist");
+        assert_eq!(bitget_usefulness.coverage_role, "diagnostic_only");
+        assert!(!bitget_usefulness.participates_in_signals);
+        assert!(bitget_usefulness.raw_events >= 1);
+        assert!(bitget_usefulness.canonical_events >= 1);
+        assert!(
+            bitget_usefulness
+                .max_notional_usd
+                .is_some_and(|value| value >= Decimal::new(25_000, 0))
+        );
+        assert!(bitget_usefulness.liquidation_ready_buckets_without_primary >= 1);
 
         let quote_source_event_id = format!("polymarket:quote:{suffix}");
         let quote = MarketQuote {
