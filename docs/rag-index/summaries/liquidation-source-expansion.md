@@ -81,3 +81,9 @@ Official Python SDK review: SDK supports `userEvents` and
 `userNonFundingLedgerUpdates` as user-specific subscriptions/API calls and does
 not expose a global `liquidations` subscription. It is useful for future
 Hyperliquid account-risk monitor, not for market-wide cascade collection.
+
+Official Rust SDK PR #175 review: open PR adds optional `liquidation:
+FillLiquidation` and optional `builderFee` to `TradeInfo`/API `WsFill`.
+This is useful schema evidence for our future Rust parser fixtures, but it is
+not a public market-wide liquidation feed and should not be used as a production
+dependency while unmerged.

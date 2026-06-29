@@ -98,8 +98,8 @@
     },
     {
       "id": "hyperliquid_node_data_probe",
-      "query": "Hyperliquid node-data probe notional_usd price size double-count liquidation_id",
-      "expected_source": "docs__research__hyperliquid-node-data-probe-2026-06-29.md",
+      "query": "Hyperliquid node-data probe notional_usd price size double-count liquidation_id requester-pays official S3",
+      "expected_source": "docs__runbooks__source-addition.md",
       "expected_all": [
         "notional_usd",
         "price * size",
@@ -118,6 +118,18 @@
         "userNonFundingLedgerUpdates",
         "user-specific",
         "global"
+      ]
+    },
+    {
+      "id": "hyperliquid_rust_sdk_pr_175",
+      "query": "Hyperliquid Rust SDK PR 175 TradeInfo liquidation builder_fee WsFill parser fixtures",
+      "expected_source": "docs__research__hyperliquid-node-data-probe-2026-06-29.md",
+      "expected_all": [
+        "Rust SDK PR",
+        "TradeInfo",
+        "FillLiquidation",
+        "builder_fee",
+        "not merged"
       ]
     }
   ]

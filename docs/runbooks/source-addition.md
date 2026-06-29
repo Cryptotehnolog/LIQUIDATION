@@ -210,6 +210,9 @@ source.
 
 Проверка 2026-06-29:
 
+- Retrieval guard: Hyperliquid node-data probe says `notional_usd = price * size`,
+  `liquidation_id` can repeat and double-count, and official raw
+  verification needs requester-pays S3 access or bounded node output.
 - official `Trading / Liquidations` page описывает механику ликвидаций,
   market orders to the book, partial liquidations и liquidator vault;
 - official WebSocket subscriptions docs не показывают public all-market
@@ -278,6 +281,15 @@ Official Python SDK:
 подтверждает `userEvents` и `userNonFundingLedgerUpdates` как user-specific
 paths. SDK полезен для future account-risk monitor, но не даёт global
 `liquidations` subscription.
+
+Official Rust SDK PR #175:
+[hyperliquid-dex/hyperliquid-rust-sdk#175](https://github.com/hyperliquid-dex/hyperliquid-rust-sdk/pull/175)
+добавляет в `TradeInfo` optional `liquidation: FillLiquidation` и
+`builderFee`. Это полезная подсказка для наших Rust parser fixtures: future
+Hyperliquid fill parser должен принимать optional liquidation metadata. Но PR
+открыт и не смержен, поэтому запрещено тянуть fork/branch как dependency в
+production path. Схему можно использовать только как research evidence рядом с
+official docs и raw fixtures.
 
 Для воспроизведения schema reconnaissance без постоянного node runtime:
 

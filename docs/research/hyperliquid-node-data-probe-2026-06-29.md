@@ -26,6 +26,8 @@ Official sources:
 - Fill schema может содержать `FillLiquidation`.
 - Official Python SDK:
   https://github.com/hyperliquid-dex/hyperliquid-python-sdk
+- Official Rust SDK PR #175:
+  https://github.com/hyperliquid-dex/hyperliquid-rust-sdk/pull/175
 
 Практическое ограничение: direct anonymous HTTPS listing
 `https://hl-mainnet-node-data.s3.amazonaws.com/?list-type=2...` вернул `403`.
@@ -65,6 +67,34 @@ Observed SDK facts:
 
 Conclusion: SDK helps future Hyperliquid account-risk monitor, but it does not
 replace node-data research for market-wide liquidation cascades.
+
+## Rust SDK PR review
+
+`hyperliquid-dex/hyperliquid-rust-sdk` PR #175 is relevant but not enough to
+justify a production collector.
+
+Observed PR facts:
+
+- PR title: add `liquidation` and `builder_fee` fields to `TradeInfo`.
+- Status on 2026-06-29: open, not merged.
+- Changed file: `src/ws/sub_structs.rs`.
+- Proposed `TradeInfo` additions:
+  - `liquidation: Option<FillLiquidation>`;
+  - `builder_fee: Option<String>`.
+- Proposed `FillLiquidation` shape:
+  - `liquidated_user: Option<String>`;
+  - `mark_px: String`;
+  - `method: String`.
+- PR body says `TradeInfo` corresponds to API `WsFill`.
+
+Interpretation:
+
+- This supports our parser design: a Rust fixture type for Hyperliquid fills
+  should allow optional `liquidation` and optional `builderFee`.
+- It does not prove a public market-wide WebSocket liquidation stream. It only
+  shows that fill payloads can carry liquidation metadata.
+- Do not depend on the PR branch in production. If needed, copy the minimal
+  schema into our own domain/parser tests, with source attribution in docs.
 
 ## Sample stats
 
