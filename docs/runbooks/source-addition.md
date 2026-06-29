@@ -34,9 +34,9 @@ normalizer test, source policy, dashboard visibility и CI guard.
 
 Решение от 2026-06-29:
 
-1. `hyperliquid_liquidations`: `research_blocked` до подтверждения official
-   public liquidation feed; не включать в сигналы и не смешивать с текущим
-   hedge market-data leg.
+1. `hyperliquid_liquidations`: `node_research_candidate`; не WebSocket
+   collector, не включать в сигналы и не смешивать с текущим hedge market-data
+   leg.
 2. `bitget`: следующий diagnostic liquidation source.
 3. `gate`: следующий diagnostic liquidation source после Bitget.
 4. `htx`: research candidate после Hyperliquid, Bitget и Gate.
@@ -218,6 +218,12 @@ source.
 - live probe отклонил subscriptions `liquidations` и `liquidation`;
 - `liquidation` events в docs относятся к user-specific event streams, а не к
   public market-wide feed.
+- official `Nodes / L1 data schemas` показывает node-data path:
+  `misc_events` содержит `LedgerDelta = Liquidation`, а node/API fills могут
+  содержать `FillLiquidation`.
+- `hyperliquid-dex/node` поддерживает `--write-fills`, `--write-misc-events`,
+  `--batch-by-block`, `--stream-with-block-info`,
+  `--disable-output-file-buffering`.
 
 Важно: official `userEvents` subscription:
 
@@ -230,9 +236,9 @@ Hyperliquid hedge account risk monitor, но не для market-wide liquidation
 collector. Наша стратегия ищет каскады ликвидаций по рынку, а не только события
 собственного адреса.
 
-Следствие: production `hyperliquid_liquidations` collector не добавлять, пока
-не найден official public feed или documented raw public stream с explicit
-liquidation marker.
+Следствие: production WebSocket `hyperliquid_liquidations` collector не
+добавлять. Но node-based Hyperliquid liquidation ingestion является реальным
+research candidate.
 
 Не путать две вещи:
 
@@ -240,6 +246,9 @@ liquidation marker.
   и важны для market microstructure;
 - она не доказывает, что public API отдаёт market-wide liquidation events с
   нормализуемым payload.
+- node-data docs доказывают, что можно исследовать market-wide liquidation
+  events через L1 data output, но это другой operational class: node runtime,
+  большие логи, отдельное хранение и отдельные gates.
 
 Запрещено:
 
@@ -248,6 +257,18 @@ liquidation marker.
 - использовать user-specific streams как global liquidation source.
 - использовать own-account `userEvents` как proxy для market-wide liquidation
   cascades.
+
+Разрешенный следующий Hyperliquid path:
+
+1. Не трогать текущий `hyperliquid` hedge market-data connector.
+2. Добавить research fixture из historical S3/node output:
+   `misc_events` `Liquidation` или `node_fills_by_block` with
+   `FillLiquidation`.
+3. Написать parser/normalizer tests.
+4. Оценить node runtime отдельно. Official docs предупреждают, что default node
+   output может давать около 100 GB logs/day.
+5. Только после этого решать, нужен ли отдельный server-side
+   `hyperliquid-node` collector.
 
 Связанная research note:
 [hyperliquid-liquidation-feed-probe-2026-06-29.md](../research/hyperliquid-liquidation-feed-probe-2026-06-29.md).

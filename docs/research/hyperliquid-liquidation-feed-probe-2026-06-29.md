@@ -9,22 +9,31 @@
 
 ## Короткий вывод
 
-На момент проверки confirmed public all-market liquidation feed у Hyperliquid
-не найден.
+На момент проверки простой public WebSocket/API all-market liquidation feed у
+Hyperliquid не найден.
+
+После дополнительной проверки всех API/Nodelinks найден официальный
+node-based путь, который может дать market-wide liquidation data: Hyperliquid
+non-validating node L1 output.
 
 Hyperliquid остается:
 
 - `coverage_role=hedge_market_data` для текущего `hyperliquid` source;
-- `hyperliquid_liquidations=research_blocked`, пока official docs или
-  стабильный public payload не подтвердят liquidation stream;
+- `hyperliquid_liquidations=node_research_candidate`, не WebSocket collector;
 - `participates_in_signals=false`;
 - без canonical `liquidation_events`.
 
-Retrieval summary: `hyperliquid_liquidations` is `research_blocked`;
+Retrieval summary: `hyperliquid_liquidations` is `node_research_candidate`;
 `liquidations`/`liquidation` public market-wide subscriptions are not confirmed;
 official `userEvents` is user-specific; current Hyperliquid integration remains
-`hedge market-data`; future `userEvents` usage belongs to account risk monitor,
-not market-wide liquidation cascade signals.
+`hedge market-data`; future `userEvents` usage belongs to account risk monitor.
+Official node data exposes `misc_events` with `LedgerDelta = Liquidation` and
+node fills can include `FillLiquidation`; this is a research/probe path, not yet
+a production collector.
+
+Eval summary: `node_research_candidate`, `liquidations`, `liquidation`,
+`user-specific`, `hedge market-data`, `account risk monitor`, `misc_events`,
+`FillLiquidation`.
 
 Это не означает, что ликвидаций на Hyperliquid нет. Это означает, что в
 публичном API пока не доказан честный источник all-market liquidation events,
@@ -52,6 +61,53 @@ not market-wide liquidation cascade signals.
 Эта страница важна для понимания market microstructure Hyperliquid, но она не
 публикует точный public WebSocket channel, REST endpoint или live JSON schema
 для market-wide liquidation feed.
+
+### API / Historical data / Nodes links review
+
+Дополнительно проверены страницы:
+
+- https://hyperliquid.gitbook.io/hyperliquid-docs/historical-data
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/nodes
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/nodes/l1-data-schemas
+- https://github.com/hyperliquid-dex/node
+
+Найдена более серьёзная возможность, чем WebSocket `liquidations`:
+
+- `Historical data` указывает на `s3://hl-mainnet-node-data/node_fills_by_block`
+  и `explorer_blocks` / `replica_cmds`.
+- `L1 data schemas` описывает node output:
+  - `node_trades`;
+  - `node_fills`;
+  - `misc_events`;
+  - `raw_book_diffs`;
+  - `order_statuses`.
+- `misc_events` содержит `LedgerDelta = Liquidation`.
+- `Liquidation` schema содержит:
+  - `liquidatedNtlPos`;
+  - `accountValue`;
+  - `leverageType`;
+  - `liquidatedPositions: Array<LiquidatedPosition>`;
+  - `LiquidatedPosition { coin, szi }`.
+- `WsFill`/node fills schema может содержать `liquidation?: FillLiquidation`,
+  где `FillLiquidation` включает `liquidatedUser`, `markPx`, `method:
+  "market" | "backstop"`.
+- `hyperliquid-dex/node` flags позволяют писать эти данные локально:
+  - `--write-fills`;
+  - `--write-misc-events`;
+  - `--batch-by-block`;
+  - `--stream-with-block-info`;
+  - `--disable-output-file-buffering`.
+
+Это означает: Hyperliquid liquidation source нельзя списывать. Но его правильная
+архитектура не WebSocket adapter, а отдельный node-data ingestion pipeline.
+
+Operational caveats:
+
+- node docs предупреждают примерно о 100 GB logs/day with default settings;
+- foundation non-validating node access is best-efforts и не должен быть
+  единственным authoritative source for trading;
+- для низкой latency нужны отдельная машина/сервер, disk retention и monitoring;
+- на ноутбуке такой collector запускать рискованно.
 
 Документация перечисляет market-data subscriptions вроде:
 
@@ -158,13 +214,15 @@ Error parsing JSON into valid websocket request
 
 ## Почему Hyperliquid liquidation collector не добавлен
 
-Hyperliquid liquidation collector не добавлен, потому что
-`hyperliquid_liquidations` остается `research_blocked`: public
+Hyperliquid WebSocket liquidation collector не добавлен, потому что public
 `liquidations`/`liquidation` market-wide subscription не подтвержден. Official
 `userEvents` является `user-specific` stream для конкретного address. Текущий
-Hyperliquid connector остается `hedge market-data` leg. Future `userEvents`
-usage - это account risk monitor для нашей hedge-ноги, а не источник рыночных
-liquidation cascades.
+Hyperliquid connector остается `hedge market-data` leg.
+
+Но Hyperliquid liquidation source больше не надо считать тупиком:
+`hyperliquid_liquidations` переводится в `node_research_candidate`. Следующая
+проверка должна идти через historical S3/node sample или non-validating node
+output, где есть `misc_events` `Liquidation` и fills with `FillLiquidation`.
 
 ## Почему Coinglass недостаточно
 
@@ -187,9 +245,10 @@ strategy signals.
 Разрешено:
 
 - оставить текущий Hyperliquid market-data connector для hedge simulation;
-- добавить future research task на explorer/raw-public activity stream;
-- вернуться к Hyperliquid liquidations, если official docs появятся или будет
-  найден стабильный public payload с доказуемой liquidation semantics.
+- добавить research task на Hyperliquid node-data ingestion;
+- сначала проверить historical S3/node sample, затем только проектировать
+  live non-validating-node collector;
+- использовать `userEvents` позже только для hedge account risk monitor.
 
 Запрещено:
 
@@ -207,14 +266,17 @@ strategy signals.
 
 1. Найти official public liquidation feed или documented public raw stream,
    который явно содержит liquidation marker.
-2. Сохранить fixture с реальным payload.
-3. Доказать поля: side, price, size, `notional_usd`, exchange timestamp,
+2. Для Hyperliquid node path: получить sample из historical S3 или локального
+   non-validating node output.
+3. Сохранить fixture с реальным `misc_events` liquidation и/или fill payload
+   with `FillLiquidation`.
+4. Доказать поля: side, price/mark price, size/szi, `notional_usd`, block time,
    source event id.
-4. Добавить normalizer tests.
-5. Провести bounded live probe с raw и canonical inserts.
-6. Проверить source usefulness report: events/hour, max notional, latency,
+5. Добавить normalizer tests.
+6. Провести bounded probe с raw и canonical inserts.
+7. Проверить source usefulness report: events/hour, max notional, latency,
    stale rate, overlap buckets, liquidation-ready buckets without primary.
-7. Принять отдельное documented decision перед любым signal eligibility.
+8. Принять отдельное documented decision перед любым signal eligibility.
 
 ## Что улучшить или автоматизировать
 
@@ -226,3 +288,9 @@ strategy signals.
 - Отдельно добавить future task: Hyperliquid account-risk monitor через
   `userEvents` для собственной hedge-ноги. Это не source для стратегии, а safety
   monitor.
+- Добавить `hyperliquid-node-data` research/probe:
+  1. исторический S3 sample `node_fills_by_block`/`misc_events`;
+  2. fixture parser;
+  3. оценка disk/CPU/network для live node;
+  4. решение, где запускать node: точно не на текущем ноутбуке как постоянный
+     runtime.

@@ -1,9 +1,14 @@
 # Liquidation Source Expansion Summary
 
+Retrieval summary: priority order is `hyperliquid_liquidations`,
+`bitget`, `gate`, `htx`. Hyperliquid is `node_research_candidate`; Bitget,
+Gate and HTX remain `diagnostic-only` candidates until official docs, fixtures,
+live probe, overlap and source usefulness gates pass.
+
 Текущий приоритет расширения liquidation sources:
 
-1. `hyperliquid_liquidations` - research blocked until official public
-   liquidation feed is confirmed.
+1. `hyperliquid_liquidations` - node research candidate, not simple WebSocket
+   collector.
 2. `bitget` - diagnostic-only source.
 3. `gate` - diagnostic-only source.
 4. `htx` - later research/diagnostic source.
@@ -41,8 +46,7 @@ Hyperliquid liquidation probe от 2026-06-29: official WebSocket docs и live
 probe не подтвердили public all-market liquidation subscription. `bbo` работает,
 но `liquidations`/`liquidation` endpoint отклоняет. User-specific liquidation
 events не являются all-market feed. Поэтому текущий `hyperliquid` source
-остается только hedge market-data leg, а `hyperliquid_liquidations` нельзя
-добавлять в canonical collector до нового documented decision.
+остается только hedge market-data leg.
 
 Official `userEvents` with `user=<address>` can emit liquidation events for that
 address only. Это можно использовать позже как hedge account risk monitor, но
@@ -53,3 +57,14 @@ Official `Trading / Liquidations` page подтверждает механику
 100k USDC, есть liquidator vault и mark-price liquidation logic. Но эта страница
 не содержит public market-wide WebSocket/REST feed schema. Поэтому она усиливает
 microstructure thesis, но не снимает API blocker.
+
+Новая важная находка: official `Nodes / L1 data schemas` и
+`hyperliquid-dex/node` дают node-based path. `misc_events` содержит
+`LedgerDelta = Liquidation` с `liquidatedNtlPos`, `accountValue`,
+`leverageType`, `liquidatedPositions`. Node/API fills могут содержать
+`FillLiquidation` (`liquidatedUser`, `markPx`, `method`). Node flags
+`--write-fills`, `--write-misc-events`, `--batch-by-block`,
+`--stream-with-block-info`, `--disable-output-file-buffering` позволяют строить
+отдельный node-data ingestion pipeline. Это не готовый collector, но сильный
+research/probe path. На ноутбуке постоянный node runtime запускать не надо:
+docs предупреждают о больших логах, порядка 100 GB/day by default.

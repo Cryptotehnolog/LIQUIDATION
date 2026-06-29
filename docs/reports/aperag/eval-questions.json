@@ -64,7 +64,7 @@
     },
     {
       "id": "liquidation_source_expansion",
-      "query": "Какой текущий приоритет расширения liquidation sources Hyperliquid Bitget Gate HTX?",
+      "query": "Retrieval summary priority order hyperliquid_liquidations bitget gate htx diagnostic-only candidates",
       "expected_source": "docs__rag-index__summaries__liquidation-source-expansion.md",
       "expected_all": [
         "hyperliquid_liquidations",
@@ -87,15 +87,13 @@
     },
     {
       "id": "hyperliquid_liquidation_probe",
-      "query": "Почему Hyperliquid liquidation collector не добавлен после проверки public liquidation feed?",
+      "query": "Hyperliquid node_research_candidate misc_events FillLiquidation node-data liquidation collector",
       "expected_source": "docs__research__hyperliquid-liquidation-feed-probe-2026-06-29.md",
       "expected_all": [
-        "research_blocked",
-        "liquidations",
+        "node_research_candidate",
         "liquidation",
-        "user-specific",
-        "hedge market-data",
-        "account risk monitor"
+        "misc_events",
+        "FillLiquidation"
       ]
     }
   ]

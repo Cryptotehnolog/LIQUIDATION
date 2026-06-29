@@ -4,8 +4,9 @@
 
 Решение:
 
-1. Hyperliquid liquidation source остается `research_blocked`, пока official
-   public liquidation feed не подтвержден.
+1. Hyperliquid liquidation source переводится в `node_research_candidate`.
+   Простой public WebSocket liquidation feed не подтвержден, но official node
+   data path найден.
 2. Bitget добавляется следующим как `diagnostic_only`.
 3. Gate добавляется после Bitget как `diagnostic_only`.
 4. HTX добавляется после Hyperliquid/Bitget/Gate как `research_candidate`, затем
@@ -39,4 +40,11 @@ hedge account, а не source для market-wide liquidation cascade signals.
 
 Дополнительное уточнение: official `Trading / Liquidations` page подтверждает
 механику ликвидаций и market orders to the book, но не даёт public market-wide
-feed schema. Это не снимает `research_blocked` статус.
+WebSocket/REST feed schema.
+
+Новая находка после проверки API/Nodes links: official `Nodes / L1 data schemas`
+документирует `misc_events` with `LedgerDelta = Liquidation`, а node/API fills
+могут содержать `FillLiquidation`. `hyperliquid-dex/node` поддерживает
+`--write-fills`, `--write-misc-events`, `--batch-by-block` и
+`--stream-with-block-info`. Следующий шаг - historical/node sample fixture, а
+не WebSocket collector.
