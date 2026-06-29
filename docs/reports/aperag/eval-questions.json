@@ -144,6 +144,18 @@
         "write-fills",
         "write-misc-events"
       ]
+    },
+    {
+      "id": "hyperliquid_node_runner_preflight",
+      "query": "Hyperliquid node runner preflight Ubuntu 24.04 hl-visor not-ready-for-run dry-run MaxBytes",
+      "expected_source": "docs__rag-index__summaries__hyperliquid-node-data.md",
+      "expected_all": [
+        "preflight-hyperliquid-node-runner.ps1",
+        "Ubuntu",
+        "24.04",
+        "hl-visor",
+        "not-ready-for-run"
+      ]
     }
   ]
 }

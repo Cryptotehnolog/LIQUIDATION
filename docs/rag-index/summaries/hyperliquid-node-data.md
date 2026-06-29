@@ -27,3 +27,14 @@ Default mode is dry-run only. The script uses only fills/misc-events flags:
 `notional_usd`, `liquidation_id`/candidate ids, dedup candidates and max
 notional. Test command:
 `scripts/test-hyperliquid-node-output-probe.ps1`.
+
+Runner preflight: use `scripts/preflight-hyperliquid-node-runner.ps1` before
+any real run. It checks WSL/native runner availability, Ubuntu 24.04 status,
+dry-run probe output, required flags, output paths and limits. Current laptop
+use is research-only: official Hyperliquid node docs require Ubuntu 24.04 and
+non-validator specs of 16 vCPU, 128 GB RAM and 500 GB SSD, while default node
+output can be about 100 GB/day. If no `hl-visor`/runner is found, preflight must
+return `not-ready-for-run` and real `-Run` is blocked. Test command:
+`scripts/test-hyperliquid-node-runner-preflight.ps1`.
+
+Runbook: `docs/runbooks/hyperliquid-node-output-probe.md`.

@@ -340,6 +340,24 @@ Regression test:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-hyperliquid-node-output-probe.ps1
 ```
 
+Перед любым реальным `-Run` выполните runner preflight:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-hyperliquid-node-runner.ps1 -MaxRuntimeSeconds 60 -MaxBytes 52428800
+```
+
+Preflight проверяет WSL/native runner, Ubuntu 24.04, dry-run probe, required
+flags и isolated output path. Если `hl-visor` не найден, допустимый результат:
+`status=not-ready-for-run`. Это blocker для реального bounded run, а не ошибка
+скрипта. Regression test:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-hyperliquid-node-runner-preflight.ps1
+```
+
+Подробный runbook:
+[hyperliquid-node-output-probe.md](hyperliquid-node-output-probe.md).
+
 Связанная research note:
 [hyperliquid-liquidation-feed-probe-2026-06-29.md](../research/hyperliquid-liquidation-feed-probe-2026-06-29.md).
 
