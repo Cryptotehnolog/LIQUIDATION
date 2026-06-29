@@ -541,3 +541,50 @@ PnL перед изменением defaults.
 Performance note: replay показал slow SQL warnings при чтении `market_quotes`.
 Это не блокирует текущий paper-analysis, но replay query/index optimization
 нужно сделать перед большими batch/backtest runs.
+
+## Six-Window Pullback Aggregate Decision
+
+Дата: 2026-06-29 Minsk time.
+
+Controlled run
+`.cache/replay/signal-aggregate-live/foreground-20260629-085718` добавил 4
+новых real pinned signal windows. Вместе с двумя предыдущими windows из
+`.cache/replay/signal-aggregate-live/foreground-20260629-0210` выборка стала
+6 signal windows.
+
+Новые 4 windows:
+
+- `signals=4`;
+- `polymarket_orders=4`;
+- `polymarket_fills=0`;
+- `late_entry_ratio=0.25`;
+- `average_seconds_to_order_expiry=92.5`;
+- `average_trade_distance_to_fill=0.17675`;
+- classification: `pullback_too_deep_candidate`.
+
+Aggregate pullback comparison по 6 windows:
+
+- `pullback-0.10`: `fills=2/6`, `hedge_fills=2`,
+  `net_pnl_usd=-0.2180`, `average_trade_distance_to_fill=0.0466666667`;
+- `pullback-0.15`: `fills=1/6`, `hedge_fills=1`,
+  `net_pnl_usd=-0.1090`, `average_trade_distance_to_fill=0.0699166667`;
+- `pullback-0.20`: `fills=1/6`, `hedge_fills=1`,
+  `net_pnl_usd=-0.1090`, `average_trade_distance_to_fill=0.0976666667`;
+- `pullback-0.30`: `fills=0/6`, `hedge_fills=0`,
+  `net_pnl_usd=0`, `average_trade_distance_to_fill=0.1578333333`.
+
+Decision:
+
+- baseline `pullback_pct=0.30` не менять;
+- `pullback_pct=0.10` диагностически улучшает fill rate, но заполненные пути
+  пока отрицательны после fees/funding/slippage;
+- нельзя выбирать profile только по fill count;
+- следующий bottleneck - economics/costs/entry model и дальнейшая выборка
+  signal windows, а не простое снижение pullback.
+
+Automation:
+
+- добавлен `scripts/run-signal-pullback-pipeline.ps1`;
+- pipeline одной командой делает controlled signal collection, извлекает
+  pinned market artifacts, запускает aggregate pullback comparator и пишет
+  `.cache/replay/latest-signal-pullback-pipeline.json` для dashboard/future CI.

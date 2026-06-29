@@ -730,3 +730,88 @@ baseline нужны несколько pinned windows, entry fills, hedge fills 
 единственный full paper path дал `net_pnl_usd=-0.1090` после fees/funding/
 slippage. Baseline `pullback_pct=0.30` не меняем. Следующий шаг - собирать
 ещё signal windows и смотреть cost-sensitive aggregate PnL.
+
+## Six-Window Pullback Aggregate 2026-06-29
+
+Новая controlled series:
+`.cache/replay/signal-aggregate-live/foreground-20260629-085718`.
+
+Серия добавила 4 новых signal windows и была объединена с двумя предыдущими
+windows из `.cache/replay/signal-aggregate-live/foreground-20260629-0210`.
+
+Новые signal windows:
+
+- `2717299`: `seconds_to_order_expiry=8`,
+  `trade_distance_to_fill=0.277`, late signal;
+- `2717310`: `seconds_to_order_expiry=165`,
+  `trade_distance_to_fill=0.151`;
+- `2717334`: `seconds_to_order_expiry=86`,
+  `trade_distance_to_fill=0.028`, близко к fill, но без conservative
+  `trade_cross`;
+- `2718070`: `seconds_to_order_expiry=111`,
+  `trade_distance_to_fill=0.251`.
+
+Combined entry-fill analysis по новым 4 windows:
+
+- `signals=4`;
+- `polymarket_orders=4`;
+- `polymarket_fills=0`;
+- `late_entries=1`;
+- `average_seconds_to_order_expiry=92.5`;
+- `average_trade_distance_to_fill=0.17675`;
+- classification: `pullback_too_deep_candidate`.
+
+Aggregate pullback comparison по 6 pinned signal windows:
+
+- `pullback-0.10`: `signals=6`, `orders=6`, `fills=2`,
+  `fill_rate=0.3333333333333333333333333333`, `hedge_fills=2`,
+  `net_pnl_usd=-0.2180`,
+  `average_trade_distance_to_fill=0.0466666666666666666666666667`,
+  `average_seconds_to_order_expiry=90.33333333333333333333333333`;
+- `pullback-0.15`: `signals=6`, `orders=6`, `fills=1`,
+  `fill_rate=0.1666666666666666666666666667`, `hedge_fills=1`,
+  `net_pnl_usd=-0.1090`,
+  `average_trade_distance_to_fill=0.0699166666666666666666666667`;
+- `pullback-0.20`: `signals=6`, `orders=6`, `fills=1`,
+  `fill_rate=0.1666666666666666666666666667`, `hedge_fills=1`,
+  `net_pnl_usd=-0.1090`,
+  `average_trade_distance_to_fill=0.0976666666666666666666666667`;
+- `pullback-0.30`: `signals=6`, `orders=6`, `fills=0`,
+  `fill_rate=0`, `hedge_fills=0`, `net_pnl_usd=0`,
+  `average_trade_distance_to_fill=0.1578333333333333333333333333`.
+
+Decision:
+
+- `best_by_entry_fills=pullback-0.10`;
+- `best_by_net_pnl=pullback-0.30`, но только потому что no-fill windows имеют
+  нулевой realised PnL в paper replay;
+- baseline `pullback_pct=0.30` не менять;
+- `pullback_pct=0.10` повышает fill rate, но текущие filled paths отрицательны
+  после fees/funding/slippage;
+- следующий research должен смотреть economics/costs/entry model, а не просто
+  снижать pullback ради fill count.
+
+## Signal Pullback Pipeline
+
+Одна команда для полного диагностического цикла:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-signal-pullback-pipeline.ps1 `
+  -DatabaseUrl "postgres://liquidation:liquidation@127.0.0.1:15433/liquidation" `
+  -TargetSignalWindows 4 `
+  -PreviousSignalReportPath ".cache/replay/signal-aggregate-live/foreground-20260629-0210/report.json" `
+  -SkipPreflight
+```
+
+Pipeline делает:
+
+1. запускает `run-until-signal-built-aggregate.ps1`;
+2. извлекает `replay_artifact_paths` из нового и прошлых signal reports;
+3. строит `aggregate-market-paths.txt`;
+4. запускает `compare-pullback-profiles-aggregate.ps1`;
+5. пишет `pipeline-summary.json`;
+6. обновляет dashboard artifact
+   `.cache/replay/latest-signal-pullback-pipeline.json`.
+
+Этот pipeline тоже diagnostic-only и paper-only. Он не меняет baseline
+автоматически.

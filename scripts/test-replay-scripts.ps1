@@ -14,7 +14,8 @@ $scripts = @(
     "scripts/compare-replay-profiles.ps1",
     "scripts/compare-replay-profiles-aggregate.ps1",
     "scripts/compare-pullback-profiles.ps1",
-    "scripts/compare-pullback-profiles-aggregate.ps1"
+    "scripts/compare-pullback-profiles-aggregate.ps1",
+    "scripts/run-signal-pullback-pipeline.ps1"
 )
 
 function Assert-True {
@@ -49,6 +50,7 @@ $profileComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts
 $profileAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-replay-profiles-aggregate.ps1")
 $pullbackComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-pullback-profiles.ps1")
 $pullbackAggregateComparator = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/compare-pullback-profiles-aggregate.ps1")
+$signalPullbackPipeline = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "scripts/run-signal-pullback-pipeline.ps1")
 
 Assert-True ($runLatest.Contains("[switch]`$SkipFetch")) "run-latest-polymarket-replay.ps1 must expose -SkipFetch for wrapper scripts"
 Assert-True ($runLatest.Contains("Remove-Item -LiteralPath `$ArtifactPath -Force")) "run-latest-polymarket-replay.ps1 must remove stale replay artifact before running"
@@ -191,6 +193,7 @@ Assert-True ($pullbackAggregateComparator.Contains("compare-pullback-profiles.ps
 Assert-True ($pullbackAggregateComparator.Contains("[string[]]`$MarketArtifactPath")) "compare-pullback-profiles-aggregate.ps1 must accept multiple pinned market artifacts"
 Assert-True ($pullbackAggregateComparator.Contains("-split `",`"")) "compare-pullback-profiles-aggregate.ps1 must accept comma-separated market artifact paths from CLI"
 Assert-True ($pullbackAggregateComparator.Contains("[string]`$MarketArtifactDirectory")) "compare-pullback-profiles-aggregate.ps1 must discover pinned market artifacts from a directory"
+Assert-True ($pullbackAggregateComparator.Contains("[string]`$PullbackPctCsv")) "compare-pullback-profiles-aggregate.ps1 must accept pullback pct csv from wrapper scripts"
 Assert-True ($pullbackAggregateComparator.Contains("PullbackPct values must be greater than or equal to 0 and less than 1")) "compare-pullback-profiles-aggregate.ps1 must reject invalid pullback pct values"
 Assert-True ($pullbackAggregateComparator.Contains("PullbackPct values must be unique")) "compare-pullback-profiles-aggregate.ps1 must reject duplicate pullback pct values"
 Assert-True ($pullbackAggregateComparator.Contains('"-PullbackPctCsv", (($PullbackPct')) "compare-pullback-profiles-aggregate.ps1 must pass pullback pct values through csv wrapper parameter"
@@ -200,5 +203,15 @@ Assert-True ($pullbackAggregateComparator.Contains("average_seconds_to_order_exp
 Assert-True ($pullbackAggregateComparator.Contains("net_pnl_usd")) "compare-pullback-profiles-aggregate.ps1 must aggregate net PnL by pullback profile"
 Assert-True ($pullbackAggregateComparator.Contains("diagnostic_only")) "compare-pullback-profiles-aggregate.ps1 must mark results as diagnostic-only"
 Assert-True ($pullbackAggregateComparator.Contains("[switch]`$PrintCommandsOnly")) "compare-pullback-profiles-aggregate.ps1 must support dry-run command preview"
+Assert-True ($signalPullbackPipeline.Contains("run-until-signal-built-aggregate.ps1")) "run-signal-pullback-pipeline.ps1 must collect real signal windows through the aggregate signal runner"
+Assert-True ($signalPullbackPipeline.Contains("compare-pullback-profiles-aggregate.ps1")) "run-signal-pullback-pipeline.ps1 must run the aggregate pullback comparator"
+Assert-True ($signalPullbackPipeline.Contains("[string[]]`$PreviousSignalReportPath")) "run-signal-pullback-pipeline.ps1 must accept previous signal reports for wider samples"
+Assert-True ($signalPullbackPipeline.Contains("[switch]`$SkipCollection")) "run-signal-pullback-pipeline.ps1 must support re-running analysis from existing signal reports"
+Assert-True ($signalPullbackPipeline.Contains("SkipCollection requires PreviousSignalReportPath")) "run-signal-pullback-pipeline.ps1 must fail clearly when analysis-only mode has no signal reports"
+Assert-True ($signalPullbackPipeline.Contains("replay_artifact_paths")) "run-signal-pullback-pipeline.ps1 must read replay artifact paths from signal reports"
+Assert-True ($signalPullbackPipeline.Contains("aggregate-market-paths.txt")) "run-signal-pullback-pipeline.ps1 must persist the pinned market artifact manifest"
+Assert-True ($signalPullbackPipeline.Contains("pullback-aggregate.json")) "run-signal-pullback-pipeline.ps1 must write a stable pullback aggregate artifact"
+Assert-True ($signalPullbackPipeline.Contains("pipeline-summary.json")) "run-signal-pullback-pipeline.ps1 must publish a dashboard-friendly summary artifact"
+Assert-True ($signalPullbackPipeline.Contains("[switch]`$PrintCommandsOnly")) "run-signal-pullback-pipeline.ps1 must support dry-run command preview"
 
 Write-Output "replay script checks passed"

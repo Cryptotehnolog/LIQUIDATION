@@ -5,6 +5,7 @@ param(
     [string]$OutputPath = ".cache/replay/pullback-profile-aggregate.json",
     [string]$ArtifactDirectory = ".cache/replay/pullback-profile-aggregate",
     [decimal[]]$PullbackPct = @(0.30, 0.20, 0.15, 0.10),
+    [string]$PullbackPctCsv = "",
     [string]$ReplayProfile = "baseline",
     [decimal]$LiquidationThresholdMinUsd = 25000,
     [decimal]$LiquidationThresholdMaxUsd = 100000,
@@ -29,6 +30,18 @@ if (-not $DatabaseUrl) {
 }
 if (-not (Test-Path -LiteralPath $SingleComparatorScript)) {
     throw "Single-window pullback comparator not found: $SingleComparatorScript"
+}
+if (-not [string]::IsNullOrWhiteSpace($PullbackPctCsv)) {
+    $PullbackPct = @($PullbackPctCsv -split "," |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ } |
+        ForEach-Object {
+            [decimal]::Parse(
+                $_,
+                [System.Globalization.NumberStyles]::Any,
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
+        })
 }
 if ($PullbackPct.Count -lt 2) {
     throw "At least two pullback pct values are required"
