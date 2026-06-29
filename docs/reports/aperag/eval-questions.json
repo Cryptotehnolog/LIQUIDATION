@@ -95,6 +95,30 @@
         "misc_events",
         "FillLiquidation"
       ]
+    },
+    {
+      "id": "hyperliquid_node_data_probe",
+      "query": "Hyperliquid node-data probe notional_usd price size double-count liquidation_id",
+      "expected_source": "docs__research__hyperliquid-node-data-probe-2026-06-29.md",
+      "expected_all": [
+        "notional_usd",
+        "price * size",
+        "liquidation_id",
+        "double-count",
+        "requester-pays"
+      ]
+    },
+    {
+      "id": "hyperliquid_python_sdk_review",
+      "query": "Hyperliquid Python SDK userEvents userNonFundingLedgerUpdates global liquidations subscription",
+      "expected_source": "docs__research__hyperliquid-node-data-probe-2026-06-29.md",
+      "expected_all": [
+        "Python SDK",
+        "userEvents",
+        "userNonFundingLedgerUpdates",
+        "user-specific",
+        "global"
+      ]
     }
   ]
 }

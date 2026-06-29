@@ -270,6 +270,25 @@ research candidate.
 5. Только после этого решать, нужен ли отдельный server-side
    `hyperliquid-node` collector.
 
+Текущий research probe:
+[hyperliquid-node-data-probe-2026-06-29.md](../research/hyperliquid-node-data-probe-2026-06-29.md).
+
+Official Python SDK:
+[hyperliquid-dex/hyperliquid-python-sdk](https://github.com/hyperliquid-dex/hyperliquid-python-sdk)
+подтверждает `userEvents` и `userNonFundingLedgerUpdates` как user-specific
+paths. SDK полезен для future account-risk monitor, но не даёт global
+`liquidations` subscription.
+
+Для воспроизведения schema reconnaissance без постоянного node runtime:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\probe-hyperliquid-node-data.ps1
+```
+
+Этот скрипт использует public processed mirror только как sample. Для
+production/diagnostic collector нужен official S3 requester-pays sample или
+bounded non-validating node output.
+
 Связанная research note:
 [hyperliquid-liquidation-feed-probe-2026-06-29.md](../research/hyperliquid-liquidation-feed-probe-2026-06-29.md).
 

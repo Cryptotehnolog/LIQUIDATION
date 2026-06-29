@@ -294,3 +294,6 @@ strategy signals.
   3. оценка disk/CPU/network для live node;
   4. решение, где запускать node: точно не на текущем ноутбуке как постоянный
      runtime.
+
+Follow-up probe completed:
+[hyperliquid-node-data-probe-2026-06-29.md](hyperliquid-node-data-probe-2026-06-29.md).

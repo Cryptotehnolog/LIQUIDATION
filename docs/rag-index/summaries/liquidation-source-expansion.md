@@ -68,3 +68,16 @@ microstructure thesis, но не снимает API blocker.
 отдельный node-data ingestion pipeline. Это не готовый collector, но сильный
 research/probe path. На ноутбуке постоянный node runtime запускать не надо:
 docs предупреждают о больших логах, порядка 100 GB/day by default.
+
+Hyperliquid node-data probe 2026-06-29: official S3 anonymous listing returned
+403, so requester-pays AWS auth is needed for official sample. Public processed
+mirror sample had 2.1 MB parquet, 26,236 liquidation fill rows, 1,779 unique
+liquidation_id values, BTC rows, `market`/`backstop` methods, and all rows had
+`raw_json.event.liquidation`. `notional_usd = price * size` is computable, but
+rows can double-count both sides, so dedup policy is required before canonical
+normalization.
+
+Official Python SDK review: SDK supports `userEvents` and
+`userNonFundingLedgerUpdates` as user-specific subscriptions/API calls and does
+not expose a global `liquidations` subscription. It is useful for future
+Hyperliquid account-risk monitor, not for market-wide cascade collection.
