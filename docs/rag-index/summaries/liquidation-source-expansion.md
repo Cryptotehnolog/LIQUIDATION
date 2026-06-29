@@ -1,17 +1,20 @@
 # Liquidation Source Expansion Summary
 
-Retrieval summary: priority order is `hyperliquid_liquidations`,
-`bitget`, `gate`, `htx`. Hyperliquid is `node_research_candidate`; Bitget,
-Gate and HTX remain `diagnostic-only` candidates until official docs, fixtures,
-live probe, overlap and source usefulness gates pass.
+Retrieval summary: Hyperliquid market-wide liquidations are deferred because
+official access requires node output / `hl-visor` research, not a lightweight
+public liquidation-only feed. Current low-cost diagnostic source order is
+`bitget`, `gate`, `htx`. These remain `diagnostic-only` candidates until
+official docs, fixtures, live probe, overlap and source usefulness gates pass.
 
-Текущий приоритет расширения liquidation sources:
+Текущий приоритет расширения liquidation sources после решения 2026-06-29:
 
-1. `hyperliquid_liquidations` - node research candidate, not simple WebSocket
-   collector.
-2. `bitget` - diagnostic-only source.
-3. `gate` - diagnostic-only source.
-4. `htx` - later research/diagnostic source.
+1. `bitget` - diagnostic-only source; official public UTA liquidation channel,
+   aggregated by one-second buckets.
+2. `gate` - diagnostic-only source; official public futures liquidates channel.
+3. `htx` - diagnostic-only source; official public USDT-M liquidation_orders
+   channel.
+4. `hyperliquid_liquidations` - deferred node research candidate, not simple
+   WebSocket collector.
 
 Нельзя сразу включать эти sources в strategy signals. Все новые venues сначала
 пишутся как diagnostic-only, без signal weight. Для canonical events обязателен
@@ -41,6 +44,15 @@ signal-ready благодаря source.
 Ключевое поле: `liquidation_ready_buckets_without_primary` - buckets, где
 diagnostic source дал canonical liquidation events, а primary source молчал.
 Это не полный PnL proof, но честный proxy для source coverage.
+
+## Hyperliquid Deferred Decision
+
+Decision 2026-06-29: pause Hyperliquid liquidation ingestion until strategy
+economics are clearer from cheaper public feeds. Reason: official node output is
+too heavy for laptop/local iteration and short 60-second probe proves schema,
+not usefulness. Return to Hyperliquid when paper replay shows edge or when we
+move node research to a server. Keep current Hyperliquid source only as hedge
+market-data leg.
 
 Hyperliquid liquidation probe от 2026-06-29: official WebSocket docs и live
 probe не подтвердили public all-market liquidation subscription. `bbo` работает,
@@ -87,3 +99,51 @@ FillLiquidation` and optional `builderFee` to `TradeInfo`/API `WsFill`.
 This is useful schema evidence for our future Rust parser fixtures, but it is
 not a public market-wide liquidation feed and should not be used as a production
 dependency while unmerged.
+
+## Bitget Candidate
+
+Bitget official UTA liquidation channel:
+
+- public WebSocket topic `liquidation`;
+- request uses `instType=usdt-futures`;
+- push interval 1s;
+- each push contains aggregated liquidation data for previous second;
+- for each pair, at most two records: largest long and largest short
+  liquidation quantity;
+- payload has `symbol`, `side`, `price`, `amount`, `ts`;
+- `amount` is quote coin, so `notional_usd` can be mapped directly for
+  USDT-futures, subject to fixture verification.
+
+Bitget limitation: because the feed is aggregated and only keeps the largest
+long/short liquidation per pair per second, it is not full all-events coverage.
+It is useful as `diagnostic_only` and may improve signal-ready windows, but it
+must not be treated as exact venue notional without source policy.
+
+## Gate Candidate
+
+Gate official futures public liquidates channel:
+
+- WebSocket endpoint `wss://fx-ws.gateio.ws/v4/ws/usdt`;
+- channel `futures.public_liquidates`;
+- payload includes `price`, `size`, `time`, `contract`;
+- source is public and symbol-scoped;
+- `size` semantics need fixture/contract verification before canonical
+  `notional_usd`.
+
+Gate limitation: if `size` is contract size rather than quote notional, canonical
+normalization must use contract metadata. Until verified, Gate may be raw-only or
+canonical-with-metadata.
+
+## HTX Candidate
+
+HTX official USDT-M liquidation_orders:
+
+- public topic `public.$contract_code.liquidation_orders`;
+- no authentication required;
+- payload includes `contract_code`, `direction`, `volume`, `price`, `amount`,
+  `trade_turnover`, `created_at`;
+- `trade_turnover` is quotation-token liquidation amount and is the preferred
+  candidate for `notional_usd`.
+
+HTX limitation: docs/payload naming must be fixture-tested because HTX contract
+APIs can differ between coin-margined and USDT-margined variants.

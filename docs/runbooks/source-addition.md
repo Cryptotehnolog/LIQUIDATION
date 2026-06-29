@@ -32,19 +32,24 @@ normalizer test, source policy, dashboard visibility и CI guard.
 
 ## Приоритет расширения liquidation sources
 
-Решение от 2026-06-29:
+Решение от 2026-06-29, обновлено после Hyperliquid node-output review:
 
-1. `hyperliquid_liquidations`: `node_research_candidate`; не WebSocket
+1. `bitget`: следующий diagnostic liquidation source; official public UTA
+   liquidation channel.
+2. `gate`: следующий diagnostic liquidation source после Bitget; official
+   public futures liquidates channel.
+3. `htx`: diagnostic source после Gate; official USDT-M liquidation_orders
+   channel.
+4. `hyperliquid_liquidations`: deferred `node_research_candidate`; не WebSocket
    collector, не включать в сигналы и не смешивать с текущим hedge market-data
    leg.
-2. `bitget`: следующий diagnostic liquidation source.
-3. `gate`: следующий diagnostic liquidation source после Bitget.
-4. `htx`: research candidate после Hyperliquid, Bitget и Gate.
 
 Причина: по наблюдениям через Coinglass, когда Binance/Bybit/OKX молчат,
 больше всего событий может давать Hyperliquid, затем Bitget, Gate и HTX. Это
-операционный сигнал, но не доказательство. Каждый источник проходит official
-docs review, fixture tests, bounded live probe и source usefulness report.
+операционный сигнал, но не доказательство. Hyperliquid временно отложен,
+потому что official market-wide path требует node output и тяжелее локальной
+итерации. Каждый источник проходит official docs review, fixture tests, bounded
+live probe и source usefulness report.
 
 Все новые источники по умолчанию:
 

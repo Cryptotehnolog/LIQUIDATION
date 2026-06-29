@@ -213,6 +213,40 @@ report.
 - `docs/runbooks/strategy-readiness.md`
 - `docs/research/liquidation-source-expansion-2026-06-29.md`
 
+### Hyperliquid Market-Wide Liquidations
+
+**Статус:** deferred.
+
+**Что это:** получение market-wide liquidation events с Hyperliquid через
+official node output / `hl-visor`, а не через обычный public WebSocket channel.
+
+**Почему не сейчас:** официальный путь слишком тяжелый для быстрой локальной
+итерации: node output требует отдельного runner, больших ресурсов и может
+создавать очень большие логи. Короткий 60-секундный probe докажет schema, но не
+покажет реальную полезность источника для стратегии.
+
+**Когда возвращаемся:**
+
+- после того как cheap public feeds `bitget`, `gate`, `htx` дадут достаточно
+  controlled replay windows;
+- если paper replay покажет edge и станет понятно, что именно Hyperliquid
+  coverage нужен для масштабирования;
+- при переносе node-output research на сервер.
+
+**Готовность начать:**
+
+- есть сервер или изолированная Ubuntu 24.04 среда с verified `hl-visor`;
+- `scripts/preflight-hyperliquid-node-runner.ps1` возвращает
+  `ready-for-bounded-run=true`;
+- есть лимиты времени/байт и cleanup policy;
+- после raw output готов Rust parser fixture и dedup policy test.
+
+**Связанные файлы:**
+
+- `docs/runbooks/hyperliquid-node-output-probe.md`
+- `docs/rag-index/summaries/hyperliquid-node-data.md`
+- `docs/rag-index/summaries/liquidation-source-expansion.md`
+
 ### Replay Market Quotes Query Optimization
 
 **Статус:** deferred.
